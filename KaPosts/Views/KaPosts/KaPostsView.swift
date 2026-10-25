@@ -475,6 +475,10 @@ struct KaPostsView: View {
             case .settings: return "gearshape"
             }
         }
+
+        /// What the feed's hamburger menu lists. Profile and Settings are dock tabs in KaPosts,
+        /// so they are not repeated here (their sheets still open from other routes).
+        static let feedMenu: [SideMenuItem] = [.search, .notifications, .drafts, .bookmarks, .muted, .blocked, .scheduled]
     }
 
     @State private var menuSheet: SideMenuItem?
@@ -843,14 +847,16 @@ struct KaPostsView: View {
         VStack(spacing: 0) {
             // The title is drawn here as fixed chrome rather than by the nav bar. A system
             // .large title belongs to the scroll view underneath it, so a pull-to-refresh
-            // stretched it down THROUGH the icon row below - the icons stayed put and the title
-            // slid behind them. Above the scroll view, nothing but the feed moves.
-            Text("KaPosts")
-                .font(.largeTitle.weight(.bold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 2)
-            sideMenuIconRow
+            // stretched it down through the chrome below. Above the scroll view, nothing but
+            // the feed moves. The hamburger sits before it.
+            HStack(spacing: 12) {
+                feedMenuButton
+                Text("KaPosts")
+                    .font(.largeTitle.weight(.bold))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
             HStack(spacing: 0) {
                 ForEach(FeedTab.allCases, id: \.title) { tab in
                     feedTabButton(tab)
@@ -860,51 +866,55 @@ struct KaPostsView: View {
         }
     }
 
-    /// Profile / Notifications / Bookmarks / Muted / Blocked, as the icons themselves rather than
-    /// behind a hamburger.
-    ///
-    /// They sit on their own row above the feed tabs, left-aligned where the hamburger used to
-    /// be. Five icons and three tabs do not fit one row on a phone - they would collide on the
-    /// narrow ones - and the point of the change is that every destination is one tap, which a
-    /// cramped row would undo. Having the row to themselves is also what lets the icons be this
-    /// size; sharing it with the tabs would have forced them small.
-    private var sideMenuIconRow: some View {
-        HStack(spacing: 2) {
-            ForEach(SideMenuItem.allCases) { item in
+    /// The hamburger beside the title: Search, Notifications, Drafts, Bookmarks, Muted, Blocked
+    /// and Scheduled, one tap each. A red dot on it while notifications are unseen, and the
+    /// count on the Notifications row, so the news is visible without opening the menu.
+    private var feedMenuButton: some View {
+        Menu {
+            ForEach(SideMenuItem.feedMenu) { item in
                 Button {
                     Haptics.impact(.light)
                     kaPostsPresent { menuSheet = item }
                 } label: {
-                    Image(systemName: item.icon)
-                        .font(.scaled(size: 20, weight: .semibold))
-                        .foregroundColor(.primary)
-                        // Eight icons have to fit the narrowest phones in one row.
-                        .frame(width: 42, height: 42)
-                        .contentShape(Rectangle())
-                        // A count rather than a plain dot: in here you are one tap from the list,
-                        // so how many are waiting is worth knowing before you decide to look.
-                        .overlay(alignment: .topTrailing) {
-                            if item == .notifications, kaPostsNotifCenter.unseenCount > 0 {
-                                Text(kaPostsNotifCenter.badgeText)
-                                    .font(.scaled(size: 10, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.red))
-                                    .offset(x: 4, y: -2)
-                            }
+                    Label {
+                        Text(verbatim: menuTitle(for: item))
+                    } icon: {
+                        // iOS draws a Menu with UIKit, which ignores SwiftUI's tint: a symbol
+                        // that carries its own colour is the only way the icons come out teal.
+                        if let symbol = UIImage(systemName: item.icon)?
+                            .withTintColor(UIColor(named: "AccentColor") ?? .systemTeal, renderingMode: .alwaysOriginal) {
+                            Image(uiImage: symbol)
                         }
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text(
-                    item == .notifications && kaPostsNotifCenter.unseenCount > 0
-                        ? "\(item.rawValue), \(kaPostsNotifCenter.unseenCount) unseen"
-                        : item.rawValue
-                ))
             }
-            Spacer(minLength: 0)
+        } label: {
+            Image(systemName: "line.3.horizontal")
+                .font(.scaled(size: 22, weight: .semibold))
+                .foregroundColor(.primary)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+                .overlay(alignment: .topTrailing) {
+                    if kaPostsNotifCenter.unseenCount > 0 {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                            .offset(x: -2, y: 4)
+                    }
+                }
         }
-        .padding(.horizontal, 6)
+        .accessibilityLabel(Text(
+            kaPostsNotifCenter.unseenCount > 0
+                ? "Menu, \(kaPostsNotifCenter.unseenCount) unseen notifications"
+                : "Menu"
+        ))
+    }
+
+    private func menuTitle(for item: SideMenuItem) -> String {
+        if item == .notifications, kaPostsNotifCenter.unseenCount > 0 {
+            return "\(item.rawValue) (\(kaPostsNotifCenter.badgeText))"
+        }
+        return item.rawValue
     }
 
     private func feedTabButton(_ tab: FeedTab) -> some View {
