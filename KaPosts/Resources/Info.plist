@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AppIdentifierPrefix</key>
+	<string>$(AppIdentifierPrefix)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kachat.kaposts</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kaposts</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>KaChatBuildNumber</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>KaChatIsRelease</key>
+	<string>$(KAPOSTS_IS_RELEASE)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>KaPosts uses the camera to scan QR codes and to take photos for your posts and profile.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID is used to unlock your seed phrase and sign back in, when enabled in Settings.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>KaPosts uses the microphone to record voice messages in public chats.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save images to your photo library.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>
