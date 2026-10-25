@@ -100,7 +100,9 @@ enum KaChatInternalLink: Equatable {
         // `pathComponents` percent-decodes for us, and drops the leading "/" marker below.
         let parts = url.pathComponents.filter { $0 != "/" }
         switch scheme {
-        case "kachat":
+        // kaposts:// is KaPosts' own scheme (the one iOS opens KaPosts for); the targets are
+        // the same as kachat://.
+        case "kachat", "kaposts":
             // kachat://<target>/<payload> - exactly one payload component, so a link with extra
             // path segments (kachat://public chat/a/b) is rejected rather than silently truncated.
             guard let host = url.host?.lowercased(), parts.count == 1, let payload = parts.first else { return nil }
@@ -502,9 +504,6 @@ final class KaPostLinkPreviewCache: ObservableObject {
     func load(postId: String) async {
         guard !postId.isEmpty, entries[postId] == nil,
               !inFlight.contains(postId), !unresolvable.contains(postId) else { return }
-        // Simple Mode hides KaPosts entirely, and the router no-ops these links - so there is
-        // nothing to preview, and no reason to spend a request finding out.
-        guard !AppSettings.load().childModeEnabled else { return }
         inFlight.insert(postId)
         defer { inFlight.remove(postId) }
 

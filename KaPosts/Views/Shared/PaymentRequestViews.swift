@@ -154,7 +154,7 @@ struct CreatePaymentRequestView: View {
                         .disabled(!canMake || isWorking)
                     }
 
-                    Text("Anyone who opens or pastes it in KaChat gets Send Kaspa with this filled in, and sees it was made by your chatting address (signed with its key).")
+                    Text("Anyone who opens or pastes it in KaPosts or KaChat gets Send Kaspa with this filled in, and sees it was made by your address (signed with its key).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -294,7 +294,7 @@ enum PaymentRequestPaste {
     static func openIfRequest(_ text: String?) -> Bool {
         guard let text, let match = KaChatInternalLink.match(in: text), match.coversWholeMessage,
               case .paymentRequest(let request) = match.link, !request.isOwn else { return false }
-        KaChatLinkRouter.openPaymentRequest(request)
+        KaChatLinkRouter.open(.paymentRequest(request))
         return true
     }
 }
@@ -332,7 +332,7 @@ struct PaymentRequestSummary: View {
                     .foregroundColor(.green)
                 AddressResolutionCard(address: creator)
                 if creator.lowercased() != request.address.lowercased() {
-                    Text("Signed by their chatting address. The payment goes to the address above.")
+                    Text("Signed by their address. The payment goes to the address above.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -376,7 +376,7 @@ struct OwnPaymentRequestView: View {
                     .padding(.top, 8)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(request.toChattingAddress ? "Paid to your chatting address" : "Paid to your spending address")
+                        Text(request.toChattingAddress ? "Paid to your address" : "Paid to your spending address")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(.accentColor)
                             .textCase(.uppercase)

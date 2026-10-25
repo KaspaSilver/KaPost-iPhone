@@ -17,30 +17,13 @@ struct PublicChatChannelView: View {
     @EnvironmentObject var walletManager: WalletManager
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @ObservedObject private var knsService = KNSService.shared
-    /// With a Nextcloud server linked, the mic asks on chain or via Nextcloud, mirroring the
-    /// 1:1/group "+" sheet: via Nextcloud, the recording uploads to the server and the room only
-    /// carries the share link.
-    @ObservedObject private var nextcloudService = NextcloudService.shared
     @StateObject private var recorder = PublicChatAudioRecorder()
-    @State private var nextcloudVoiceRequested = false
-    @State private var showVoiceRouteSheet = false
 
-    /// Nextcloud-uploaded voice notes aren't payload-bound - only the server carries them - so a
-    /// "Record via Nextcloud" note runs to the app-wide Nextcloud ceiling, mirroring
-    /// `ChatDetailView.effectiveMaxRecordingDuration`.
-    private var effectiveMaxRecordingDuration: TimeInterval {
-        voiceViaNextcloud ? ComposerMediaLimits.nextcloudVoiceSeconds : PublicChatAudioRecorder.maxDuration
-    }
-
-    private var voiceViaNextcloud: Bool { nextcloudVoiceRequested && nextcloudService.isConnected }
+    /// Voice notes go on chain, so the payload cap is the length cap.
+    private var effectiveMaxRecordingDuration: TimeInterval { PublicChatAudioRecorder.maxDuration }
 
     private func startVoiceMessage() {
-        if nextcloudService.isConnected {
-            showVoiceRouteSheet = true
-        } else {
-            nextcloudVoiceRequested = false
-            recorder.start()
-        }
+        recorder.start()
     }
 
     /// The composer's text, held by reference so a keystroke doesn't redraw the whole chat
@@ -85,9 +68,12 @@ struct PublicChatChannelView: View {
         var id: String { address }
     }
     @State private var toastToken = UUID()
-    @State private var openContact: Contact?
-    @State private var openContactInPaymentMode = false
-    @State private var profileContact: Contact?
+    /// Send Kaspa from a member's menu: the send screen with their address filled in.
+    @State private var sendTarget: SendTarget?
+    private struct SendTarget: Identifiable {
+        let address: String
+        var id: String { address }
+    }
     @State private var isBottomAnchorVisible = true
     @State private var bottomAnchorVisibilityWorkItem: DispatchWorkItem?
     @State private var feeEstimateSompi: UInt64?
@@ -358,29 +344,9 @@ struct PublicChatChannelView: View {
         .navigationDestination(isPresented: $showRoomInfo) {
             PublicChatRoomInfoView(channelName: channelName)
         }
-        .navigationDestination(isPresented: Binding(
-            get: { openContact != nil },
-            set: { if !$0 { openContact = nil } }
-        )) {
-            if let openContact {
-                ChatDetailView(contact: openContact, startInPaymentMode: openContactInPaymentMode)
-            } else {
-                EmptyView()
-            }
-        }
-        .sheet(isPresented: Binding(
-            get: { profileContact != nil },
-            set: { if !$0 { profileContact = nil } }
-        )) {
-            if let contact = profileContact {
-                NavigationStack {
-                    ChatInfoView(
-                        contact: Binding(
-                            get: { profileContact ?? contact },
-                            set: { profileContact = $0 }
-                        )
-                    )
-                }
+        .sheet(item: $sendTarget) { target in
+            NavigationStack {
+                WithdrawKaspaView(fromAddress: myAddress ?? "", availableBalanceSompi: nil, prefillAddress: target.address)
             }
         }
     }
@@ -726,8 +692,6 @@ struct PublicChatChannelView: View {
             replyQuote: messageReplyQuote,
             replySenderDisplayName: replySender,
             onViewProfile: { viewProfile(message.senderAddress) },
-            onOpenChat: { openChat(with: message.senderAddress) },
-            onPayInKaspa: { openChat(with: message.senderAddress, paymentMode: true) },
             onCopyAddress: {
                 UIPasteboard.general.string = message.senderAddress
                 showToast(message.senderAddress.addressCopiedToastText)
@@ -922,15 +886,6 @@ struct PublicChatChannelView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Record voice message"))
-                .sheet(isPresented: $showVoiceRouteSheet) {
-                    ComposerMediaRouteStep(kind: .voice, onChoose: { viaNextcloud in
-                        showVoiceRouteSheet = false
-                        nextcloudVoiceRequested = viaNextcloud
-                        recorder.start()
-                    }, onBack: { showVoiceRouteSheet = false })
-                    .presentationDetents([.height(330)])
-                    .presentationDragIndicator(.visible)
-                }
             } else {
                 Button {
                     send()
@@ -1060,25 +1015,9 @@ struct PublicChatChannelView: View {
         }
     }
 
-    /// A Nextcloud share link's worst-case payload size in bytes - matches
-    /// `ChatDetailView.nextcloudLinkPayloadSize` (private there; small local copy per this
-    /// file's convention).
-    private static let nextcloudLinkPayloadSize = 96
-
     /// Live estimate while a voice message is still being recorded, matching Android's
     /// `VoiceMessage.estimatedWirePayloadSize` heuristic (final size isn't known until encoding).
     private func updateRecordingFeeEstimate(elapsedSeconds: TimeInterval) {
-        // Via Nextcloud, the recording uploads to the server and the chain only carries the
-        // share link - the fee is the link-message fee regardless of recording length,
-        // mirroring 1:1 chat's identical branch.
-        if voiceViaNextcloud {
-            isEstimatingFee = false
-            feeEstimateSompi = publicChatService.estimatePublicChatFee(
-                channel: channelName,
-                payloadByteCount: Self.nextcloudLinkPayloadSize
-            )
-            return
-        }
         let baseOverheadBytes = 150.0
         let bytesPerSecondOfRecording = 2870.0
         let estimatedBytes = Int(baseOverheadBytes + elapsedSeconds * bytesPerSecondOfRecording)
@@ -1126,72 +1065,9 @@ struct PublicChatChannelView: View {
     }
 
     private func stopAndSendRecording() {
-        // Snapshot once, so a disconnect mid-send can't strand the stashed original - mirrors
-        // `GroupChatDetailView.sendRecording`.
-        let nextcloudActive = voiceViaNextcloud
-        nextcloudVoiceRequested = false
-        let recordedSeconds = recorder.elapsedSeconds
         Task {
-            // Nextcloud mode: stash the full-length original PCM BEFORE the payload-capped WebM
-            // encode - the encode truncates to ~13KB (≈9s), and exporting the M4A from that
-            // would silently re-cap a long recording. The copy lives only for this send; the
-            // defer below is its single cleanup site.
-            let originalPCMURL: URL? = nextcloudActive
-                ? FileManager.default.temporaryDirectory
-                    .appendingPathComponent("kachat-broadcast-voice-original-\(UUID().uuidString).caf")
-                : nil
-            defer {
-                if let originalPCMURL {
-                    try? FileManager.default.removeItem(at: originalPCMURL)
-                }
-            }
             do {
-                let recorded = try await recorder.stopAndEncode(keepOriginalPCMAt: originalPCMURL)
-
-                // "Record via Nextcloud": upload an AAC .m4a of the recording and send the
-                // public share link as a plain text public chat (the link-preview feature renders
-                // it as a playable audio card). The .m4a re-export matters: the recipients'
-                // audio card streams through AVPlayer, which cannot decode WebM/Opus. Mirrors
-                // `ChatDetailView.sendAudioAsync`/`GroupChatDetailView.sendRecording`.
-                if nextcloudActive {
-                    var shareURL: URL?
-                    var voiceFilename = ""
-                    var uploadedByteCount = 0
-                    do {
-                        let m4aURL = try await exportRecordingAsM4A(originalPCMURL: originalPCMURL, webmData: recorded.data)
-                        let m4aData = try Data(contentsOf: m4aURL)
-                        try? FileManager.default.removeItem(at: m4aURL)
-                        let stamp = Self.mediaTimestampFormatter.string(from: Date())
-                        voiceFilename = "voice_\(stamp).m4a"
-                        uploadedByteCount = m4aData.count
-                        shareURL = try await NextcloudService.shared.uploadMediaAndShare(
-                            data: m4aData,
-                            filename: voiceFilename,
-                            contentType: "audio/mp4"
-                        )
-                    } catch {
-                        AppLog.log("[PublicChatChannelView] Nextcloud audio upload failed, falling back to on-chain: %@",
-                                   error.localizedDescription)
-                        // The on-chain envelope is payload-capped (~9s) - a longer Nextcloud-mode
-                        // recording would arrive silently truncated, so surface an error instead
-                        // of falling back.
-                        if recordedSeconds > PublicChatAudioRecorder.maxDuration {
-                            showToast("Nextcloud upload failed, and the recording is too long to send on-chain.")
-                            return
-                        }
-                        showToast("Nextcloud upload failed — sending on-chain instead")
-                    }
-                    if let shareURL {
-                        // Seed the preview BEFORE the send so the sender's own bubble renders
-                        // the audio card instantly, with zero network - see
-                        // `ChatDetailView.seedNextcloudPreview`.
-                        await seedNextcloudPreview(for: shareURL, kind: .audio, title: voiceFilename, byteSize: uploadedByteCount)
-                        try await publicChatService.sendPublicChat(channel: channelName, content: shareURL.absoluteString)
-                        return
-                    }
-                    // No share link - fall through to the on-chain envelope path.
-                }
-
+                let recorded = try await recorder.stopAndEncode(keepOriginalPCMAt: nil)
                 try await publicChatService.sendPublicChatAudio(
                     channel: channelName,
                     audioData: recorded.data,
@@ -1202,78 +1078,6 @@ struct PublicChatChannelView: View {
                 showToast("Failed to send voice message: \(error.localizedDescription)")
             }
         }
-    }
-
-    // MARK: - Nextcloud media send helpers ("Record via Nextcloud")
-
-    /// Human-sortable timestamp for uploaded media filenames (voice_20260811-101502.m4a) -
-    /// duplicated from `ChatDetailView` (private there), matching this file's convention of
-    /// small local copies over widened access.
-    private static let mediaTimestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return formatter
-    }()
-
-    /// Pre-seeds the link-preview cache with what we just uploaded - the sender's own bubble
-    /// renders the media card instantly with zero network, no probe round trip needed (we
-    /// KNOW the kind/name/size; only recipients have to discover them). Mirrors
-    /// `ChatDetailView.seedNextcloudPreview`.
-    private func seedNextcloudPreview(for shareURL: URL, kind: NextcloudMediaKind, title: String, byteSize: Int) async {
-        guard let endpoints = LinkPreviewService.nextcloudShareEndpoints(for: shareURL) else { return }
-        await LinkPreviewService.shared.seed(LinkPreviewData(
-            url: shareURL,
-            title: title,
-            description: nil,
-            imageURLString: endpoints.previewURL.absoluteString,
-            siteName: shareURL.host.map { "Nextcloud · \($0)" } ?? "Nextcloud",
-            nextcloudMedia: kind,
-            mediaDownloadURLString: endpoints.downloadURL.absoluteString,
-            mediaByteSize: Int64(byteSize)
-        ))
-    }
-
-    /// Builds an AAC .m4a of the current recording for the Nextcloud upload. PCM source: the
-    /// stashed full-length original (never truncated by the payload cap) when it exists, else
-    /// the WebM payload is decoded on the spot. Mirrors `GroupChatDetailView.exportRecordingAsM4A`.
-    private func exportRecordingAsM4A(originalPCMURL: URL?, webmData: Data) async throws -> URL {
-        let pcmURL: URL
-        let deletePCMAfter: Bool
-        if let originalPCMURL, FileManager.default.fileExists(atPath: originalPCMURL.path) {
-            pcmURL = originalPCMURL
-            deletePCMAfter = false // stopAndSendRecording's defer owns this copy, not here
-        } else {
-            pcmURL = try WebMOpusDecoder.decodeToPCMFile(data: webmData).url
-            deletePCMAfter = true
-        }
-        defer {
-            if deletePCMAfter { try? FileManager.default.removeItem(at: pcmURL) }
-        }
-
-        guard let export = AVAssetExportSession(asset: AVURLAsset(url: pcmURL),
-                                                presetName: AVAssetExportPresetAppleM4A) else {
-            throw KasiaError.networkError("Audio export is unavailable on this device.")
-        }
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kachat-broadcast-voice-\(UUID().uuidString).m4a")
-        export.outputURL = outputURL
-        export.outputFileType = .m4a
-        // AVAssetExportSession isn't Sendable, but this is safe: after exportAsynchronously
-        // starts, the session is only touched from its own one-shot completion callback -
-        // `nonisolated(unsafe)` records that reasoning for the strict-concurrency checker.
-        nonisolated(unsafe) let session = export
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
-                if session.status == .completed {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: session.error
-                        ?? KasiaError.networkError("Audio export failed."))
-                }
-            }
-        }
-        return outputURL
     }
 
     /// Long-press > Edit on one of the user's own text bubbles: the composer takes the message's
@@ -1425,26 +1229,19 @@ struct PublicChatChannelView: View {
 
             ActionSheetRow(
                 title: "View Profile",
-                subtitle: "Their profile, .kachat name and address.",
+                subtitle: "Their KaPosts profile: posts, replies and followers.",
                 systemImage: "person.crop.circle"
             ) {
                 dismissThen { viewProfile(address) }
             }
             if !target.isOwnMessage {
                 ActionSheetRow(
-                    title: "Open Chat",
-                    subtitle: "Message them directly, one to one.",
-                    systemImage: "bubble.left.and.bubble.right"
-                ) {
-                    dismissThen { openChat(with: address) }
-                }
-                ActionSheetRow(
                     title: "Send Kaspa",
-                    subtitle: "Open your chat with them in payment mode.",
+                    subtitle: "Send Kaspa to their address.",
                     systemImage: "k.circle",
                     customIcon: Image("KaspaLogo")
                 ) {
-                    dismissThen { openChat(with: address, paymentMode: true) }
+                    dismissThen { sendTarget = SendTarget(address: address) }
                 }
             }
             ActionSheetRow(
@@ -1477,19 +1274,10 @@ struct PublicChatChannelView: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func openChat(with address: String, paymentMode: Bool = false) {
-        guard address != myAddress else { return }
-        let contact = contactsManager.getContact(byAddress: address)
-            ?? contactsManager.getOrCreateContact(address: address)
-        _ = chatService.getOrCreateConversation(for: contact)
-        openContactInPaymentMode = paymentMode
-        openContact = contact
-    }
-
+    /// Their KaPosts profile, on the Feed tab (KaPostsView presents it).
     private func viewProfile(_ address: String) {
-        let contact = contactsManager.getContact(byAddress: address)
-            ?? contactsManager.getOrCreateContact(address: address)
-        profileContact = contact
+        KaPostsDeepLink.pendingProfileAddress = address
+        NotificationCenter.default.post(name: .openKaPostsProfile, object: nil)
     }
 }
 
@@ -1555,8 +1343,6 @@ private struct PublicChatMessageRow: View, Equatable {
     let replyQuote: MessageReplyContent?
     let replySenderDisplayName: String?
     let onViewProfile: () -> Void
-    let onOpenChat: () -> Void
-    let onPayInKaspa: () -> Void
     let onCopyAddress: () -> Void
     let onHideSender: () -> Void
     /// Tapping the avatar. The parent presents the sender half sheet (see

@@ -401,11 +401,15 @@ final class ChatService: ObservableObject {
     /// the next background/foreground cycle. The sweep loop runs a cursor-based
     /// `GroupChatService.performCatchUpSync()` at most once per this interval as the group
     /// equivalent of the 1:1 contact sweep.
+    /// KaChat's 1:1 chat sync (handshakes, messages, the contact sweep). Off in KaPosts: the
+    /// service still runs the address's UTXO subscription and the transaction queue every post,
+    /// tip and room message goes through, but never fetches or polls chats.
+    nonisolated static let oneToOneChatsEnabled = false
     var lastForegroundGroupCatchUpAt: Date?
     /// Every three minutes while group traffic is arriving live (the indexer poll, or the
     /// block stream; the catch-up then only covers gaps), every minute while it is not.
     var foregroundGroupCatchUpInterval: TimeInterval {
-        GroupChatService.shared.isLiveDeliveryActive ? 180.0 : 60.0
+        60.0
     }
     /// The one-shot 4-phase initial sync started by `startPolling`. Tracked so wallet transitions
     /// (import/switch/logout) can cancel it - otherwise the previous wallet's historical sync keeps
@@ -463,7 +467,6 @@ final class ChatService: ObservableObject {
         AppLog.log("%@", "[ChatService] Onboarding finished, starting deferred sync")
         guard startSync else { return }
         startPolling()
-        Task { await GroupChatService.shared.performCatchUpSync() }
     }
 
     func setInitialSyncPhase(_ phase: InitialSyncPhase?) {

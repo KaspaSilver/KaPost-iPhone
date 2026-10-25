@@ -266,7 +266,6 @@ final class ContactsManager: ObservableObject {
         balanceFetchInFlight = []
         loadContacts()
         // Right after the contacts load: its one-time migration reads their old phone-contact names.
-        AddressBookManager.shared.setActiveWalletAddress(normalizedAddress)
         // The coins scheduled KaPosts hold, for every builder from launch on - not first when
         // the KaPosts page renders, and never the previous wallet's (IOS-064).
         KaPostsScheduledStore.shared.reloadForCurrentWallet()
@@ -550,7 +549,6 @@ final class ContactsManager: ObservableObject {
     func displayName(for address: String) -> String {
         if isOwnChattingAddress(address) { return identityName(for: address) }
         if let assigned = getContact(byAddress: address)?.assignedName { return assigned }
-        if let saved = AddressBookManager.shared.entry(for: address)?.customName { return saved }
         return identityName(for: address)
     }
 
@@ -559,7 +557,6 @@ final class ContactsManager: ObservableObject {
     func displayName(for contact: Contact) -> String {
         if isOwnChattingAddress(contact.address) { return identityName(for: contact.address) }
         if let assigned = contact.assignedName { return assigned }
-        if let saved = AddressBookManager.shared.entry(for: contact.address)?.customName { return saved }
         return identityName(for: contact.address)
     }
 

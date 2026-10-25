@@ -264,7 +264,7 @@ struct PassphraseOptionView: View {
     /// committing to an account that would otherwise look simply empty.
     private var addressPreview: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Your chatting address")
+            Text("Your address")
                 .font(.caption)
                 .foregroundColor(.secondary)
             // Every character, wrapped over as many lines as it takes. This is the one place the

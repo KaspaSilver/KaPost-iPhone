@@ -36,8 +36,6 @@ struct SendRecipientCard: View {
     var selectedTLD: NameServiceTLD? = nil
     var onSelectResolution: (NameResolution) -> Void = { _ in }
 
-    @ObservedObject private var addressBook = AddressBookManager.shared
-    @State private var showAddressBook = false
 
     private var trimmed: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -82,24 +80,8 @@ struct SendRecipientCard: View {
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
                     .accessibilityLabel(Text("Scan QR"))
-                    if !addressBook.entries.isEmpty {
-                        Button {
-                            showAddressBook = true
-                        } label: {
-                            Image(systemName: "book.closed")
-                                .font(.body.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.accentColor)
-                        .accessibilityLabel(Text("Address Book"))
-                    }
                 }
                 AddressResolutionCard(address: resolvedAddress ?? (isValidAddress ? trimmed : nil), domain: resolvedName)
-                if let savedName = addressBook.entry(for: resolvedAddress ?? trimmed)?.customName {
-                    Label(savedName, systemImage: "book.closed.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.accentColor)
-                }
                 if !trimmed.isEmpty {
                     statusLine
                     if !isResolving {
@@ -111,9 +93,6 @@ struct SendRecipientCard: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(sendKaspaGlass(cornerRadius: 20))
-        .fullScreenCover(isPresented: $showAddressBook) {
-            AddressBookPickerSheet { entry in input = entry.address }
-        }
     }
 
     @ViewBuilder
@@ -224,7 +203,7 @@ struct OtherDomainsDropdown: View {
 /// converted value) and Max under it. Hands the screen the KAS amount text after every edit.
 struct KaspaAmountEntry: View {
     @ObservedObject var fiatAmountState: KaspaFiatAmountState
-    @ObservedObject private var portfolio = PortfolioViewModel.shared
+    @ObservedObject private var portfolio = KaspaPriceService.shared
     /// Receives the amount in KAS (as text) after each edit - what the screen stores.
     let onAmountChange: (String) -> Void
     /// Cleans what was typed before it's used: by default digits and one decimal point, with
@@ -713,7 +692,7 @@ struct SendFromSection: View {
                 .textCase(.uppercase)
             if !isLocked {
                 HStack(spacing: 10) {
-                    SelectablePill(title: "Chatting Address", selected: source == .chatting) {
+                    SelectablePill(title: "Your Address", selected: source == .chatting) {
                         source = .chatting
                     }
                     SelectablePill(title: "Choose an Address", selected: source != .chatting) {
@@ -758,7 +737,7 @@ struct SendFromSection: View {
 
     private var title: String {
         switch source {
-        case .chatting: return AppLocalization.string("Chatting Address")
+        case .chatting: return AppLocalization.string("Your Address")
         case .spending(_, _, let label): return label
         }
     }
@@ -784,8 +763,8 @@ struct OwnAddressPicker: View {
         NavigationStack {
             List {
                 if let chatting = WalletManager.shared.currentWallet {
-                    Section("Chatting Address") {
-                        row(title: AppLocalization.string("Chatting Address"), address: chatting.publicAddress,
+                    Section("Your Address") {
+                        row(title: AppLocalization.string("Your Address"), address: chatting.publicAddress,
                             balance: chatting.balanceSompi) { .chatting }
                     }
                 }

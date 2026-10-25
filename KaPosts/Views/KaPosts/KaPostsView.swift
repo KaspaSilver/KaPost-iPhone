@@ -786,6 +786,15 @@ struct KaPostsView: View {
                 kaPostsPresent { menuSheet = .scheduled }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openKaPostsProfile)) { _ in
+            guard rootMode == .feed, let address = KaPostsDeepLink.pendingProfileAddress else { return }
+            KaPostsDeepLink.pendingProfileAddress = nil
+            // After the tab switch has landed: a cover presented from a tab that is still
+            // coming on screen is dropped.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                kaPostsPresent { profileTarget = PosterProfileTarget(address: address) }
+            }
+        }
         .onChange(of: selectedFeed) { tab in
             // Feed <-> Popular share the global feed: keep every page already scrolled in
             // (Popular is just a re-sort of the same set). Only a real source change - to or
@@ -4090,9 +4099,9 @@ struct KaPostsView: View {
                             }
                             Button {
                                 Haptics.impact(.light)
-                                startChat(with: address)
+                                openInKaChat(address)
                             } label: {
-                                Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                                Label("Chat in KaChat", systemImage: "bubble.left.and.bubble.right")
                                     .font(.caption.weight(.bold))
                             }
                             .buttonStyle(.bordered)
@@ -4221,22 +4230,15 @@ struct KaPostsView: View {
         }
     }
 
-    /// Jumps into (or creates) the 1:1 chat with this poster: ensures a contact exists (you
-    /// started the chat, so it's a contact of yours, not an auto-added stranger), ensures the
-    /// conversation exists, then routes through the standard .openChat navigation. The pending
-    /// target is set first, so the Chats list opens it even if it wasn't on screen to hear the
-    /// notification. Slight delay so the profile sheet finishes dismissing.
-    private func startChat(with address: String, paymentMode: Bool = false) {
-        let contact = ContactsManager.shared.getOrCreateContact(address: address)
-        _ = ChatService.shared.getOrCreateConversation(for: contact)
-        ChatService.shared.pendingChatNavigation = contact.address
-        profileTarget = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            NotificationCenter.default.post(
-                name: .openChat,
-                object: nil,
-                userInfo: ["contactAddress": contact.address, "paymentMode": paymentMode]
-            )
+    /// Chats live in KaChat: this poster's profile there (their User Info, with Open Chat on it),
+    /// or their kachat.app page - with the download buttons - when KaChat isn't installed.
+    private func openInKaChat(_ address: String) {
+        let normalized = address.lowercased()
+        guard let appURL = URL(string: KaChatInternalLink.profile(address: normalized).shareLinkString) else { return }
+        UIApplication.shared.open(appURL) { opened in
+            if !opened, let webURL = KaChatInternalLink.profileShareURL(for: normalized) {
+                UIApplication.shared.open(webURL)
+            }
         }
     }
 
@@ -4728,7 +4730,7 @@ struct KaPostsView: View {
     private func scheduledLine(_ entry: KaPostScheduledEntry) -> String {
         let when = DateFormatter.localizedString(from: entry.notBefore, dateStyle: .medium, timeStyle: .short)
         switch entry.status {
-        case .scheduled: return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaChat around then"
+        case .scheduled: return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaPosts around then"
         case .submitted: return "Posted \(entry.submittedAt.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? when)"
         case .failed: return "Failed to post at \(when)"
         case .cancelled: return "Cancelled"
@@ -5435,7 +5437,7 @@ private struct KaPostCellView: View {
                 if !isOwnPost {
                     ActionSheetRow(
                         title: "Report",
-                        subtitle: "Tell KaChat about abusive or objectionable content. Opens an email with this post attached.",
+                        subtitle: "Report abusive or objectionable content. Opens an email with this post attached.",
                         systemImage: "flag",
                         tint: .red
                     ) {
@@ -6408,7 +6410,7 @@ private struct KaPostTipSheet: View {
     var onTipped: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var portfolioViewModel = PortfolioViewModel.shared
+    @ObservedObject private var portfolioViewModel = KaspaPriceService.shared
     @StateObject private var fiatAmountState = KaspaFiatAmountState()
 
     @State private var contact: Contact?

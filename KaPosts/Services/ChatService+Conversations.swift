@@ -22,9 +22,6 @@ extension ChatService {
             guard let self, self.activeConversationAddress == address else { return }
             await self.fetchNewMessages(forActiveOnly: address)
         }
-        // Nextcloud mirror runs on an adaptive cadence keyed off the open chat; wake its
-        // change watcher so this chat picks up other devices' uploads immediately.
-        NextcloudService.shared.noteChatOpened()
         loadReactions(for: address)
         // Keep the Share Extension's "Recent" list fresh: opening a chat counts as touching it.
         let alias = ContactsManager.shared.displayName(for: address)
@@ -269,6 +266,8 @@ extension ChatService {
     /// Idempotent with every other fetch path: `fetchContextualMessagesFromContact` skips txIds
     /// already in the store and `addMessageToConversation` re-checks by txId at insert.
     func startForegroundContactSweep() {
+        // KaPosts has no 1:1 chats: no contacts to sweep.
+        guard ChatService.oneToOneChatsEnabled else { return }
         if let task = foregroundSweepTask, !task.isCancelled { return }
         guard WalletManager.shared.currentWallet != nil else { return }
         AppLog.log("[ChatService] Foreground contact sweep started (%.0fs, cap %d)",
@@ -308,12 +307,6 @@ extension ChatService {
                 // app-foreground catch-up. Run the cursor-based group catch-up at most once a
                 // minute while the app is active so an open app converges on missed group
                 // messages without needing a background/foreground cycle.
-                if UIApplication.shared.applicationState == .active,
-                   WalletManager.shared.currentWallet != nil,
-                   self.lastForegroundGroupCatchUpAt.map({ Date().timeIntervalSince($0) >= self.foregroundGroupCatchUpInterval }) ?? true {
-                    self.lastForegroundGroupCatchUpAt = Date()
-                    await GroupChatService.shared.performCatchUpSync()
-                }
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             }
         }
@@ -490,6 +483,7 @@ extension ChatService {
     /// Fetch only handshakes (lightweight, needed to establish encryption keys)
     /// NOTE: Assumes configureAPIIfNeeded() was already called by startup flow
     func fetchHandshakesOnly() async {
+        guard ChatService.oneToOneChatsEnabled else { return }
         guard let wallet = WalletManager.shared.currentWallet else {
             AppLog.log("[ChatService] fetchHandshakesOnly: No wallet")
             return
@@ -581,6 +575,7 @@ extension ChatService {
     }
 
     func fetchNewMessages(forActiveOnly activeAddress: String? = nil) async {
+        guard ChatService.oneToOneChatsEnabled else { return }
         guard let wallet = WalletManager.shared.currentWallet else {
             AppLog.log("%@", "[ChatService] Skipping fetch - no wallet")
             return

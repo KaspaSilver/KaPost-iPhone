@@ -11,7 +11,6 @@
 		KP0000000000000000000201 /* GRPC in Frameworks */ = {isa = PBXBuildFile; productRef = KP0000000000000000000200 /* GRPC */; };
 		KP0000000000000000000211 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = KP0000000000000000000210 /* P256K */; };
 		KP0000000000000000000221 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = KP0000000000000000000220 /* SwiftProtobuf */; };
-		KP0000000000000000000231 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = KP0000000000000000000230 /* WebRTC */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -52,7 +51,6 @@
 				KP0000000000000000000201 /* GRPC in Frameworks */,
 				KP0000000000000000000211 /* P256K in Frameworks */,
 				KP0000000000000000000221 /* SwiftProtobuf in Frameworks */,
-				KP0000000000000000000231 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -107,7 +105,6 @@
 				KP0000000000000000000200 /* GRPC */,
 				KP0000000000000000000210 /* P256K */,
 				KP0000000000000000000220 /* SwiftProtobuf */,
-				KP0000000000000000000230 /* WebRTC */,
 			);
 			productName = KaPosts;
 			productReference = KP0000000000000000000010 /* KaPosts.app */;
@@ -159,7 +156,6 @@
 				KP0000000000000000000300 /* XCRemoteSwiftPackageReference "grpc-swift" */,
 				KP0000000000000000000310 /* XCRemoteSwiftPackageReference "swift-secp256k1" */,
 				KP0000000000000000000320 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
-				KP0000000000000000000330 /* XCRemoteSwiftPackageReference "WebRTC" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = KP0000000000000000000011 /* Products */;
@@ -401,14 +397,6 @@
 				version = 1.38.1;
 			};
 		};
-		KP0000000000000000000330 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/stasel/WebRTC.git";
-			requirement = {
-				kind = exactVersion;
-				version = 153.0.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -426,11 +414,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = KP0000000000000000000320 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
 			productName = SwiftProtobuf;
-		};
-		KP0000000000000000000230 /* WebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = KP0000000000000000000330 /* XCRemoteSwiftPackageReference "WebRTC" */;
-			productName = WebRTC;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -102,7 +102,7 @@ struct SeedPhraseExplainerPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 section("The short version",
-                        "A seed phrase is a list of 12 or 24 ordinary words that works as the master key to your account. Your wallet, your chatting address and your messages all come from it.")
+                        "A seed phrase is a list of 12 or 24 ordinary words that works as the master key to your account. Your account, its address and your posts all come from it.")
                 section("Anyone with it can take everything",
                         "Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaPosts.")
                 section("How to keep it safe",

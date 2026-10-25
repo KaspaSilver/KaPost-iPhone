@@ -1177,7 +1177,7 @@ extension ChatService {
         let totalUnread = conversations.reduce(0) { total, conversation in
             guard isConversationVisibleInChatList(conversation) else { return total }
             return total + max(0, conversation.unreadCount)
-        } + GroupChatService.shared.totalGroupUnreadCount
+        }
         SharedDataManager.setUnreadCount(totalUnread)
         if #available(iOS 16.0, *) {
             UNUserNotificationCenter.current().setBadgeCount(totalUnread)

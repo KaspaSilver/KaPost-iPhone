@@ -63,7 +63,7 @@ final class PublicChatService: ObservableObject {
 
     /// Rooms the app uses as machinery, never shown as chats: the chess arena
     /// (ONLINE_CHESS.md). Hidden from Public Chats, no unread, no banners.
-    nonisolated static let serviceChannels: Set<String> = [ChessTournamentCodec.arenaChannel]
+    nonisolated static let serviceChannels: Set<String> = ["chess-arena"]
 
     /// Native-language label for a curated language room, e.g. "kaspa-espanol" -> "Español".
     /// Native names (not English ones) so a speaker scanning the list finds their own language.
@@ -855,20 +855,6 @@ final class PublicChatService: ObservableObject {
         if insertedCount > 0 {
             if prune { await store.pruneExpiredMessages() }
             loadMessages(for: channel)
-        }
-        // Global notification center: live (session-gated) incoming channel messages. The
-        // center dedupes by txId, so re-serving the same history every poll is a no-op.
-        // The center stores the body verbatim, so hand it the FRIENDLY preview rather than
-        // the raw wire content: a public chat reply/voice/photo/chess message is a JSON
-        // envelope (`MessageReplyCodec` and friends) and would otherwise show as raw JSON
-        // in the bell list. Same call the scan-driven local banner already makes below in
-        // `notifyIfEnabled`.
-        for row in rows {
-            GlobalNotificationCenter.shared.recordPublicChatIfLive(
-                channel: channel, senderAddress: row.senderAddress,
-                content: MessageReplyCodec.previewText(for: row.content),
-                txId: row.id, blockTime: row.blockTime
-            )
         }
     }
 
@@ -1791,10 +1777,8 @@ final class PublicChatService: ObservableObject {
         guard !store.hiddenSenderAddresses(forChannel: channel).contains(senderAddress) else { return }
         let settings = AppSettings.load()
         guard settings.notificationsEnabled else { return }
-        // Simple Mode removes Public Chats entirely - no local banners for them either.
         // The remote push is the only banner source - see `ChatService.localBannersEnabled`.
         guard ChatService.localBannersEnabled else { return }
-        guard !settings.childModeEnabled else { return }
         // Indexed channels are covered by remote push (registered via
         // watched_publicChat_channels) while the app is backgrounded or closed - skip the
         // scan-driven local banner there so one message can't notify twice. While the app is

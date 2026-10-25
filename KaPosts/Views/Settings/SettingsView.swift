@@ -7,43 +7,12 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject var walletManager: WalletManager
     @EnvironmentObject var settingsViewModel: SettingsViewModel
-    @EnvironmentObject var contactsManager: ContactsManager
-    // Deliberately NOT observing ChatService here: this screen only *calls* it in actions (via
-    // ChatService.shared), it never reads its @Published state in the Form body. Observing it made
-    // the whole Settings Form recompute on ChatService's high-frequency sync churn for the first
-    // ~15s after login, which was the scroll jank. The connection-status views are separate and
-    // keep their own observation.
-    @Environment(\.dismiss) private var dismiss
-
-    // Restore-from-backup state lives on this singleton (NOT view @State) so the restore Task
-    // survives any view teardown; this view only presents the blocking modal and observes.
-    @ObservedObject private var restoreCoordinator = BackupRestoreCoordinator.shared
-    // Same ownership rule for the Danger Zone wipe-and-resync: the task lives on this singleton,
-    // this view only presents the blocking modal and observes.
-    @ObservedObject private var resyncCoordinator = IncomingResyncCoordinator.shared
 
     @State private var showSeedPhrase = false
     @State private var showDeleteConfirmation = false
-    @State private var showWipeIncomingConfirmation = false
-    @State private var showResyncChatPicker = false
-    /// Selection handed back by the chat picker sheet; the resync starts from the sheet's
-    /// onDismiss so the fullScreenCover is never presented while the sheet is still animating out.
-    @State private var pendingResyncSelection: [String]?
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
     @State private var toastStyle: ToastStyle = .success
-    @State private var messageStoreSize = "Unknown"
-    /// Settings > Storage > Address Book Photos: bytes on this device, nil while measuring.
-    @State private var addressBookPhotoBytes: Int64?
-    @State private var confirmRemoveAddressBookPhotos = false
-    @State private var chatHistoryArchiveURL: URL?
-    @State private var showChatHistoryShareSheet = false
-    @State private var showChatHistoryImporter = false
-    @State private var isPreparingChatHistoryExport = false
-
-    @AppStorage(MessageStore.dpiCorruptionWarningKey) private var dpiWarningActive = false
-    @AppStorage(MessageStore.dpiCorruptionWarningEndpointKey) private var dpiWarningEndpoint = ""
-    @AppStorage(MessageStore.dpiCorruptionWarningDateKey) private var dpiWarningDate: Double = 0
 
     var body: some View {
         NavigationStack {
@@ -52,10 +21,10 @@ struct SettingsView: View {
                     customizationPage
                 }
                 settingsCategoryRow("Security", icon: "lock.shield", tint: .accentColor) {
-                    securityPage
+                    SecuritySettingsPage()
                 }
                 settingsCategoryRow("Connection", icon: "antenna.radiowaves.left.and.right", tint: .accentColor) {
-                    connectionPage
+                    ConnectionHubPage()
                 }
                 settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
                     NotificationsHubPage()
@@ -66,11 +35,14 @@ struct SettingsView: View {
                 settingsCategoryRow("Public Chats", icon: "bubble.left.and.text.bubble.right", tint: .accentColor) {
                     PublicChatsSettingsView(embedded: true)
                 }
-                settingsCategoryRow("Storage", icon: "internaldrive", tint: .accentColor) {
-                    storagePage
+                settingsCategoryRow("Cache", icon: "internaldrive", tint: .accentColor) {
+                    CacheSettingsPage()
                 }
                 settingsCategoryRow("Diagnostics", icon: "stethoscope", tint: .accentColor) {
-                    diagnosticsPage
+                    DiagnosticsSettingsPage()
+                }
+                settingsCategoryRow("Open Source Licenses", icon: "doc.text", tint: .accentColor) {
+                    OpenSourceLicensesView()
                 }
                 // Direct action, not a sub-page: straight into the seed phrase (behind the
                 // biometric gate when enabled).
@@ -91,8 +63,16 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                     }
                 }
-                settingsCategoryRow("Danger Zone", icon: "exclamationmark.triangle", tint: .red) {
-                    dangerZonePage
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label {
+                        Text("Delete Account")
+                            .foregroundColor(.red)
+                    } icon: {
+                        Image(systemName: "trash")
+                            .foregroundColor(.red)
+                    }
                 }
             }
             .toast(message: toastMessage, style: toastStyle)
@@ -107,352 +87,38 @@ struct SettingsView: View {
             .sheet(isPresented: $showSeedPhrase) {
                 SeedPhraseView()
             }
-            .sheet(isPresented: $showChatHistoryShareSheet, onDismiss: {
-                // The export is a temp file holding the whole chat history; once the share sheet
-                // is gone nothing needs it, so don't leave it sitting in the temp directory.
-                if let chatHistoryArchiveURL {
-                    try? FileManager.default.removeItem(at: chatHistoryArchiveURL)
-                }
-                chatHistoryArchiveURL = nil
-            }) {
-                if let chatHistoryArchiveURL {
-                    DiagnosticsShareSheet(fileURL: chatHistoryArchiveURL)
-                }
-            }
-            .fileImporter(
-                isPresented: $showChatHistoryImporter,
-                allowedContentTypes: [.json]
-            ) { result in
-                Task {
-                    await importChatHistoryArchive(result: result)
-                }
-            }
-            // Blocking restore modal: presented for the whole Settings stack (covers both the
-            // Nextcloud restore page and the local-file import) the moment a restore starts.
-            // The binding's setter is a no-op, so the ONLY way out is the modal's own buttons
-            // calling BackupRestoreCoordinator.dismiss(), which refuses while a restore runs.
-            .fullScreenCover(isPresented: Binding(
-                get: { restoreCoordinator.isPresentingModal },
-                set: { _ in }
-            )) {
-                ChatRestoreProgressModal()
-            }
-            .onChange(of: restoreCoordinator.phase) { phase in
-                if case .success = phase {
-                    refreshMessageStoreSize()
-                }
-            }
-            // Blocking wipe-and-resync modal (Danger Zone): same inescapable pattern as the
-            // restore modal above - no-op binding setter, exits only via the modal's own buttons.
-            .fullScreenCover(isPresented: Binding(
-                get: { resyncCoordinator.isPresentingModal },
-                set: { _ in }
-            )) {
-                IncomingResyncProgressModal()
-            }
-            .onChange(of: resyncCoordinator.phase) { phase in
-                if case .success = phase {
-                    refreshMessageStoreSize()
-                }
-            }
             .confirmationDialog(
                 "Delete Account",
                 isPresented: $showDeleteConfirmation,
                 titleVisibility: .visible
             ) {
                 Button("Delete", role: .destructive) {
-                    deleteAccount(removeRemoteBackup: false)
-                }
-                if NextcloudService.shared.isConnected {
-                    Button("Delete and Remove Nextcloud Backup", role: .destructive) {
-                        deleteAccount(removeRemoteBackup: true)
-                    }
+                    deleteAccount()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(NextcloudService.shared.isConnected
-                     ? "This deletes the account, its messages and its drafts from this iPhone, removes its push registration from KaChat's server, and revokes the login KaChat created on your Nextcloud. Your encrypted Nextcloud backup stays unless you choose to remove it. Messages and posts on the Kaspa blockchain cannot be deleted. Make sure you have your recovery phrase."
-                     : "This deletes the account, its messages and its drafts from this iPhone and removes its push registration from KaChat's server. Messages and posts on the Kaspa blockchain cannot be deleted. Make sure you have your recovery phrase.")
+                Text("This deletes the account from this iPhone and removes its push registration. Posts and messages on the Kaspa blockchain cannot be deleted. Make sure you have your recovery phrase.")
             }
         }
         .onAppear {
-            refreshMessageStoreSize()
             Task { _ = try? await walletManager.refreshBalance() }
         }
     }
 
-    // MARK: - Settings categories (each section is its own page)
-
     private var customizationPage: some View {
         Form {
             Section("Customization") {
-                    // Appearance/Language/Currency are extracted so the accounts-screen
-                    // App Settings can reuse the exact same rows (one source of truth) -
-                    // Customize Dock + Show Setup Guides below stay here only: the dock is
-                    // per-account and the guides need an active wallet.
-                    AppWideCustomizationPickers()
-
-                    // The sheet above the tab bar (MainTabView), never a page in here: the dock
-                    // updates live, and every change rebuilds the tabs this page sits in.
-                    Button {
-                        NotificationCenter.default.post(name: .openCustomizeDock, object: nil)
-                    } label: {
-                        HStack {
-                            Label("Customize Dock", systemImage: "list.bullet")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundColor(Color(.tertiaryLabel))
-                        }
+                // Appearance / Language / Currency, shared with the accounts screen's settings.
+                AppWideCustomizationPickers()
+                Toggle("Show Fee Estimate", isOn: $settingsViewModel.settings.showFeeEstimate)
+                    .onChange(of: settingsViewModel.settings.showFeeEstimate) { _ in
+                        settingsViewModel.saveSettings()
                     }
-
-                    // Moved here from Chats: it decides whether a number is drawn on the
-                    // composer, which is a display preference, not a chat behaviour.
-                    Toggle("Show Fee Estimate", isOn: $settingsViewModel.settings.showFeeEstimate)
-                        .onChange(of: settingsViewModel.settings.showFeeEstimate) { _ in
-                            settingsViewModel.saveSettings()
-                        }
-                }
+            }
         }
         .navigationTitle("Customization")
         .navigationBarTitleDisplayMode(.inline)
     }
-
-    private var securityPage: some View {
-        SecuritySettingsPage()
-    }
-
-    private var connectionPage: some View {
-        ConnectionHubPage()
-    }
-
-    private var chatsPage: some View {
-        Form {
-            Section("Chats") {
-                    Toggle("Require approval for photos from new contacts", isOn: $settingsViewModel.settings.requirePhotoApprovalForNewContacts)
-                        .onChange(of: settingsViewModel.settings.requirePhotoApprovalForNewContacts) { _ in
-                            settingsViewModel.saveSettings()
-                        }
-
-                    Toggle("Higher quality photos", isOn: $settingsViewModel.settings.higherQualityPhotos)
-                        .onChange(of: settingsViewModel.settings.higherQualityPhotos) { _ in
-                            settingsViewModel.saveSettings()
-                        }
-
-                    NavigationLink {
-                        QuickReactionEmojisSettingsView(settingsViewModel: settingsViewModel)
-                    } label: {
-                        HStack {
-                            Label("Quick Reactions", systemImage: "face.smiling")
-                            Spacer()
-                            Text(settingsViewModel.settings.effectiveQuickReactionEmojis.joined())
-                                .font(.caption)
-                        }
-                    }
-                }
-
-        }
-        .navigationTitle("Chats")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    /// Storage hub: a category list like the main Settings screen — each provider row leads
-    /// into its own screen.
-    private var storagePage: some View {
-        Form {
-            Section {
-                Picker("Message retention", selection: $settingsViewModel.settings.messageRetention) {
-                    ForEach(MessageRetention.allCases, id: \.self) { option in
-                        Text(option.displayName).tag(option)
-                    }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: settingsViewModel.settings.messageRetention) { _ in
-                    settingsViewModel.saveSettings()
-                    refreshMessageStoreSize()
-                }
-
-                Text("Local storage used: \(messageStoreSize)")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("On This Device")
-            } footer: {
-                Text("How long messages are kept on this device, and how much space they use. Applies before any cloud storage.")
-            }
-
-            // Your own data, not cache: photos you assigned in the Address Book. Kept apart from
-            // Cache, whose "clear" must never delete anything you'd miss.
-            Section {
-                HStack {
-                    Label("Address Book Photos", systemImage: "book.closed")
-                    Spacer()
-                    if let bytes = addressBookPhotoBytes {
-                        Text(CacheManager.formatted(bytes))
-                            .monospacedDigit()
-                            .foregroundColor(.secondary)
-                    } else {
-                        ProgressView()
-                    }
-                }
-                if (addressBookPhotoBytes ?? 0) > 0 {
-                    Button(role: .destructive) {
-                        confirmRemoveAddressBookPhotos = true
-                    } label: {
-                        Text("Remove Address Book Photos")
-                            .foregroundColor(.red)
-                    }
-                }
-            } footer: {
-                Text("Photos you assigned to saved addresses, for every wallet on this device. They're kept until you remove them, and they're included in your chat backup.")
-            }
-            .task { await refreshAddressBookPhotoBytes() }
-            .sheet(isPresented: $confirmRemoveAddressBookPhotos) {
-                ConfirmActionSheet(
-                    title: AppLocalization.string("Remove Address Book Photos?"),
-                    confirmTitle: AppLocalization.string("Remove"),
-                    confirmSubtitle: String(
-                        format: AppLocalization.string("Frees %@. Saved addresses keep their names; they show the avatar their owner set instead."),
-                        CacheManager.formatted(addressBookPhotoBytes ?? 0)
-                    ),
-                    confirmSystemImage: "trash"
-                ) {
-                    AddressBookManager.shared.removeAllPhotos()
-                    Task { await refreshAddressBookPhotoBytes() }
-                }
-            }
-
-            Section {
-                settingsCategoryRow("Cache", icon: "trash", tint: .accentColor) {
-                    CacheSettingsPage()
-                }
-            } footer: {
-                Text("Images and files the app can always download again. Clearing them frees space and loses nothing.")
-            }
-
-            // Nextcloud is the only cloud the app talks to: messages live on this device and in
-            // the encrypted archive on the user's own server, nowhere else.
-            Section {
-                settingsCategoryRow("Nextcloud", icon: "externaldrive.connected.to.line.below", tint: .accentColor) {
-                    nextcloudStoragePage
-                }
-            } header: {
-                Text("Cloud Storage")
-            } footer: {
-                Text("Your own Nextcloud server is the only place messages sync to. Nothing is stored in iCloud.")
-            }
-        }
-        .navigationTitle("Storage")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func refreshAddressBookPhotoBytes() async {
-        addressBookPhotoBytes = await Task.detached(priority: .utility) {
-            AddressBookManager.photosBytesOnDevice()
-        }.value
-    }
-
-    private var nextcloudStoragePage: some View {
-        NextcloudSettingsView()
-            .navigationTitle("Nextcloud")
-            .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var chatHistoryPage: some View {
-        Form {
-            Section("Chat History") {
-                    Button {
-                        Task {
-                            await exportChatHistoryArchive()
-                        }
-                    } label: {
-                        HStack {
-                            Label("Export Chat History", systemImage: "square.and.arrow.up")
-                            Spacer()
-                            if isPreparingChatHistoryExport {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isPreparingChatHistoryExport || restoreCoordinator.isRunning)
-
-                    Button {
-                        showChatHistoryImporter = true
-                    } label: {
-                        HStack {
-                            Label("Import Chat History", systemImage: "square.and.arrow.down")
-                            Spacer()
-                            if restoreCoordinator.isRunning {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isPreparingChatHistoryExport || restoreCoordinator.isRunning)
-                }
-        }
-        .navigationTitle("Chat History")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var diagnosticsPage: some View {
-        DiagnosticsSettingsPage()
-    }
-
-    private var dangerZonePage: some View {
-        Form {
-            Section("Danger Zone") {
-                    if dpiWarningActive {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Sync warning detected", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("Message sync appears incomplete under restricted network conditions. Consider wiping and re-syncing incoming messages on a normal connection.")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                            if !dpiWarningEndpoint.isEmpty {
-                                Text("Last failed endpoint: \(dpiWarningEndpoint)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Button(role: .destructive) {
-                        showWipeIncomingConfirmation = true
-                    } label: {
-                        Label("Wipe and re-sync incoming messages", systemImage: "arrow.triangle.2.circlepath")
-                            .foregroundColor(.red)
-                    }
-                    .disabled(resyncCoordinator.isRunning)
-                    // Half sheet, like every other chooser in the app - and a destructive action
-                    // is exactly where the consequence deserves a line of its own next to it,
-                    // which a dialog of bare verbs under a grey message cannot give it.
-                    .sheet(isPresented: $showWipeIncomingConfirmation) {
-                        resyncOptionsSheet
-                    }
-                    .sheet(isPresented: $showResyncChatPicker, onDismiss: {
-                        if let selection = pendingResyncSelection {
-                            pendingResyncSelection = nil
-                            IncomingResyncCoordinator.shared.start(scope: .contacts(selection))
-                        }
-                    }) {
-                        ResyncChatPickerView { addresses in
-                            pendingResyncSelection = addresses
-                        }
-                    }
-
-                    // "Wipe account & messages" used to live here. Removing an account is the
-                    // accounts screen's job now - it is where accounts are listed, so it is
-                    // where you can see which one you are removing. Two doors to the same
-                    // destructive act, one of them on a screen that never names the account,
-                    // is one door too many. "Wipe iCloud Data" lived here too, until the app
-                    // stopped putting anything in iCloud.
-                }
-        }
-        .navigationTitle("Danger Zone")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
 
     private var balanceToolbarView: some View {
         let sompi = walletManager.currentWallet?.balanceSompi
@@ -476,111 +142,15 @@ struct SettingsView: View {
         }
     }
 
-    private func deleteAccount(removeRemoteBackup: Bool) {
+    private func deleteAccount() {
         Task {
             do {
-                try await walletManager.deleteWallet(removeRemoteBackup: removeRemoteBackup)
+                try await walletManager.deleteWallet()
             } catch {
-                toastStyle = .error
-                toastToken = UUID()
-                toastMessage = "Couldn't delete the account: \(UserFacingError.message(for: error))"
+                showToast("Couldn't delete the account: \(UserFacingError.message(for: error))", style: .error)
             }
         }
     }
-
-    private func refreshMessageStoreSize() {
-        let bytes = MessageStore.shared.currentStoreSizeBytes()
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        messageStoreSize = formatter.string(fromByteCount: bytes)
-    }
-
-    /// The re-sync chooser. Three outcomes rather than a yes/no, so it builds its own rows
-    /// instead of reusing ConfirmActionSheet - each one saying what it actually does.
-    private var resyncOptionsSheet: some View {
-        VStack(spacing: 12) {
-            Text("Wipe and re-sync incoming messages")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .padding(.top, 20)
-                .padding(.bottom, 4)
-
-            ActionSheetRow(
-                title: "All Chats",
-                subtitle: "Removes every incoming message locally, then re-syncs them from the blockchain. Sent messages and account info are kept.",
-                systemImage: "arrow.triangle.2.circlepath",
-                tint: .red
-            ) {
-                showWipeIncomingConfirmation = false
-                IncomingResyncCoordinator.shared.start(scope: .all)
-            }
-            ActionSheetRow(
-                title: "Select Chats...",
-                subtitle: "Pick which chats to wipe and re-sync. Everything else is left alone.",
-                systemImage: "checklist"
-            ) {
-                showWipeIncomingConfirmation = false
-                // One runloop turn: presenting from inside a sheet that is still dismissing
-                // drops it.
-                DispatchQueue.main.async { showResyncChatPicker = true }
-            }
-            ActionSheetRow(
-                title: "Cancel",
-                subtitle: "Leave your messages as they are.",
-                systemImage: "xmark"
-            ) {
-                showWipeIncomingConfirmation = false
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)
-        .presentationDetents([.height(380)])
-        .presentationDragIndicator(.visible)
-    }
-
-    private func exportChatHistoryArchive() async {
-        if isPreparingChatHistoryExport { return }
-        isPreparingChatHistoryExport = true
-        defer { isPreparingChatHistoryExport = false }
-
-        do {
-            let fileURL = try await ChatService.shared.exportChatHistoryArchive()
-            chatHistoryArchiveURL = fileURL
-            showChatHistoryShareSheet = true
-        } catch {
-            AppLog.log("[Settings] Failed to export chat history: %@", error.localizedDescription)
-            showToast(error.localizedDescription, style: .error)
-        }
-    }
-
-    /// Reads the picked archive, then hands it to `BackupRestoreCoordinator`, which runs the
-    /// import behind the blocking progress modal (result messaging happens there, not in toasts).
-    private func importChatHistoryArchive(result: Result<URL, Error>) async {
-        switch result {
-        case .failure(let error):
-            showToast("Failed to open archive: \(error.localizedDescription)", style: .error)
-        case .success(let fileURL):
-            guard !restoreCoordinator.isRunning else { return }
-
-            let accessed = fileURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessed {
-                    fileURL.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            do {
-                let data = try Data(contentsOf: fileURL)
-                restoreCoordinator.startLocalRestore(data: data)
-            } catch {
-                AppLog.log("[Settings] Failed to read chat history archive: %@", error.localizedDescription)
-                showToast("Failed to open archive: \(error.localizedDescription)", style: .error)
-            }
-        }
-    }
-
 
     private func showToast(_ message: String, style: ToastStyle = .success) {
         let token = UUID()
@@ -599,10 +169,8 @@ struct SettingsView: View {
     }
 
     private func formatKaspaExact(_ sompi: UInt64) -> String {
-        let kas = Double(sompi) / 100_000_000.0
-        return String(format: "%.8f", kas)
+        String(format: "%.8f", Double(sompi) / 100_000_000.0)
     }
-
 }
 
 // MARK: - Shared category row (SettingsView + AppSettingsView)
@@ -684,24 +252,6 @@ struct SecuritySettingsPage: View {
                     reason: "Unlock to change the private key biometric lock",
                     isOn: $settingsViewModel.settings.biometricSpendingKeyEnabled
                 )
-
-                NavigationLink {
-                    ChildModeSettingsView()
-                } label: {
-                    HStack {
-                        Label {
-                            Text("Simple Mode")
-                                .foregroundColor(.primary)
-                        } icon: {
-                            Image(systemName: "lock.shield")
-                                .foregroundColor(.accentColor)
-                        }
-                        Spacer()
-                        Text(settingsViewModel.settings.childModeEnabled ? "On" : "Off")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
             }
         }
         .navigationTitle("Security")
@@ -775,8 +325,8 @@ struct ConnectionHubPage: View {
                 if settingsViewModel.selectedNetworkType != settingsViewModel.launchNetworkType {
                     Label {
                         Text(settingsViewModel.selectedNetworkType == .testnet
-                             ? LocalizedStringKey("Close KaChat completely and open it again to finish switching to Testnet.")
-                             : LocalizedStringKey("Close KaChat completely and open it again to finish switching back to Mainnet."))
+                             ? LocalizedStringKey("Close KaPosts completely and open it again to finish switching to Testnet.")
+                             : LocalizedStringKey("Close KaPosts completely and open it again to finish switching back to Mainnet."))
                     } icon: {
                         Image(systemName: "arrow.clockwise.circle.fill")
                             .foregroundColor(.orange)
@@ -1343,9 +893,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Likes", isOn: $settingsViewModel.settings.kaPostsNotifyLikes)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyLikes) { _ in
                         settingsViewModel.saveSettings()
-                        // The extension reads these from the App Group; without this the switch
-                        // only ever changed a value nothing downstream could see.
-                        SharedDataManager.syncGroupsForExtension()
                         // And the server reads them from the registration (PUSH_EXTENSIONS.md
                         // §3). KaPosts pushes carry no mutable-content, so the extension never
                         // runs for them and nothing on the device can stop a background push;
@@ -1355,9 +902,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Reposts", isOn: $settingsViewModel.settings.kaPostsNotifyReposts)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyReposts) { _ in
                         settingsViewModel.saveSettings()
-                        // The extension reads these from the App Group; without this the switch
-                        // only ever changed a value nothing downstream could see.
-                        SharedDataManager.syncGroupsForExtension()
                         // And the server reads them from the registration (PUSH_EXTENSIONS.md
                         // §3). KaPosts pushes carry no mutable-content, so the extension never
                         // runs for them and nothing on the device can stop a background push;
@@ -1367,9 +911,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Follows", isOn: $settingsViewModel.settings.kaPostsNotifyFollows)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyFollows) { _ in
                         settingsViewModel.saveSettings()
-                        // The extension reads these from the App Group; without this the switch
-                        // only ever changed a value nothing downstream could see.
-                        SharedDataManager.syncGroupsForExtension()
                         // And the server reads them from the registration (PUSH_EXTENSIONS.md
                         // §3). KaPosts pushes carry no mutable-content, so the extension never
                         // runs for them and nothing on the device can stop a background push;
@@ -1379,9 +920,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Dislikes", isOn: $settingsViewModel.settings.kaPostsNotifyDislikes)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyDislikes) { _ in
                         settingsViewModel.saveSettings()
-                        // The extension reads these from the App Group; without this the switch
-                        // only ever changed a value nothing downstream could see.
-                        SharedDataManager.syncGroupsForExtension()
                         // And the server reads them from the registration (PUSH_EXTENSIONS.md
                         // §3). KaPosts pushes carry no mutable-content, so the extension never
                         // runs for them and nothing on the device can stop a background push;
@@ -1391,9 +929,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Comments", isOn: $settingsViewModel.settings.kaPostsNotifyComments)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyComments) { _ in
                         settingsViewModel.saveSettings()
-                        // The extension reads these from the App Group; without this the switch
-                        // only ever changed a value nothing downstream could see.
-                        SharedDataManager.syncGroupsForExtension()
                         // And the server reads them from the registration (PUSH_EXTENSIONS.md
                         // §3). KaPosts pushes carry no mutable-content, so the extension never
                         // runs for them and nothing on the device can stop a background push;
@@ -1403,7 +938,6 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Mentions", isOn: $settingsViewModel.settings.kaPostsNotifyMentions)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyMentions) { _ in
                         settingsViewModel.saveSettings()
-                        SharedDataManager.syncGroupsForExtension()
                     }
             }
         }
@@ -3446,857 +2980,6 @@ private struct AllNodesRow: View {
         .environmentObject(ContactsManager.shared)
         .environmentObject(ChatService.shared)
 }
-
-/// Settings > Storage > Nextcloud tab: connect/disconnect the user's own Nextcloud server,
-/// plus start-folder choice and message backup. Renders bare Sections (no Form of its own) so
-/// the Storage page can embed it directly in its Form.
-/// Credentials are verified against the OCS user endpoint before being stored in the Keychain
-/// (see NextcloudService). The connected account powers the chat attach picker's
-/// "From Nextcloud" flow (photos/videos sent as public share links).
-struct NextcloudSettingsView: View {
-    @ObservedObject private var service = NextcloudService.shared
-    // Restore runs on this singleton behind the blocking modal (presented by SettingsView's
-    // fullScreenCover, which covers this pushed page too); this view only starts it.
-    @ObservedObject private var restoreCoordinator = BackupRestoreCoordinator.shared
-
-    @State private var serverInput = ""
-    @State private var usernameInput = ""
-    @State private var appPasswordInput = ""
-    @State private var isConnecting = false
-    @State private var errorMessage: String?
-    @State private var showDisconnectConfirm = false
-    @State private var showStartFolderPicker = false
-    @State private var backupInfo: NextcloudFile?
-    @State private var isBackingUp = false
-    @State private var showRestoreConfirm = false
-    @State private var showBackupFolderPicker = false
-    @State private var backupStatusMessage: String?
-    @State private var backupErrorMessage: String?
-
-    private var canConnect: Bool {
-        !serverInput.trimmingCharacters(in: .whitespaces).isEmpty
-            && !usernameInput.trimmingCharacters(in: .whitespaces).isEmpty
-            && !appPasswordInput.trimmingCharacters(in: .whitespaces).isEmpty
-            && !isConnecting
-    }
-
-    var body: some View {
-        if service.isOffForTestnet {
-            // Mainnet-only (see NextcloudService.isOffForTestnet): nothing to set up here, and
-            // the mainnet connection is waiting, untouched, for the next mainnet launch.
-            Form {
-                Section {
-                    Label("Nextcloud is off while Testnet is on.", systemImage: "icloud.slash")
-                } footer: {
-                    Text("Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was.")
-                }
-            }
-        } else {
-            nextcloudForm
-        }
-    }
-
-    private var nextcloudForm: some View {
-        // One concrete container (NOT a Group): presentation modifiers below — .sheet/.alert —
-        // must attach to a single view. On a Group they replicate onto every child Section,
-        // and the competing presentation attempts pop the whole settings navigation instead
-        // of showing the folder picker.
-        Form {
-            if let account = service.account {
-                Section("Connected Account") {
-                    HStack {
-                        Text("Server")
-                        Spacer()
-                        Text(account.serverURL?.host ?? account.serverURLString)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    HStack {
-                        Text("Username")
-                        Spacer()
-                        Text(account.username)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                Section {
-                    Button {
-                        showStartFolderPicker = true
-                    } label: {
-                        HStack {
-                            Text("Start Folder")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text(account.defaultFolder ?? "All Files")
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                        }
-                    }
-                } footer: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\"File\" in a chat's + menu opens this folder first.")
-                        // The old "Send Media via Nextcloud" switch is gone: Camera, Photo and Voice
-                        // Message in a chat's + menu ask on chain or via Nextcloud every time. What
-                        // that choice means for privacy still belongs here.
-                        Text("In a chat's + menu, Camera, Photo and Voice Message ask whether to send on chain or via Nextcloud. Via Nextcloud, the file uploads in full quality to this server's \(NextcloudService.mediaFolderPath) folder and the chat carries a share link (voice messages up to 5 minutes). The message with the link stays end-to-end encrypted, but the file itself is stored unencrypted on your server and is reachable by anyone who has the unguessable link.")
-                    }
-                }
-                Section {
-                    // Custom binding: the setter must go through setAutoSyncEnabled so the
-                    // choice is recorded as explicit (see NextcloudService's migration notes).
-                    Toggle("Automatic Sync", isOn: Binding(
-                        get: { service.autoBackupEnabled },
-                        set: { service.setAutoSyncEnabled($0) }
-                    ))
-
-                    Text("Automatic sync works with one cloud service at a time.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if let lastSynced = service.lastAutoSyncAt {
-                        HStack {
-                            Text("Last synced")
-                            Spacer()
-                            Text(lastSynced.formatted(date: .abbreviated, time: .shortened))
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                    }
-
-                    Button {
-                        showBackupFolderPicker = true
-                    } label: {
-                        HStack {
-                            Text("Backup Folder")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text(account.backupFolder ?? "\(NextcloudService.backupFolderName) (default)")
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                        }
-                    }
-
-                    Button {
-                        backUpNow()
-                    } label: {
-                        HStack {
-                            Label("Back Up Messages Now", systemImage: "arrow.up.doc")
-                            Spacer()
-                            if isBackingUp { ProgressView() }
-                        }
-                    }
-                    .disabled(isBackingUp || restoreCoordinator.isRunning)
-
-                    Button {
-                        showRestoreConfirm = true
-                    } label: {
-                        HStack {
-                            Label("Restore from Backup", systemImage: "arrow.down.doc")
-                            Spacer()
-                            if restoreCoordinator.isRunning { ProgressView() }
-                        }
-                    }
-                    .disabled(isBackingUp || restoreCoordinator.isRunning || backupInfo == nil)
-
-                    if let backupInfo, let modified = backupInfo.modified {
-                        HStack {
-                            Text("Last backup")
-                            Spacer()
-                            Text("\(modified.formatted(date: .abbreviated, time: .shortened))\(backupInfo.size.map { " · \(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))" } ?? "")")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                    } else if backupInfo == nil {
-                        Text("No backup on this server yet.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    if let backupStatusMessage {
-                        Text(backupStatusMessage)
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-                    if let backupErrorMessage {
-                        Text(backupErrorMessage)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                } header: {
-                    Text("Message Backup")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Keeps your chat history in \(NextcloudService.backupFileName) in the folder above (choosing All Files resets to the default \(NextcloudService.backupFolderName) folder). Automatic Sync keeps your devices in near-live sync: new messages upload moments after they arrive, and while the app is open it also watches the server and quietly pulls in what your other devices upload, fastest while you are in a chat. A wallet that connects to an existing backup restores it once automatically. Every upload merges with what is already on the server, so no device can erase another's history. Restoring merges the archive into this device's history.")
-                        Text("Your Address Book and portfolios are in the same backup and sync between your devices the same way.")
-                    }
-                }
-
-                Section {
-                    Button("Disconnect", role: .destructive) {
-                        showDisconnectConfirm = true
-                    }
-                } footer: {
-                    Text("Disconnecting removes the stored app password from this device. Nothing changes on your Nextcloud server.")
-                }
-            } else {
-                Section {
-                    TextField("cloud.example.com", text: $serverInput)
-                        .keyboardType(.URL)
-                        .autocapitalization(.none)
-                        .autocorrectionDisabled()
-                    // Decision 3A: https-only. Bare hostnames are fine (normalizedServerURL
-                    // defaults them to https); an explicit http:// is rejected inline here and
-                    // again in connect() below.
-                    if serverInput.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("http://") {
-                        Text("Use https. Unencrypted connections are not supported.")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                    TextField("Username", text: $usernameInput)
-                        .autocapitalization(.none)
-                        .autocorrectionDisabled()
-                    RevealableSecureField("App password", text: $appPasswordInput)
-                } header: {
-                    Text("Server")
-                } footer: {
-                    Text("Create an app password in Nextcloud under Settings → Security → Devices & sessions — don't use your account password. KaChat stores it in the device Keychain.")
-                }
-
-                if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-
-                Section {
-                    Button {
-                        connect()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if isConnecting {
-                                ProgressView()
-                            } else {
-                                Text("Connect")
-                                    .fontWeight(.semibold)
-                            }
-                            Spacer()
-                        }
-                    }
-                    .disabled(!canConnect)
-                }
-            }
-        }
-        .alert("Disconnect Nextcloud", isPresented: $showDisconnectConfirm) {
-            Button("Disconnect", role: .destructive) {
-                service.disconnect()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The app password is removed from this device's Keychain. You can reconnect any time.")
-        }
-        .sheet(isPresented: $showStartFolderPicker) {
-            NextcloudFolderSelectView { path in
-                service.setDefaultFolder(path)
-            }
-        }
-        .sheet(isPresented: $showBackupFolderPicker) {
-            NextcloudFolderSelectView { path in
-                service.setBackupFolder(path)
-                // The backup lives per-folder — re-check what exists at the new destination.
-                Task { backupInfo = await NextcloudService.shared.fetchBackupInfo() }
-            }
-        }
-        .alert("Restore from Backup", isPresented: $showRestoreConfirm) {
-            Button("Restore") {
-                backupStatusMessage = nil
-                backupErrorMessage = nil
-                // Runs behind the blocking progress modal; the coordinator owns the Task, so
-                // nothing this view does (including being popped) can interrupt the restore.
-                restoreCoordinator.startNextcloudRestore()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Messages from the server backup are merged into this device's chat history. Nothing is deleted.")
-        }
-        .task {
-            guard service.isConnected else { return }
-            backupInfo = await NextcloudService.shared.fetchBackupInfo()
-        }
-    }
-
-    private func backUpNow() {
-        guard !isBackingUp else { return }
-        isBackingUp = true
-        backupStatusMessage = nil
-        backupErrorMessage = nil
-        Task {
-            do {
-                // Merge-on-upload: reads the server's copy first and uploads the union, so a
-                // manual backup can never clobber another device's history (or desktop's state).
-                try await NextcloudService.shared.runBackup()
-                backupInfo = await NextcloudService.shared.fetchBackupInfo()
-                backupStatusMessage = "Backup uploaded."
-            } catch {
-                backupErrorMessage = UserFacingError.message(for: error)
-            }
-            isBackingUp = false
-        }
-    }
-
-    private func connect() {
-        guard !isConnecting else { return }
-        // Decision 3A: refuse cleartext servers outright instead of attempting a connection.
-        if serverInput.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("http://") {
-            errorMessage = "Use https. Unencrypted connections are not supported."
-            return
-        }
-        isConnecting = true
-        errorMessage = nil
-        Task {
-            do {
-                try await NextcloudService.shared.connect(
-                    serverInput: serverInput,
-                    username: usernameInput,
-                    appPassword: appPasswordInput
-                )
-                appPasswordInput = ""
-            } catch {
-                errorMessage = UserFacingError.message(for: error)
-            }
-            isConnecting = false
-        }
-    }
-}
-
-// MARK: - Blocking restore progress modal
-
-/// Full-screen modal shown while a chat-history restore runs (Nextcloud backup download or a
-/// locally picked archive). Deliberately inescapable while running: SettingsView presents it via
-/// a fullScreenCover whose binding setter is a no-op, interactive dismissal is disabled, and no
-/// dismissing control is rendered until the restore reaches a terminal state. Interrupting a
-/// restore midway can corrupt local chat state, so the only exits are Done (after success) or
-/// Try Again / Close (after failure), all routed through BackupRestoreCoordinator.
-struct ChatRestoreProgressModal: View {
-    @ObservedObject private var coordinator = BackupRestoreCoordinator.shared
-
-    var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
-
-            VStack(spacing: 20) {
-                switch coordinator.phase {
-                case .idle, .running:
-                    runningContent
-                case .success(let conversations, let messages, let filledSent):
-                    successContent(conversations: conversations, messages: messages, filledSent: filledSent)
-                case .failure(let message):
-                    failureContent(message: message)
-                }
-            }
-            .padding(28)
-            .frame(maxWidth: 340)
-            .background(glassBackground(cornerRadius: 24))
-            .padding(.horizontal, 24)
-        }
-        .interactiveDismissDisabled(true)
-    }
-
-    @ViewBuilder
-    private var runningContent: some View {
-        Image(systemName: "arrow.down.doc")
-            .font(.scaled(size: 38, weight: .medium))
-            .foregroundColor(.accentColor)
-
-        Text("Restoring Backup")
-            .font(.title3.weight(.semibold))
-
-        VStack(spacing: 10) {
-            ProgressView(value: coordinator.fraction)
-                .progressViewStyle(.linear)
-                .tint(.accentColor)
-                .animation(.easeInOut(duration: 0.25), value: coordinator.fraction)
-
-            HStack {
-                Text(coordinator.stageText)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 12)
-                Text("\(Int(coordinator.fraction * 100))%")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundColor(.secondary)
-            }
-        }
-
-        Text("Please keep the app open. Leaving now could corrupt your chat history.")
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-    }
-
-    @ViewBuilder
-    private func successContent(conversations: Int, messages: Int, filledSent: Int) -> some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.scaled(size: 44))
-            .foregroundColor(.green)
-
-        Text("Restore Complete")
-            .font(.title3.weight(.semibold))
-
-        Text(successMessage(conversations: conversations, messages: messages, filledSent: filledSent))
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-
-        Button {
-            coordinator.dismiss()
-        } label: {
-            Text("Done")
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-    }
-
-    @ViewBuilder
-    private func failureContent(message: String) -> some View {
-        Image(systemName: "exclamationmark.triangle.fill")
-            .font(.scaled(size: 44))
-            .foregroundColor(.orange)
-
-        Text("Restore Failed")
-            .font(.title3.weight(.semibold))
-
-        Text(message)
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-
-        VStack(spacing: 10) {
-            Button {
-                coordinator.retry()
-            } label: {
-                Text("Try Again")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Button {
-                coordinator.dismiss()
-            } label: {
-                Text("Close")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-        }
-    }
-
-    private func successMessage(conversations: Int, messages: Int, filledSent: Int) -> String {
-        var text = "Restored \(messages) messages from \(conversations) chats."
-        if filledSent > 0 {
-            text += " Filled \(filledSent) sent messages."
-        }
-        return text
-    }
-
-    /// Same glass card treatment the app's other overlays use (see PublicChatChannelView).
-    private func glassBackground(cornerRadius: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.regularMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
-            )
-            .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
-    }
-}
-
-// MARK: - Wipe-and-resync coordinator (blocking progress modal)
-
-/// Owns a Danger Zone incoming-message wipe-and-resync from tap to terminal state, independent
-/// of any view's lifetime - the exact ownership pattern of `BackupRestoreCoordinator`.
-/// Interrupting the flow between the wipe and the re-fetch would leave chats emptied without
-/// their history restored, so the Settings hierarchy only OBSERVES this singleton: the resync
-/// `Task` is held here, never by a view, and while `phase == .running` an inescapable
-/// fullScreenCover (`IncomingResyncProgressModal`) is presented whose only exits are the
-/// modal's own Done / Try Again / Close buttons.
-@MainActor
-final class IncomingResyncCoordinator: ObservableObject {
-    static let shared = IncomingResyncCoordinator()
-    private init() {}
-
-    enum Scope: Equatable {
-        /// Every known 1:1 chat.
-        case all
-        /// Only the picked contacts' chats (addresses from the chat picker).
-        case contacts([String])
-    }
-
-    enum Phase: Equatable {
-        case idle
-        case running
-        case success(chats: Int, messages: Int)
-        case failure(String)
-    }
-
-    @Published private(set) var phase: Phase = .idle
-    /// 0...1, monotonic. Stage weights mirror the restore modal's pattern: wipe 0-10%,
-    /// handshake re-fetch 10-20%, payment re-fetch 20-30%, per-chat contextual re-fetch 30-95%
-    /// (the bar advances one chat at a time), finalize 95-100%.
-    @Published private(set) var fraction: Double = 0
-    @Published private(set) var stageText: String = ""
-
-    var isRunning: Bool { phase == .running }
-    var isPresentingModal: Bool { phase != .idle }
-
-    /// Kept so Try Again after a failure reruns the exact same scope (the flow is idempotent:
-    /// re-wiping already-wiped chats is a no-op and every fetch dedupes by txId).
-    private var lastScope: Scope?
-    /// Held by the singleton (not a view) so navigation or sheet churn cannot cancel it.
-    private var resyncTask: Task<Void, Never>?
-
-    func start(scope: Scope) {
-        guard !isRunning else { return }
-        lastScope = scope
-        fraction = 0
-        stageText = "Preparing..."
-        phase = .running
-        resyncTask = Task { [weak self] in
-            await self?.run(scope)
-        }
-    }
-
-    /// Reruns the failed resync with the same scope. Only valid from the failure state.
-    func retry() {
-        guard case .failure = phase, let lastScope else { return }
-        phase = .idle
-        start(scope: lastScope)
-    }
-
-    /// Leaves the modal. Only honored from a terminal state; a running resync cannot be dismissed.
-    func dismiss() {
-        guard !isRunning else { return }
-        phase = .idle
-        fraction = 0
-        stageText = ""
-    }
-
-    private func run(_ scope: Scope) async {
-        do {
-            let contacts: [String]?
-            switch scope {
-            case .all:
-                contacts = nil
-            case .contacts(let picked):
-                contacts = picked
-            }
-            let summary = try await ChatService.shared.wipeAndResyncIncomingMessages(contacts: contacts) { [weak self] event in
-                self?.apply(event)
-            }
-            fraction = 1.0
-            stageText = "Done"
-            phase = .success(chats: summary.chats, messages: summary.messages)
-        } catch {
-            phase = .failure(error.localizedDescription)
-        }
-    }
-
-    private func apply(_ event: ChatService.IncomingResyncEvent) {
-        switch event {
-        case .wiping:
-            advance(to: 0.05, stage: "Wiping incoming messages...")
-        case .fetchingHandshakes:
-            advance(to: 0.12, stage: "Re-fetching handshakes...")
-        case .fetchingPayments:
-            advance(to: 0.22, stage: "Re-fetching payments...")
-        case .syncingChats(let done, let total):
-            let f = total > 0 ? Double(done) / Double(total) : 1.0
-            advance(to: 0.30 + 0.65 * f, stage: "Re-syncing... \(done) of \(total) chats")
-        case .finalizing:
-            advance(to: 0.96, stage: "Finishing up...")
-        }
-    }
-
-    /// Monotonic progress: overlapping async reports can never move the bar backwards.
-    private func advance(to value: Double, stage: String) {
-        fraction = max(fraction, min(value, 1.0))
-        stageText = stage
-    }
-}
-
-// MARK: - Blocking wipe-and-resync progress modal
-
-/// Full-screen modal shown while a Danger Zone wipe-and-resync runs. Deliberately inescapable
-/// while running, exactly like `ChatRestoreProgressModal`: presented via a fullScreenCover whose
-/// binding setter is a no-op, interactive dismissal disabled, and no dismissing control rendered
-/// until a terminal state. Leaving mid-flow would strand chats wiped but not yet re-synced.
-struct IncomingResyncProgressModal: View {
-    @ObservedObject private var coordinator = IncomingResyncCoordinator.shared
-
-    var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
-
-            VStack(spacing: 20) {
-                switch coordinator.phase {
-                case .idle, .running:
-                    runningContent
-                case .success(let chats, let messages):
-                    successContent(chats: chats, messages: messages)
-                case .failure(let message):
-                    failureContent(message: message)
-                }
-            }
-            .padding(28)
-            .frame(maxWidth: 340)
-            .background(glassBackground(cornerRadius: 24))
-            .padding(.horizontal, 24)
-        }
-        .interactiveDismissDisabled(true)
-    }
-
-    @ViewBuilder
-    private var runningContent: some View {
-        Image(systemName: "arrow.triangle.2.circlepath")
-            .font(.scaled(size: 38, weight: .medium))
-            .foregroundColor(.accentColor)
-
-        Text("Re-syncing Messages")
-            .font(.title3.weight(.semibold))
-
-        VStack(spacing: 10) {
-            ProgressView(value: coordinator.fraction)
-                .progressViewStyle(.linear)
-                .tint(.accentColor)
-                .animation(.easeInOut(duration: 0.25), value: coordinator.fraction)
-
-            HStack {
-                Text(coordinator.stageText)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 12)
-                Text("\(Int(coordinator.fraction * 100))%")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundColor(.secondary)
-            }
-        }
-
-        Text("Please keep the app open. Leaving now could leave chats without their history.")
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-    }
-
-    @ViewBuilder
-    private func successContent(chats: Int, messages: Int) -> some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.scaled(size: 44))
-            .foregroundColor(.green)
-
-        Text("Re-sync Complete")
-            .font(.title3.weight(.semibold))
-
-        Text("Re-synced \(messages) incoming \(messages == 1 ? "message" : "messages") across \(chats) \(chats == 1 ? "chat" : "chats").")
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-
-        Button {
-            coordinator.dismiss()
-        } label: {
-            Text("Done")
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-    }
-
-    @ViewBuilder
-    private func failureContent(message: String) -> some View {
-        Image(systemName: "exclamationmark.triangle.fill")
-            .font(.scaled(size: 44))
-            .foregroundColor(.orange)
-
-        Text("Re-sync Failed")
-            .font(.title3.weight(.semibold))
-
-        Text(message)
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-
-        VStack(spacing: 10) {
-            Button {
-                coordinator.retry()
-            } label: {
-                Text("Try Again")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Button {
-                coordinator.dismiss()
-            } label: {
-                Text("Close")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-        }
-    }
-
-    /// Same glass card treatment the app's other overlays use (see PublicChatChannelView).
-    private func glassBackground(cornerRadius: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.regularMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
-            )
-            .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
-    }
-}
-
-// MARK: - Resync chat picker
-
-/// Multi-select picker for the scoped wipe-and-resync: lists the wallet's 1:1 conversations in
-/// chat-list order (group chats live in GroupChatService and are not covered by the incoming
-/// wipe, so they are not offered). Hands the picked addresses back via `onConfirm`; the caller
-/// starts the resync from the sheet's onDismiss so the blocking modal never races the sheet.
-struct ResyncChatPickerView: View {
-    @Environment(\.dismiss) private var dismiss
-    let onConfirm: ([String]) -> Void
-
-    @State private var conversations: [Conversation] = []
-    @State private var selected: Set<String> = []
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if conversations.isEmpty {
-                    Text("No chats to re-sync.")
-                        .foregroundColor(.secondary)
-                } else {
-                    List {
-                        Section {
-                            ForEach(conversations) { conversation in
-                                row(for: conversation)
-                            }
-                        } footer: {
-                            Text("Only the selected chats have their incoming messages wiped and re-synced. Sent messages and all other chats are untouched.")
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Select Chats")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(selected.count == conversations.count ? "Deselect All" : "Select All") {
-                        if selected.count == conversations.count {
-                            selected = []
-                        } else {
-                            selected = Set(conversations.map { $0.contact.address })
-                        }
-                    }
-                    .disabled(conversations.isEmpty)
-                }
-                ToolbarItem(placement: .bottomBar) {
-                    Button {
-                        let picked = Array(selected)
-                        onConfirm(picked)
-                        dismiss()
-                    } label: {
-                        Text("Re-sync \(selected.count) \(selected.count == 1 ? "Chat" : "Chats")")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(selected.isEmpty)
-                }
-            }
-            .onAppear {
-                // Snapshot once: this is a static picker, not a live chat list. Newest activity
-                // first, matching the chat list's ordering.
-                conversations = ChatService.shared.conversations.sorted { a, b in
-                    switch (a.lastMessage?.timestamp, b.lastMessage?.timestamp) {
-                    case let (da?, db?):
-                        return da > db
-                    case (.some, .none):
-                        return true
-                    case (.none, .some):
-                        return false
-                    default:
-                        return ContactsManager.shared.displayName(for: a.contact) < ContactsManager.shared.displayName(for: b.contact)
-                    }
-                }
-            }
-        }
-    }
-
-    private func row(for conversation: Conversation) -> some View {
-        let address = conversation.contact.address
-        let isSelected = selected.contains(address)
-        return Button {
-            if isSelected {
-                selected.remove(address)
-            } else {
-                selected.insert(address)
-            }
-        } label: {
-            HStack(spacing: 12) {
-                KNSAvatarView(
-                    avatarURLString: KNSService.shared.profileCache[address]?.avatarURL,
-                    fallbackText: ContactsManager.shared.displayName(for: conversation.contact),
-                    size: 44,
-                    contactAddress: address
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(ContactsManager.shared.displayName(for: conversation.contact))
-                        .font(.headline)
-                        .lineLimit(1)
-                        .foregroundColor(.primary)
-                    Text(address)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer()
-
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Cache
 
 /// What the app is holding that it could fetch again, with a way to drop any of it.
 ///

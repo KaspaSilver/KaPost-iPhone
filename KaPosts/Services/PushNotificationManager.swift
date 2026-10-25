@@ -936,7 +936,8 @@ final class PushNotificationManager: ObservableObject {
         let kinds = AppSettings.load()
         let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows]
             .map { $0 ? "1" : "0" }.joined()
-        let silentGroups = GroupChatService.shared.groupSilentNotifications.sorted().joined(separator: "+")
+        // KaPosts has no groups.
+        let silentGroups = ""
         return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors]).joined(separator: ",")
     }
 
@@ -1114,9 +1115,8 @@ final class PushNotificationManager: ObservableObject {
             // persists these, so just make sure it runs and drop these from the retry queue
             // rather than repeatedly failing the same bogus 1:1 fetch.
             let hasGroupPending = pendingMessages.contains { $0.type == "group_message" || $0.type == "group_control" }
-            if hasGroupPending {
-                await GroupChatService.shared.performCatchUpSync()
-            }
+            // KaPosts has no groups: a group push here can only be stale, and is dropped below.
+            _ = hasGroupPending
 
             var failed: [SharedPendingMessage] = []
             for pending in pendingMessages {
@@ -1164,7 +1164,6 @@ final class PushNotificationManager: ObservableObject {
         groupCatchUpInFlight = true
         repeat {
             groupCatchUpNeedsRerun = false
-            await GroupChatService.shared.performCatchUpSync()
         } while groupCatchUpNeedsRerun
         groupCatchUpInFlight = false
     }
@@ -1518,48 +1517,12 @@ final class PushNotificationManager: ObservableObject {
                 guard settings.notificationMode == .remotePush else { return }
                 Task { await self.updateWatchedAddresses() }
             }
-
-        groupsCancellable = GroupChatService.shared.$groups
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        // Muting/unmuting a member doesn't change `$groups` itself, so it needs its own
-        // subscription to actually refresh which blinded ids get watched (see
-        // `collectWatchedGroupIds`'s muted-member exclusion).
-        groupMutedMembersCancellable = GroupChatService.shared.$groupMutedMembers
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        // Silencing a group takes it OFF the server's watch list (see `collectWatchedGroupIds`),
-        // so the toggle has to reach the service the moment it flips.
-        groupSilentCancellable = GroupChatService.shared.$groupSilentNotifications
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
     }
 
     /// Indexer-tracked public chat channels (#kaspa/#kachat-bugs) whose bell is on - the push
     /// service sends public chat-room pushes for these while the app is closed. Bell off =
     /// channel excluded = no push.
     private func collectWatchedPublicChatChannels() -> [String] {
-        // Simple Mode: no public chat channels registered with the push service at all. Toggling
-        // the mode posts .settingsDidChange -> refreshRegistrationIfNeeded -> updateWatchedAddresses,
-        // whose fingerprint includes this list, so the re-registration happens automatically.
-        guard !AppSettings.load().childModeEnabled else { return [] }
         return PublicChatService.shared.channels
             .filter { PublicChatService.isIndexerTracked($0.channelName) && $0.notifyEnabled }
             .map(\.channelName)
@@ -1584,14 +1547,11 @@ final class PushNotificationManager: ObservableObject {
     /// The wallet's K (KaPosts) identity - the push service sends "actions on your content"
     /// pushes for it while the app is closed. Nil when no wallet is loaded.
     private func collectKaPostsPubkey() -> String? {
-        // Simple Mode: no KaPosts identity registered with the push service - same auto
-        // re-registration path as collectWatchedPublicChatChannels above.
-        guard !AppSettings.load().childModeEnabled else { return nil }
         return try? KaPostsAPIClient.shared.requesterPubkey()
     }
 
-    /// The authors this account asked to hear about when they post (KaPosts' bell). Empty in
-    /// Simple Mode, like the KaPosts identity itself.
+    /// The authors this account asked to hear about when they post (KaPosts' bell). Empty
+    /// without a KaPosts identity.
     private func collectKaPostsWatchAuthors() -> [String] {
         guard collectKaPostsPubkey() != nil else { return [] }
         return KaPostsWatchStore.shared.watchedPubkeys
@@ -1608,34 +1568,9 @@ final class PushNotificationManager: ObservableObject {
     /// treats an update as a full replace, so silently `continue`-ing (the old behavior) submitted
     /// a truncated list that DELETED the failed group's subscriptions server-side - that group then
     /// received no pushes at all until an unrelated successful update.
+    /// KaPosts has no groups, so no blinded group ids are watched.
     private func collectWatchedGroupIds() -> [String]? {
-        let myAddress = WalletManager.shared.currentWallet?.publicAddress
-        var ids = Set<String>()
-        for group in GroupChatService.shared.groups {
-            // A silenced group is not watched at all: no push is ever sent for it, so the
-            // silence holds whether or not the notification extension gets to run (an
-            // undecryptable or payload-less push used to fall back to a generic "New group
-            // message" banner with no way to know which group it was for). Messages still
-            // arrive through the block scan and catch-up, as they do for muted members.
-            guard !GroupChatService.shared.silentNotifications(for: group.id) else { continue }
-            guard let bag = try? KeychainService.shared.loadGroupBag(groupId: group.id),
-                  let blindingKey = Data(hexString: bag.blindingKey) else {
-                AppLog.log("[Push] Failed to load group bag for %@ - aborting group-id collection", group.id)
-                return nil
-            }
-            let mutedAddresses = GroupChatService.shared.mutedMemberAddresses(for: group.id)
-            for member in group.members {
-                // A muted member's messages still show up in the thread (block-scan/catch-up
-                // aren't gated on this at all) - simply not watching their blinded id means the
-                // indexer never pushes a notification for them specifically, which is exactly
-                // "mute": still visible, just silent.
-                guard member.address != myAddress, !mutedAddresses.contains(member.address),
-                      let memberPubKey = Data(hexString: member.xOnlyPubKeyHex) else { continue }
-                let blindedGroupId = GroupCipher.deriveBlindedGroupId(blindingKey: blindingKey, memberXOnlyPubKey: memberPubKey)
-                ids.insert(blindedGroupId.hexString)
-            }
-        }
-        return Array(ids)
+        []
     }
 
     private func collectAliases(forWatchedAddresses watchedAddresses: [String]? = nil) -> [String] {

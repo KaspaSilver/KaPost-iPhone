@@ -25,7 +25,6 @@ final class KeychainService {
         case privateKey = "kachat_private_key"
         case groupBag = "kachat_group_bag"
         case nextcloudCredentials = "kachat_nextcloud_credentials"
-        case childModePassword = "kachat_child_mode_password"
         /// A random stand-in for the Secure Enclave key hash on hardware that has no Secure
         /// Enclave at all (see `deviceIdentifier()`).
         case deviceIdFallback = "kachat_device_id_fallback"
@@ -220,26 +219,6 @@ final class KeychainService {
 
     // MARK: - Simple Mode password record (device-specific, SE-wrapped)
     //
-    // Opaque blob owned by ChildModeService: a JSON {salt, SHA-256(salt || password)} record -
-    // never the plaintext password. Device-scoped + Secure Enclave-wrapped like the seed phrase,
-    // so it can't sync off this device.
-
-    func saveChildModePasswordRecord(_ data: Data) throws {
-        try saveSensitiveData(data, baseKey: .childModePassword)
-    }
-
-    func loadChildModePasswordRecord() throws -> Data? {
-        try loadSensitiveData(baseKey: .childModePassword)
-    }
-
-    func deleteChildModePasswordRecord() throws {
-        try deleteSensitiveData(baseKey: .childModePassword)
-    }
-
-    func hasChildModePasswordRecord() -> Bool {
-        (try? loadSensitiveData(baseKey: .childModePassword)) != nil
-    }
-
     // MARK: - Wallet
 
     func saveWallet(_ wallet: Wallet) throws {

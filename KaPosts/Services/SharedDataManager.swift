@@ -178,55 +178,6 @@ final class SharedDataManager {
 
     // MARK: - Group Sync
 
-    /// Sync group rosters to the shared container for the notification extension. The NSE has no
-    /// Core Data access (that's where `GroupStore` lives), so this is the only way it can learn
-    /// which members belong to which group - needed to recompute candidate `blinded_group_id`s
-    /// and identify an incoming `group_message` push's sender. Group *secrets* (blindingKey,
-    /// groupRootEpoch) are deliberately not duplicated here - the NSE already reads those
-    /// straight from `GroupBag` via the Keychain access group both targets already share.
-    @MainActor
-    static func syncGroupsForExtension() {
-        let groups = GroupChatService.shared.groups.map { group in
-            SharedGroup(
-                groupId: group.id,
-                name: group.name,
-                adminAddress: group.adminAddress,
-                members: group.members.map { SharedGroupMember(address: $0.address, xOnlyPubKeyHex: $0.xOnlyPubKeyHex, displayName: $0.displayName) }
-            )
-        }
-
-        guard let data = try? JSONEncoder().encode(groups) else {
-            AppLog.log("[SharedData] Failed to encode groups")
-            return
-        }
-
-        sharedDefaults?.set(data, forKey: Keys.groups)
-        AppLog.log("[SharedData] Synced %d groups to shared container", groups.count)
-
-        // Groups with "Only Notify if I'm Mentioned" on - the NSE checks this after decrypting a
-        // group_message push, to decide whether to suppress it when the text doesn't mention the
-        // wallet's own address (already shared separately via `syncWalletAddressForExtension`).
-        // The five KaPosts switches, so the extension can drop a push the reader turned off.
-        let s = AppSettings.load()
-        sharedDefaults?.set([
-            "likes": s.kaPostsNotifyLikes,
-            "dislikes": s.kaPostsNotifyDislikes,
-            "comments": s.kaPostsNotifyComments,
-            "reposts": s.kaPostsNotifyReposts,
-            "follows": s.kaPostsNotifyFollows,
-            "mentions": s.kaPostsNotifyMentions,
-        ], forKey: Keys.kaPostsNotificationKinds)
-        if let silentData = try? JSONEncoder().encode(GroupChatService.shared.groupSilentNotifications) {
-            sharedDefaults?.set(silentData, forKey: Keys.groupSilentNotifications)
-        }
-        if let mentionsData = try? JSONEncoder().encode(GroupChatService.shared.groupMentionsOnlyNotifications) {
-            sharedDefaults?.set(mentionsData, forKey: Keys.groupMentionsOnlyNotifications)
-        }
-
-        syncOwnGroupTxIdsForExtension()
-        syncOwnKNSDomainForExtension()
-    }
-
     /// The wallet's own recent outgoing group-message txIds. A group reaction envelope carries
     /// its target's txId, so with this list the NSE can apply the mentions-only rule's personal
     /// exception - a reaction to MY message still notifies in a mentions-only group - and word

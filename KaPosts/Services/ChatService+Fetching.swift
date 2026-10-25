@@ -3333,9 +3333,6 @@ extension ChatService {
         // Call events (invite / answer / hang-up) ring through the chat itself. They DO stay as
         // bubbles - the chat shows "Voice call · 4:12" the way a phone's history would - so this
         // only hands the envelope to CallService and carries on.
-        if !message.isOutgoing, let callEnvelope = CallCodec.parseAny(MessageReplyCodec.unwrappedText(message.content)) {
-            CallService.shared.handleIncoming(callEnvelope, message: message, contactAddress: contactAddress)
-        }
 
         let contact = contactsManager.getOrCreateContact(address: contactAddress)
         if message.isOutgoing {
@@ -3444,10 +3441,6 @@ extension ChatService {
             // A reply to a message this device never received is the one signal that a message
             // was missed; act on it rather than leave a quote that opens onto nothing.
             recoverMissingReplyOriginalIfNeeded(for: message, contactAddress: contactAddress)
-            // Continuous Nextcloud sync: every message that lands - incoming or outgoing,
-            // whatever the delivery path - marks the archive dirty and (re)arms the debounced
-            // merge upload. No-op unless Automatic Sync is on and a server is connected.
-            NextcloudService.shared.noteMessageActivity()
         }
 
         // If user is currently viewing this chat, advance read marker immediately
@@ -3708,7 +3701,6 @@ extension ChatService {
         let shouldPlaySound = settings.shouldPlayIncomingNotificationSound(for: contact)
         content.sound = shouldPlaySound ? .default : nil
         content.threadIdentifier = contact.address
-        content.categoryIdentifier = AppDelegate.messageCategoryId
 
         if !shouldPlaySound &&
             settings.incomingNotificationVibrationEnabled &&

@@ -1303,14 +1303,8 @@ final class KaPostsNotificationService {
         let settings = AppSettings.load()
         guard WalletManager.shared.currentWallet != nil,
               let key = lastSeenKey else { return }
-        // Simple Mode removes KaPosts entirely - no notification pings for it either.
-        guard !settings.childModeEnabled else { return }
         do {
             let notifications = try await KaPostsAPIClient.shared.fetchNotifications(limit: 50).notifications
-            // Single fetch, two consumers: the bell center ingests EVERY page (it has its own
-            // baseline and ignores the OS-ping gates below) — it used to run a second,
-            // duplicate 90s poll of this same endpoint in parallel.
-            await GlobalNotificationCenter.shared.ingestKaPostsNotifications(notifications)
             // OS banner gates apply only from here down. Remote-push mode: the push service
             // delivers KaPosts pings (registered via kaposts_pubkey) while the app is
             // backgrounded or closed - local pings there would double-notify, mirroring the

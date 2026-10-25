@@ -747,14 +747,13 @@ final class KachatNamesRegistry: ObservableObject {
               let me = WalletManager.shared.currentWallet?.publicAddress.lowercased() else { return }
         unnamedSweepRunning = true
         defer { unnamedSweepRunning = false }
-        let book = AddressBookManager.shared
         var targets: [String] = []
         let byRecency = ContactsManager.shared.contacts.sorted {
             ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast)
         }
         for contact in byRecency {
             let key = contact.address.lowercased()
-            guard key != me, contact.assignedName == nil, book.entry(for: key)?.customName == nil,
+            guard key != me, contact.assignedName == nil,
                   NetworkType(address: key) != nil, NetworkType.isOnActiveNetwork(key) else { continue }
             if let entry = identities[key] {
                 if entry.identity.label != nil { continue }
@@ -1516,8 +1515,7 @@ final class KachatNamesNotifier {
 
         func post(_ id: String, _ name: String, _ title: String, _ body: String) {
             guard !quiet else { return }
-            GlobalNotificationCenter.shared.record(id: "kachat-\(id)", source: .kachat, title: title, body: body,
-                                                   timestamp: now, targetId: name)
+            _ = (id, name, title, body, now)
         }
         func S(_ key: String, _ args: CVarArg...) -> String {
             KaspaUnit.label(String(format: AppLocalization.string(key), locale: AppLocalization.locale, arguments: args))

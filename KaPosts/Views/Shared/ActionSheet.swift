@@ -329,36 +329,18 @@ extension KaspaFullTransactionResponse: Identifiable {
     var id: String { transactionId }
 }
 
-/// What to do with a transaction you tapped in an address history: look at it, or record it.
-///
-/// Shared by cold storage history, the spending-address histories and the chatting address, all
-/// three of which used to raise their own identical confirmation dialog.
+/// What to do with a transaction you tapped in the Wallet history: open it on the block explorer.
 struct TransactionActionsSheet: View {
     let transaction: KaspaFullTransactionResponse
-    /// The address the history was viewed under, which is what decides whether this reads as
-    /// money in or money out.
-    let address: String
     let onOpenExplorer: () -> Void
-    /// Nil candidate means the transaction has no side involving `address` we can price, so
-    /// there is nothing to record and the option is not offered.
-    let onAddToPortfolio: (PortfolioCandidateTransaction) -> Void
 
     @Environment(\.dismiss) private var dismiss
-
-    private var candidate: PortfolioCandidateTransaction? {
-        PortfolioCandidateTransaction(transaction: transaction, address: address)
-    }
 
     var body: some View {
         VStack(spacing: 12) {
             VStack(spacing: 4) {
                 Text("Transaction")
                     .font(.headline)
-                if let candidate {
-                    Text(summary(candidate))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
                 Text(transaction.transactionId)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -377,29 +359,12 @@ struct TransactionActionsSheet: View {
                 onOpenExplorer()
             }
 
-            if let candidate {
-                ActionSheetRow(
-                    title: "Add to Portfolio",
-                    subtitle: "Records it as a buy or a sell in a portfolio of your choosing.",
-                    systemImage: "chart.pie.fill"
-                ) {
-                    dismiss()
-                    onAddToPortfolio(candidate)
-                }
-            }
-
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
-        .presentationDetents([.height(candidate == nil ? 250 : 320)])
+        .presentationDetents([.height(250)])
         .presentationDragIndicator(.visible)
-    }
-
-    private func summary(_ candidate: PortfolioCandidateTransaction) -> String {
-        let direction = candidate.isOutgoing ? "Sent" : "Received"
-        return "\(direction) \(PortfolioFormat.kas(candidate.amountKas)) on "
-            + candidate.timestamp.formatted(date: .abbreviated, time: .shortened)
     }
 }
 

@@ -3113,8 +3113,6 @@ struct KachatTransferSheet: View {
     @State private var nameResolutions: [NameResolution] = []
     @State private var selectedTLD: NameServiceTLD?
     @State private var showScanner = false
-    @State private var showAddressBook = false
-    @ObservedObject private var addressBook = AddressBookManager.shared
 
     var body: some View {
         KachatTxSheet(
@@ -3128,7 +3126,7 @@ struct KachatTransferSheet: View {
                 title: "New owner",
                 footer: Text("An address or a domain - .kachat names are looked up first, and it's resolved to the address shown.")
             ) {
-                // The Send screens' recipient field: Paste, Scan QR and the Address Book beside it.
+                // The Send screens' recipient field: Paste and Scan QR beside it.
                 HStack(spacing: 14) {
                     TextField(LocalizedStringKey(KachatNamesService.addressPrefix == "kaspa" ? "kaspa:qr... or domain" : "kaspatest:... or domain"), text: $input)
                         .font(.system(.subheadline, design: .monospaced))
@@ -3152,19 +3150,6 @@ struct KachatTransferSheet: View {
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
                     .accessibilityLabel(Text("Scan QR"))
-                    Button {
-                        showAddressBook = true
-                    } label: {
-                        Image(systemName: "book.closed").font(.body.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.accentColor)
-                    .accessibilityLabel(Text("Address Book"))
-                }
-                if let saved = addressBook.entry(for: resolved?.address ?? input) {
-                    Label(saved.name, systemImage: "book.closed.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.accentColor)
                 }
                 if resolving {
                     ProgressView()
@@ -3200,9 +3185,6 @@ struct KachatTransferSheet: View {
                 input = scanned
                 showScanner = false
             }
-        }
-        .fullScreenCover(isPresented: $showAddressBook) {
-            AddressBookPickerSheet { entry in input = entry.address }
         }
     }
 
@@ -4121,7 +4103,6 @@ struct KachatExpiredNamesBanner: View {
 
     private func open(_ n: KachatNames.NameInfo) {
         KachatDeepLink.pendingName = n.name
-        PendingTabRoute.pending = .kachatNames
         NotificationCenter.default.post(name: .openKachatName, object: nil)
     }
 }

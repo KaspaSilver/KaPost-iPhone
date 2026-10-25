@@ -206,7 +206,7 @@ struct ImportWalletView: View {
         // Released by the guide's Finish (or by MainTabView, if no guide ends up shown).
         ChatService.shared.holdSyncForOnboarding()
         // Import-only marker (create never sets it): lets the Welcome Guide's funding step offer
-        // "Change Chatting Address" - only an imported seed can have its identity at a nonzero
+        // "Change Address" - only an imported seed can have its identity at a nonzero
         // derivation index. Cleared by the guide on Finish, or here on failure.
         walletManager.justImportedWallet = true
         do {

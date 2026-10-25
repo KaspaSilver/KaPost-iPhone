@@ -46,6 +46,9 @@ struct KaPostsTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openKaPost)) { _ in
             selectedTab = .feed
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openKaPostsProfile)) { _ in
+            selectedTab = .feed
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { _ in
             selectedTab = .publicChats
         }
@@ -56,7 +59,18 @@ struct KaPostsTabView: View {
         .sheet(isPresented: $showProfileEditor) {
             KaChatProfileEditorSheet()
         }
+        // A payment request link tapped anywhere: Send Kaspa with it filled in.
+        .modifier(PaymentRequestSheetPresenter())
         .onAppear {
+            // KaChat's welcome guide used to lift the hold create/import put on syncing; KaPosts
+            // has no guide, so the dock lifts it. Then the address's node subscription (balance,
+            // coins for sending) starts - ChatService's 1:1 chat sync stays off in KaPosts.
+            let chatService = ChatService.shared
+            if chatService.onboardingSyncHeld {
+                chatService.releaseSyncForOnboarding()
+            } else {
+                chatService.startPolling()
+            }
             if KaPostsDeepLink.pendingPostTxId != nil || KaPostsDeepLink.pendingOpenNotifications {
                 selectedTab = .feed
             } else if PublicChatService.shared.pendingPublicChatNavigation != nil {

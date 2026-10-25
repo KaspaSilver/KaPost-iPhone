@@ -279,13 +279,8 @@ final class WalletManager: ObservableObject {
                     ContactsManager.shared.setActiveWalletAddress(nil)
                     await MessageStore.shared.setCurrentWallet(nil)
                     PublicChatService.shared.setCurrentWallet(nil)
-                    GroupChatService.shared.setCurrentWallet(nil)
-                    ColdStorageManager.shared.setCurrentWallet(nil)
-                    PortfolioManager.shared.setCurrentWallet(nil)
-                    PortfolioViewModel.shared.setCurrentWallet(nil)
                     KaPostsFollowStore.shared.setCurrentWallet(nil)
                     KaPostsModerationStore.shared.setCurrentWallet(nil)
-                    NextcloudService.shared.setCurrentWallet(nil)
                     SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
                     SharedDataManager.setPrivateKeyAvailable(false)
@@ -332,17 +327,11 @@ final class WalletManager: ObservableObject {
                 await MessageStore.shared.setCurrentWallet(canonicalWallet.publicAddress)
                 LaunchTrace.mark("loadWallet: services switched")
                 PublicChatService.shared.setCurrentWallet(canonicalWallet.publicAddress)
-                GroupChatService.shared.setCurrentWallet(canonicalWallet.publicAddress)
                 // Discover group invites for THIS account right away - switching accounts in-app
                 // does not fire a scenePhase .active, so without this a group you were added to
                 // under this account would not appear until the app was backgrounded/foregrounded.
-                Task { await GroupChatService.shared.performCatchUpSync() }
-                ColdStorageManager.shared.setCurrentWallet(canonicalWallet.publicAddress)
-                PortfolioManager.shared.setCurrentWallet(canonicalWallet.publicAddress)
-                PortfolioViewModel.shared.setCurrentWallet(canonicalWallet.publicAddress)
                 KaPostsFollowStore.shared.setCurrentWallet(canonicalWallet.publicAddress)
                 KaPostsModerationStore.shared.setCurrentWallet(canonicalWallet.publicAddress)
-                NextcloudService.shared.setCurrentWallet(canonicalWallet.publicAddress)
                 LaunchTrace.mark("loadWallet: loading messages from store")
                 await ChatService.shared.loadMessagesFromStoreIfNeeded(onlyIfEmpty: false)
                 LaunchTrace.mark("loadWallet: done")
@@ -359,13 +348,8 @@ final class WalletManager: ObservableObject {
             ContactsManager.shared.setActiveWalletAddress(nil)
             await MessageStore.shared.setCurrentWallet(nil)
             PublicChatService.shared.setCurrentWallet(nil)
-            GroupChatService.shared.setCurrentWallet(nil)
-            ColdStorageManager.shared.setCurrentWallet(nil)
-            PortfolioManager.shared.setCurrentWallet(nil)
-            PortfolioViewModel.shared.setCurrentWallet(nil)
         KaPostsFollowStore.shared.setCurrentWallet(nil)
         KaPostsModerationStore.shared.setCurrentWallet(nil)
-            NextcloudService.shared.setCurrentWallet(nil)
             SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
             SharedDataManager.setPrivateKeyAvailable(false)
@@ -482,16 +466,10 @@ final class WalletManager: ObservableObject {
         // This must happen before resetForNewWallet() to avoid clearing the wrong store
         await MessageStore.shared.setCurrentWallet(wallet.publicAddress)
         PublicChatService.shared.setCurrentWallet(wallet.publicAddress)
-        GroupChatService.shared.setCurrentWallet(wallet.publicAddress)
         // Discover group invites for this newly-activated account immediately (see the same
         // call in loadWallet) - an in-app account activation does not fire scenePhase .active.
-        Task { await GroupChatService.shared.performCatchUpSync() }
-        ColdStorageManager.shared.setCurrentWallet(wallet.publicAddress)
-        PortfolioManager.shared.setCurrentWallet(wallet.publicAddress)
-        PortfolioViewModel.shared.setCurrentWallet(wallet.publicAddress)
         KaPostsFollowStore.shared.setCurrentWallet(wallet.publicAddress)
         KaPostsModerationStore.shared.setCurrentWallet(wallet.publicAddress)
-        NextcloudService.shared.setCurrentWallet(wallet.publicAddress)
         SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
         SharedDataManager.setPrivateKeyAvailable(true)
@@ -553,15 +531,6 @@ final class WalletManager: ObservableObject {
         // Unregister from push notifications before clearing wallet
         await PushNotificationManager.shared.unregister()
 
-        // The user's Nextcloud: optionally the archive, always the app password KaChat made -
-        // both while the credentials still exist to authenticate with.
-        if NextcloudService.shared.isConnected {
-            if removeRemoteBackup {
-                try await NextcloudService.shared.deleteRemoteBackup()
-            }
-            await NextcloudService.shared.revokeAppPassword()
-        }
-
         // Clear shared data (App Group)
         SharedDataManager.clearAllSharedData()
 
@@ -609,20 +578,14 @@ final class WalletManager: ObservableObject {
         if let walletAddressToDelete {
             ChatListSnapshotStore.clear(walletAddress: walletAddressToDelete)
             ContactsManager.shared.deletePersistedContacts(forWalletAddress: walletAddressToDelete)
-            NextcloudService.shared.purgeStoredState(forWalletAddress: walletAddressToDelete)
         }
         ContactsManager.shared.setActiveWalletAddress(nil)
 
         // Switch MessageStore back to default store (no wallet)
         await MessageStore.shared.setCurrentWallet(nil)
         PublicChatService.shared.setCurrentWallet(nil)
-        GroupChatService.shared.setCurrentWallet(nil)
-        ColdStorageManager.shared.setCurrentWallet(nil)
-        PortfolioManager.shared.setCurrentWallet(nil)
-        PortfolioViewModel.shared.setCurrentWallet(nil)
         KaPostsFollowStore.shared.setCurrentWallet(nil)
         KaPostsModerationStore.shared.setCurrentWallet(nil)
-        NextcloudService.shared.setCurrentWallet(nil)
         SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
         SharedDataManager.setPrivateKeyAvailable(false)
@@ -646,13 +609,8 @@ final class WalletManager: ObservableObject {
 
         await MessageStore.shared.setCurrentWallet(nil)
         PublicChatService.shared.setCurrentWallet(nil)
-        GroupChatService.shared.setCurrentWallet(nil)
-        ColdStorageManager.shared.setCurrentWallet(nil)
-        PortfolioManager.shared.setCurrentWallet(nil)
-        PortfolioViewModel.shared.setCurrentWallet(nil)
         KaPostsFollowStore.shared.setCurrentWallet(nil)
         KaPostsModerationStore.shared.setCurrentWallet(nil)
-        NextcloudService.shared.setCurrentWallet(nil)
         SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
         SharedDataManager.setPrivateKeyAvailable(false)
@@ -742,7 +700,6 @@ final class WalletManager: ObservableObject {
                 }
                 for address in Self.accountAddressVariants(account.publicAddress) {
                     ContactsManager.shared.deletePersistedContacts(forWalletAddress: address)
-                    NextcloudService.shared.purgeStoredState(forWalletAddress: address)
                     await KachatNameReminders.removeAll(forWallet: address)
                 }
                 removeSavedAccountFromStorage(account)
@@ -766,17 +723,8 @@ final class WalletManager: ObservableObject {
             await MessageStore.shared.destroyLocalStoreFiles()
             PublicChatService.shared.setCurrentWallet(address)
             PublicChatStore.shared.clearAll()
-            GroupChatService.shared.setCurrentWallet(address)
-            GroupChatService.shared.clearAllLocalData()
-            ColdStorageManager.shared.setCurrentWallet(address)
-            ColdStorageManager.shared.clearAllLocalData()
-            PortfolioManager.shared.setCurrentWallet(address)
-            PortfolioManager.shared.clearAllLocalData()
-            PortfolioViewModel.shared.setCurrentWallet(address)
             KaPostsFollowStore.shared.setCurrentWallet(address)
             KaPostsModerationStore.shared.setCurrentWallet(address)
-            PortfolioViewModel.shared.clearAllLocalData()
-            NextcloudService.shared.purgeStoredState(forWalletAddress: address)
         }
 
         do {
@@ -798,13 +746,8 @@ final class WalletManager: ObservableObject {
 
         await MessageStore.shared.setCurrentWallet(nil)
         PublicChatService.shared.setCurrentWallet(nil)
-        GroupChatService.shared.setCurrentWallet(nil)
-        ColdStorageManager.shared.setCurrentWallet(nil)
-        PortfolioManager.shared.setCurrentWallet(nil)
-        PortfolioViewModel.shared.setCurrentWallet(nil)
         KaPostsFollowStore.shared.setCurrentWallet(nil)
         KaPostsModerationStore.shared.setCurrentWallet(nil)
-        NextcloudService.shared.setCurrentWallet(nil)
         ChatService.shared.resetForNewWallet(skipStoreClear: true)
         ContactsManager.shared.deleteAllContacts()
         ContactsManager.shared.setActiveWalletAddress(nil)

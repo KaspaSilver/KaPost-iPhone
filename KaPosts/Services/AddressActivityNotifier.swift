@@ -400,7 +400,6 @@ final class AddressActivityNotifier: ObservableObject {
         // Also list it in the Profile notifications bell.
         Task { @MainActor in
             // the bell's entry opens the same address's history
-            GlobalNotificationCenter.shared.record(id: "wallet-\(dedupeKey)", source: .wallet, title: content.title, body: content.body, timestamp: Int64(Date().timeIntervalSince1970 * 1000), targetId: opened.isEmpty ? nil : opened)
         }
     }
 
@@ -418,7 +417,6 @@ final class AddressActivityNotifier: ObservableObject {
             UNNotificationRequest(identifier: balId, content: content, trigger: nil)
         )
         Task { @MainActor in
-            GlobalNotificationCenter.shared.record(id: "wallet-\(balId)", source: .wallet, title: content.title, body: content.body, timestamp: Int64(Date().timeIntervalSince1970 * 1000), targetId: address)
         }
     }
 
@@ -501,26 +499,9 @@ final class AddressActivityNotifier: ObservableObject {
             cachedSpendingMaxIndex = maxIndex
         }
 
-        let accounts = ColdStorageManager.shared.accounts
-        let fingerprint = accounts
-            .map { "\($0.id.uuidString):\($0.maxAddressIndex):\($0.notifyOnReceive)" }
-            .joined(separator: ",")
-        if walletChanged || fingerprint != coldFingerprint {
-            var labelByAddress: [String: String] = [:]
-            var muted: Set<String> = []
-            for account in accounts {
-                guard let extendedKey = KaspaExtendedPublicKey(kpubString: account.kpubString) else { continue }
-                for index in 0...account.maxAddressIndex {
-                    if let address = try? extendedKey.receiveAddress(at: UInt32(index), network: network) {
-                        labelByAddress[address] = account.label
-                        if !account.notifyOnReceive { muted.insert(address) }
-                    }
-                }
-            }
-            coldLabelByAddress = labelByAddress
-            coldMutedAddresses = muted
-            coldFingerprint = fingerprint
-        }
+        // KaPosts has no Cold Storage: no watch-only addresses to label or mute.
+        coldLabelByAddress = [:]
+        coldMutedAddresses = []
         if walletChanged { spendingNotifyLoadedForWallet = nil }
         reloadSpendingSwitchForCurrentWallet()
 
