@@ -154,7 +154,7 @@ struct OnboardingView: View {
             HStack(spacing: 10) {
                 Text(verbatim: "KaPosts")
                     .font(.largeTitle.weight(.bold))
-                Image("KaChatLogo")
+                Image("KaPostsLogo")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 40, height: 40)

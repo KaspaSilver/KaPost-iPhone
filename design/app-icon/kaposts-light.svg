@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8AD6C9"/><stop offset="1" stop-color="#5BBDAC"/></linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.16"/></filter>
+  </defs>
+  <rect width="1024" height="1024" fill="#FFFFFF"/>
+  <rect x="304" y="168" width="416" height="220" rx="64" fill="#DDF3EE"/>
+  <rect x="244" y="238" width="536" height="220" rx="72" fill="#B5E5DC"/>
+  <g filter="url(#soft)"><rect x="172" y="318" width="680" height="500" rx="88" fill="url(#card)"/></g>
+  <circle cx="316" cy="462" r="86" fill="#FFFFFF"/>
+  <g transform="translate(259.8 399.5) scale(1.25)"><polyline points="8,15 61,50 8,85" fill="none" stroke="#5BBDAC" stroke-width="17" stroke-miterlimit="4"/><polygon points="60,-3 77,-5 80,50 74,105 56,103 58,50" fill="#5BBDAC"/></g>
+  <rect x="440" y="420" width="320" height="36" rx="18" fill="rgba(255,255,255,0.92)"/>
+  <rect x="440" y="482" width="200" height="36" rx="18" fill="rgba(255,255,255,0.58)"/>
+  <rect x="246" y="598" width="532" height="36" rx="18" fill="rgba(255,255,255,0.58)"/>
+  <rect x="246" y="660" width="380" height="36" rx="18" fill="rgba(255,255,255,0.58)"/>
+  <path d="M712 690 c-26 -34 -78 -14 -64 26 c8 24 40 44 64 62 c24 -18 56 -38 64 -62 c14 -40 -38 -60 -64 -26 Z" fill="#FFFFFF"/>
+</svg>
