@@ -510,6 +510,7 @@ final class PushNotificationManager: ObservableObject {
             aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
             voipToken: voipToken,
+            apnsTopic: Self.apnsTopic,
             auth: auth
         )
 
@@ -802,6 +803,7 @@ final class PushNotificationManager: ObservableObject {
             aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
             voipToken: voipToken,
+            apnsTopic: Self.apnsTopic,
             auth: auth
         )
 
@@ -938,7 +940,8 @@ final class PushNotificationManager: ObservableObject {
             .map { $0 ? "1" : "0" }.joined()
         // KaPosts has no groups.
         let silentGroups = ""
-        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors]).joined(separator: ",")
+        let topic = Self.apnsTopic ?? ""
+        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors] + ["|", topic]).joined(separator: ",")
     }
 
     /// Unregister device (call on logout/wallet delete)
@@ -1359,6 +1362,12 @@ final class PushNotificationManager: ObservableObject {
             persistRegistrationStatus(false)
         }
     }
+
+    /// The APNs topic this build's device token belongs to - its bundle id
+    /// (`com.kachat.kaposts`). Sent at register and update so the push service, shared with
+    /// KaChat and KaChat Wallet, sends with the right `apns-topic`; without it the service used
+    /// KaChat's topic and Apple rejected every KaPosts push with DeviceTokenNotForTopic.
+    static let apnsTopic: String? = Bundle.main.bundleIdentifier
 
     /// "version (build)" of the running app, the unit a beta install changes.
     private static var currentBuildIdentifier: String {
@@ -2252,6 +2261,8 @@ struct PushRegistrationRequest: Codable {
     /// PushKit VoIP token (hex), for ringing this device through `/v1/push/ring`. Same APNs
     /// environment as `deviceToken`. Missing/null = this device cannot be rung.
     let voipToken: String?
+    /// This build's bundle id, the APNs topic its token is valid for.
+    let apnsTopic: String?
     let auth: PushAuthRequest?
 
     enum CodingKeys: String, CodingKey {
@@ -2272,6 +2283,7 @@ struct PushRegistrationRequest: Codable {
         case aliases
         case apnsEnvironment = "apns_environment"
         case voipToken = "voip_token"
+        case apnsTopic = "apns_topic"
         case auth
     }
 }
@@ -2298,6 +2310,8 @@ struct PushUpdateRequest: Codable {
     let apnsEnvironment: String
     /// See PushRegistrationRequest.
     let voipToken: String?
+    /// See PushRegistrationRequest.
+    let apnsTopic: String?
     let auth: PushAuthRequest?
 
     enum CodingKeys: String, CodingKey {
@@ -2317,6 +2331,7 @@ struct PushUpdateRequest: Codable {
         case aliases
         case apnsEnvironment = "apns_environment"
         case voipToken = "voip_token"
+        case apnsTopic = "apns_topic"
         case auth
     }
 }

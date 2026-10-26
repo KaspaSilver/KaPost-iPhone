@@ -68,8 +68,10 @@ Same as KaChat: payloads under `kchat:1:`, the KaChat indexer for KaPosts and Pu
 node pool for transactions. The protocol and server docs live in KaChat-iPhone
 (`KAPOSTS_INDEXER.md`, `PUBLIC_CHATS_INDEXER.md`, `PUSH_EXTENSIONS.md`, `TRANSLATION_SERVICE.md`).
 
-Push notifications need the push service to accept the `com.kachat.kaposts` topic; until then
-KaPosts notifies through its in-app poller only.
+Push registration and updates send `apns_topic` = the bundle id (`com.kachat.kaposts`,
+`PushNotificationManager.apnsTopic`), like KaChat Wallet, so the shared push service sends
+KaPosts pushes on KaPosts' topic. Without it Apple rejects them with `DeviceTokenNotForTopic`;
+while the service doesn't honour it, KaPosts notifies through its in-app poller only.
 
 Links: KaPosts opens `kaposts://` (same targets as `kachat://`). Shared links still read
 `kachat://` / `https://kachat.app/post/...`, which open KaChat; for them to open KaPosts the
