@@ -4111,7 +4111,7 @@ struct KaPostsView: View {
                                 Haptics.impact(.light)
                                 openInKaChat(address)
                             } label: {
-                                Label("Chat in KaChat", systemImage: "bubble.left.and.bubble.right")
+                                Label("Chat", systemImage: "bubble.left.and.bubble.right")
                                     .font(.caption.weight(.bold))
                             }
                             .buttonStyle(.bordered)
@@ -4240,13 +4240,17 @@ struct KaPostsView: View {
         }
     }
 
-    /// Chats live in KaChat: this poster's profile there (their User Info, with Open Chat on it),
-    /// or their kachat.app page - with the download buttons - when KaChat isn't installed.
+    /// Chats live in KaChat: the 1:1 chat with this poster there, or - without KaChat - their
+    /// kachat.app page, which has the download buttons. Both are their profile link with
+    /// `chat=1`, which KaChat opens as the chat itself (a KaChat without that shows their User
+    /// Info, with Open Chat on it).
     private func openInKaChat(_ address: String) {
         let normalized = address.lowercased()
-        guard let appURL = URL(string: KaChatInternalLink.profile(address: normalized).shareLinkString) else { return }
+        let link = KaChatInternalLink.profile(address: normalized)
+        guard let appURL = URL(string: link.shareLinkString + "?chat=1"),
+              let webURL = URL(string: link.universalLinkString + "?chat=1") else { return }
         UIApplication.shared.open(appURL) { opened in
-            if !opened, let webURL = KaChatInternalLink.profileShareURL(for: normalized) {
+            if !opened {
                 UIApplication.shared.open(webURL)
             }
         }
