@@ -8950,10 +8950,10 @@ struct KaPostsNotificationsView: View {
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
-            // What notifies you: push on or off, the KaPosts kinds, the wallet, sound. Pushed
-            // inside this tab, so the dock stays underneath.
+            // What notifies you: push on or off, the KaPosts kinds, sound. Top left (the dot has
+            // the right); pushed inside this tab, so the dock stays underneath.
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     NavigationLink {
                         NotificationsHubPage()
                     } label: {

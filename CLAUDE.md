@@ -37,10 +37,10 @@ What is still KaChat-shaped underneath:
 | Tab | View |
 |---|---|
 | Feed | `KaPostsPageView` (`Views/KaPosts/KaPostsView.swift`) |
-| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off |
+| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once |
 | Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`, Wallet pushes `ChattingAddressManageView` (balance, history, UTXOs) |
-| Notifications | `KaPostsNotificationsView`; the cog (top right) opens `NotificationsHubPage`, the notification settings |
-| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Public Chats, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Log Out (deleting an account is on the opening screen's Saved Accounts) |
+| Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (post notifications only - no wallet ones) |
+| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Notifications, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Log Out (deleting an account is on the opening screen's Saved Accounts) |
 
 The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
 Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,

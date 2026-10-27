@@ -395,6 +395,19 @@ final class PublicChatService: ObservableObject {
         }
     }
 
+    /// The Languages switch on the customize screen: on while at least one language room is.
+    var anyLanguageChannelOn: Bool {
+        Self.languageChannels.contains { isCuratedChannelOn($0) }
+    }
+
+    /// Every language room off at once (out of the list, bells off), or all back on - each
+    /// then switched off one by one if only some are wanted.
+    func setAllLanguageChannels(shown: Bool) {
+        for name in Self.languageChannels where isCuratedChannelOn(name) != shown {
+            setCuratedChannel(name, shown: shown)
+        }
+    }
+
     func isCuratedChannelShown(_ name: String) -> Bool {
         !hiddenCuratedChannels.contains(PublicChatChannelName.normalize(name))
     }

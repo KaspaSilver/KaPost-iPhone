@@ -640,16 +640,17 @@ struct PublicChatRow: View {
     }
 }
 
-/// Public Chats settings, behind the customize button at the top left of the tab (and in
-/// Settings): every default room with a switch. On means the room is in the list and the Chats circles row (switching it on joins
-/// it); off takes it out and silences it for good.
+/// The customize sheet, behind the button at the top left of the Public Chats tab: every default
+/// room with a switch. On means the room is in the list (switching it on joins it); off takes it
+/// out and silences it. The Languages switch turns every language room off at once; while it is
+/// on, each language has its own switch.
 struct PublicChatsSettingsView: View {
     @EnvironmentObject var publicChatService: PublicChatService
     @Environment(\.dismiss) private var dismiss
 
     private func row(_ name: String) -> some View {
         Toggle(isOn: Binding(
-            // on = in the list and the circles row (joined, not switched off); switching on joins it
+            // on = in the list (joined, not switched off); switching on joins it
             get: { publicChatService.isCuratedChannelOn(name) },
             set: { publicChatService.setCuratedChannel(name, shown: $0) }
         )) {
@@ -664,25 +665,8 @@ struct PublicChatsSettingsView: View {
         }
     }
 
-    /// Pushed from Settings rather than presented as a sheet: no stack of its own, no Done.
-    var embedded = false
-
     var body: some View {
-        if embedded {
-            form
-        } else {
-            NavigationStack {
-                form
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Done") { dismiss() }
-                        }
-                    }
-            }
-        }
-    }
-
-    private var form: some View {
+        NavigationStack {
             Form {
                 Section {
                     ForEach(PublicChatService.featuredChannels, id: \.self) { row($0) }
@@ -691,11 +675,27 @@ struct PublicChatsSettingsView: View {
                 } footer: {
                     Text("A room that is switched off no longer appears in Public Chats and never sends a notification. Switch it back on at any time.")
                 }
-                Section("Languages") {
-                    ForEach(PublicChatService.languageChannels, id: \.self) { row($0) }
+                Section {
+                    Toggle("Languages", isOn: Binding(
+                        get: { publicChatService.anyLanguageChannelOn },
+                        set: { on in
+                            withAnimation { publicChatService.setAllLanguageChannels(shown: on) }
+                        }
+                    ))
+                    if publicChatService.anyLanguageChannelOn {
+                        ForEach(PublicChatService.languageChannels, id: \.self) { row($0) }
+                    }
+                } footer: {
+                    Text("Off takes every language room out of Public Chats. On, switch off the ones you don't want.")
                 }
             }
             .navigationTitle("Public Chats")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }

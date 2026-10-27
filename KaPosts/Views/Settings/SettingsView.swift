@@ -29,9 +29,12 @@ struct SettingsView: View {
                 settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
                     KaPostsSettingsView(onClose: {}, embedded: true)
                 }
-                settingsCategoryRow("Public Chats", icon: "bubble.left.and.text.bubble.right", tint: .accentColor) {
-                    PublicChatsSettingsView(embedded: true)
+                // The same page as the cog on the Notifications tab.
+                settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
+                    NotificationsHubPage()
                 }
+                // Public Chats has no row here: its rooms are chosen with the customize button on
+                // the Public Chats tab itself.
                 settingsCategoryRow("Cache", icon: "internaldrive", tint: .accentColor) {
                     CacheSettingsPage()
                 }
@@ -711,9 +714,9 @@ private struct QuickReactionSlotSelection: Identifiable {
     var id: Int { index }
 }
 
-/// Notification settings, behind the cog on the Notifications tab: the push switch, then a
-/// category list (same row style as the main Settings screen) - KaPosts (per-event-type
-/// toggles), Wallet (own-address receive activity), and Sound & Vibration.
+/// Notification settings, behind the cog on the Notifications tab and in Settings: the push
+/// switch, then a category list (same row style as the main Settings screen) - KaPosts
+/// (per-event-type toggles) and Sound & Vibration.
 struct NotificationsHubPage: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject var pushManager: PushNotificationManager
@@ -759,14 +762,11 @@ struct NotificationsHubPage: View {
                      : "Turn this on to receive anything you have switched on below, even when the app is closed.")
             }
 
-            // KaPosts' notification settings live here, behind the cog on the Notifications tab
-            // (not in Settings). Public Chats rooms keep their own bells, in each room.
+            // KaPosts' notifications are about posts only (no wallet ones). Public Chats rooms keep
+            // their own bells, in each room.
             Section("Notifications") {
                 settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
                     KaPostsNotificationSettingsView()
-                }
-                settingsCategoryRow("Wallet", icon: "banknote", tint: .accentColor) {
-                    WalletNotificationSettingsView()
                 }
                 settingsCategoryRow("Sound & Vibration", icon: "speaker.wave.2", tint: .accentColor) {
                     NotificationsSettingsView()
@@ -849,27 +849,6 @@ struct NotificationsHubPage: View {
                 }
             }
         }
-    }
-}
-
-/// Settings > Notifications > Wallet: the own-address receive-activity toggle (see
-/// AddressActivityNotifier).
-struct WalletNotificationSettingsView: View {
-    @EnvironmentObject var settingsViewModel: SettingsViewModel
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Address Activity", isOn: $settingsViewModel.settings.addressActivityNotificationsEnabled)
-                    .onChange(of: settingsViewModel.settings.addressActivityNotificationsEnabled) { _ in
-                        settingsViewModel.saveSettings()
-                    }
-            } footer: {
-                Text("Notify when any of your spending or cold storage addresses receives Kaspa from an external source. Transfers between your own addresses are ignored.")
-            }
-        }
-        .navigationTitle("Wallet")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

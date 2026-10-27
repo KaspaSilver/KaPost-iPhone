@@ -468,12 +468,11 @@ final class AddressActivityNotifier: ObservableObject {
 
     // MARK: - Gating
 
-    /// Settings > Notifications > "Address Activity" plus the master notification mode.
-    /// Simple Mode intentionally not consulted - wallet notifications are allowed there.
-    private var featureEnabled: Bool {
-        let settings = AppSettings.load()
-        return settings.addressActivityNotificationsEnabled && settings.notificationMode != .disabled
-    }
+    /// Always off in KaPosts: its notifications are about posts only, so an address receiving
+    /// KAS never notifies (the wallet screens still update through `postUtxoActivityEvent`,
+    /// which this does not gate). In KaChat this is Settings > Notifications > "Address
+    /// Activity" plus the master notification mode.
+    private var featureEnabled: Bool { false }
 
     // MARK: - Address set caching
 
