@@ -38,7 +38,8 @@ struct PublicChatListView: View {
     @State private var hasAppliedInitialChannel = false
     /// Collapsed by default: eleven language rooms would bury the two Popular rooms and the
     /// user's own channels under a wall of list.
-    @State private var languagesExpanded = false
+    /// The customize sheet: a switch for every default room.
+    @State private var showCustomize = false
 
     /// Rooms picked in Select mode, owned by the Chats screen (its toolbar and bottom bar act
     /// on them). Constant empty when this list stands alone.
@@ -80,10 +81,9 @@ struct PublicChatListView: View {
             }
         }
         .onAppear {
-            // The curated Popular channels always have store rows so their bell state exists
-            // before first entry.
-            publicChatService.ensureFeaturedChannelsJoined()
-            publicChatService.refreshChannels()
+            // Every default room is listed from the start (switched-off ones aside), with its
+            // own store row so its bell state exists before first entry.
+            publicChatService.ensureDefaultChannelsJoined()
             if !hasAppliedInitialChannel, let initialChannel {
                 hasAppliedInitialChannel = true
                 selectedChannel = initialChannel
@@ -131,19 +131,32 @@ struct PublicChatListView: View {
         combinedList
         .navigationTitle(embeddedInChats ? "Chats" : "Public Chats")
         .toolbar {
-            // Same header anatomy as Chats/KaPosts: green connection dot leading, total
-            // balance dead-center, actions trailing. The Chats screen supplies these itself
-            // when this is its Public Chats tab.
+            // Same header anatomy as every KaPosts screen: total balance dead-center, green
+            // connection dot top right. Top left, the customize button: which default rooms
+            // the list shows. The Chats screen supplies these itself when this is its Public
+            // Chats tab.
             if !embeddedInChats {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    ConnectionStatusIndicator()
+                    Button {
+                        Haptics.impact(.light)
+                        showCustomize = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Choose rooms")
                 }
                 ToolbarItem(placement: .principal) {
                     BalanceToolbarLabel()
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    ConnectionStatusIndicator()
+                }
             }
         }
         .toast(message: toastMessage, style: .success)
+        .sheet(isPresented: $showCustomize) {
+            PublicChatsSettingsView()
+        }
         .sheet(isPresented: $showJoinAlert) { joinChannelSheet }
         .alert("Couldn't Join Channel", isPresented: Binding(
             get: { joinError != nil },
@@ -203,18 +216,11 @@ struct PublicChatListView: View {
 
     // MARK: - Rooms, laid out like the Chats and Group Chats lists
 
-    /// The rooms in the list: the two curated rooms pinned on top, then every other joined room
-    /// (your own, and any language room you opened) by latest activity.
+    /// The rooms in the list: the two curated rooms pinned on top, then every other room - the
+    /// language rooms and your own - by latest activity. Default rooms switched off with the
+    /// customize button are left out.
     private var listedChannels: [PublicChatChannel] {
         publicChatService.listedChannels
-    }
-
-    /// Curated language rooms not opened yet - offered for discovery under "Other Languages".
-    private var unjoinedLanguageChannels: [String] {
-        let joined = Set(publicChatService.channels.map(\.channelName))
-        return PublicChatService.languageChannels.filter {
-            !joined.contains($0) && publicChatService.isCuratedChannelShown($0)
-        }
     }
 
     private func roomRow(_ channel: PublicChatChannel) -> some View {
@@ -253,44 +259,6 @@ struct PublicChatListView: View {
         List(selection: roomSelection) {
             ForEach(listedChannels) { channel in
                 roomRow(channel)
-            }
-
-            if !unjoinedLanguageChannels.isEmpty, !isSelecting {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { languagesExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(Color.accentColor.opacity(0.2))
-                            .frame(width: 50, height: 50)
-                            .overlay(Image(systemName: "globe").font(.scaled(size: 20)).foregroundColor(.accentColor))
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Other Languages").font(.headline)
-                            Text("\(unjoinedLanguageChannels.count) rooms").font(.subheadline).foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.down")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundColor(.secondary)
-                            .rotationEffect(.degrees(languagesExpanded ? 0 : -90))
-                    }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(Color.clear)
-
-                if languagesExpanded {
-                    ForEach(unjoinedLanguageChannels, id: \.self) { name in
-                        Button {
-                            openCuratedChannel(name)
-                        } label: {
-                            PublicChatRow(channelName: name, channel: nil)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.clear)
-                    }
-                }
             }
 
             Text("Public rooms are open to everyone. #kaspa, #kachat-bugs and the language rooms keep 30 days of history.")
@@ -411,15 +379,6 @@ struct PublicChatListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents([.height(ActionSheetTileMetrics.sheetHeight(tiles: 5))])
         .presentationDragIndicator(.visible)
-    }
-
-    /// Opens a curated room, creating its store row first when it has none (the language rooms
-    /// are not auto-joined). `joinChannel` is a no-op for an already-joined room.
-    private func openCuratedChannel(_ name: String) {
-        if !publicChatService.channels.contains(where: { $0.channelName == name }) {
-            publicChatService.joinChannel(name)
-        }
-        selectedChannel = name
     }
 
     private func toggleNotify(_ channel: PublicChatChannel) {
@@ -569,9 +528,10 @@ struct PublicChatChannelDestination: ViewModifier {
                 // re-fire to correctly swap the live-view acquire/release tracking, and per-room
                 // state (draft text, reply-in-progress, etc.) resets instead of leaking across
                 // channels.
+                // No `.toolbar(.hidden, for: .tabBar)`: the dock stays visible in a room, as on
+                // every KaPosts screen.
                 PublicChatChannelView(channelName: channel)
                     .id(channel)
-                    .toolbar(.hidden, for: .tabBar)
             }
         } else {
             content.navigationDestination(isPresented: Binding(
@@ -581,7 +541,6 @@ struct PublicChatChannelDestination: ViewModifier {
                 if let selectedChannel {
                     PublicChatChannelView(channelName: selectedChannel)
                         .id(selectedChannel)
-                        .toolbar(.hidden, for: .tabBar)
                 } else {
                     EmptyView()
                 }
@@ -681,8 +640,8 @@ struct PublicChatRow: View {
     }
 }
 
-/// Public Chats settings, behind the gear at the top right of the tab: every default room with
-/// a switch. On means the room is in the list and the Chats circles row (switching it on joins
+/// Public Chats settings, behind the customize button at the top left of the tab (and in
+/// Settings): every default room with a switch. On means the room is in the list and the Chats circles row (switching it on joins
 /// it); off takes it out and silences it for good.
 struct PublicChatsSettingsView: View {
     @EnvironmentObject var publicChatService: PublicChatService
@@ -732,7 +691,7 @@ struct PublicChatsSettingsView: View {
                 } footer: {
                     Text("A room that is switched off no longer appears in Public Chats and never sends a notification. Switch it back on at any time.")
                 }
-                Section("Other Languages") {
+                Section("Languages") {
                     ForEach(PublicChatService.languageChannels, id: \.self) { row($0) }
                 }
             }

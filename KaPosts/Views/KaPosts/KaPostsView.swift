@@ -476,12 +476,17 @@ struct KaPostsView: View {
             }
         }
 
-        /// What the feed's hamburger menu lists. Profile and Settings are dock tabs in KaPosts,
-        /// so they are not repeated here (their sheets still open from other routes).
-        static let feedMenu: [SideMenuItem] = [.search, .notifications, .drafts, .bookmarks, .muted, .blocked, .scheduled]
+        /// What the feed's hamburger menu lists. Profile, Notifications and Settings are dock
+        /// tabs in KaPosts, so they are not repeated here (their sheets still open from other
+        /// routes).
+        static let feedMenu: [SideMenuItem] = [.search, .drafts, .bookmarks, .muted, .blocked, .scheduled]
     }
 
     @State private var menuSheet: SideMenuItem?
+    /// The hamburger's slide-out card (`KaPostsFeedDrawer`).
+    @State private var showFeedDrawer = false
+    /// The row picked in the card, opened once the card has gone.
+    @State private var pendingDrawerItem: SideMenuItem?
     /// The draft currently open in the composer, presented from the drafts sheet.
     @State private var editingDraft: KaPostSavedDraft?
     /// The post a reopened draft was replying to or quoting, once resolved from its stored id.
@@ -491,7 +496,6 @@ struct KaPostsView: View {
     @ObservedObject private var knsService = KNSService.shared
     @ObservedObject private var followStore = KaPostsFollowStore.shared
     @ObservedObject private var moderationStore = KaPostsModerationStore.shared
-    @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
     @EnvironmentObject private var walletManager: WalletManager
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @Environment(\.openURL) private var openURL
@@ -614,6 +618,43 @@ struct KaPostsView: View {
             }
             .kaPostsSlideCover { menuSheet = nil }
         }
+        .fullScreenCover(isPresented: $showFeedDrawer, onDismiss: {
+            // The card's cover has to be gone before the next cover can come up from here.
+            guard let item = pendingDrawerItem else { return }
+            pendingDrawerItem = nil
+            kaPostsPresent { menuSheet = item }
+        }) {
+            KaPostsFeedDrawer(
+                items: SideMenuItem.feedMenu,
+                onSelect: { pendingDrawerItem = $0 },
+                onClose: { kaPostsDismiss { showFeedDrawer = false } }
+            )
+        }
+        // A tab tapped on the dock copy over one of these screens (`KaPostsDockCopy`).
+        .onReceive(NotificationCenter.default.publisher(for: .kaPostsCloseCovers)) { _ in
+            closeAllCovers()
+        }
+    }
+
+    /// Every full-screen KaPosts screen this view presents, closed at once and without the
+    /// slide: the dock copy was tapped, and the tab underneath is what should show. A reply
+    /// typed under a thread is kept, as it is when the thread is closed with Back.
+    private func closeAllCovers() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            pendingDrawerItem = nil
+            showFeedDrawer = false
+            menuSheet = nil
+            profileTarget = nil
+            engagementTarget = nil
+            threadEngagementTarget = nil
+            threadStack = []
+            profileThreadStack = []
+            detailTarget = nil
+            profileDetailTarget = nil
+        }
+        KaPostsSlideSnapshot.reset()
     }
 
     private var feedLayer: some View {
@@ -622,11 +663,15 @@ struct KaPostsView: View {
                 myProfileSheet
             } else {
                 feedTabBar
-                // The tab bar is the only way between feeds - no horizontal paging. A swipe that
-                // silently changes which feed you are reading is easy to trigger by accident while
-                // scrolling, and there is nothing on screen afterwards to explain why the posts
-                // changed.
-                feedContent(for: selectedFeed)
+                // Following, Feed and Popular side by side: swipe left and right between them,
+                // or tap the tab bar. Each touch locks to one direction, so a vertical scroll
+                // never turns into a feed change, and the underline in the tab bar shows which
+                // feed you landed on.
+                KaPostsFeedPager(pageCount: FeedTab.allCases.count, selection: selectedFeedIndex) {
+                    ForEach(FeedTab.allCases, id: \.self) { tab in
+                        feedContent(for: tab)
+                    }
+                }
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -762,10 +807,6 @@ struct KaPostsView: View {
                 KaPostsDeepLink.pendingPostTxId = nil
                 await openSharedPost(txId: pending)
             }
-            if KaPostsDeepLink.pendingOpenNotifications {
-                KaPostsDeepLink.pendingOpenNotifications = false
-                kaPostsPresent { menuSheet = .notifications }
-            }
             if KaPostsDeepLink.pendingOpenScheduled {
                 KaPostsDeepLink.pendingOpenScheduled = false
                 kaPostsPresent { menuSheet = .scheduled }
@@ -778,13 +819,11 @@ struct KaPostsView: View {
                 Task { await openSharedPost(txId: txId) }
                 return
             }
-            // Push-tap variants: a pending post id or the Notifications screen.
+            // Push-tap variants: a pending post id or the Scheduled screen (the Notifications
+            // tab is the dock's, see KaPostsTabView).
             if let pending = KaPostsDeepLink.pendingPostTxId {
                 KaPostsDeepLink.pendingPostTxId = nil
                 Task { await openSharedPost(txId: pending) }
-            } else if KaPostsDeepLink.pendingOpenNotifications {
-                KaPostsDeepLink.pendingOpenNotifications = false
-                kaPostsPresent { menuSheet = .notifications }
             } else if KaPostsDeepLink.pendingOpenScheduled {
                 KaPostsDeepLink.pendingOpenScheduled = false
                 kaPostsPresent { menuSheet = .scheduled }
@@ -866,55 +905,30 @@ struct KaPostsView: View {
         }
     }
 
-    /// The hamburger beside the title: Search, Notifications, Drafts, Bookmarks, Muted, Blocked
-    /// and Scheduled, one tap each. A red dot on it while notifications are unseen, and the
-    /// count on the Notifications row, so the news is visible without opening the menu.
+    /// The hamburger beside the title. It slides out a card over nearly the whole screen with
+    /// Search, Drafts, Bookmarks, Muted, Blocked and Scheduled. (Unseen notifications are the
+    /// Notifications tab's badge in the dock.)
     private var feedMenuButton: some View {
-        Menu {
-            ForEach(SideMenuItem.feedMenu) { item in
-                Button {
-                    Haptics.impact(.light)
-                    kaPostsPresent { menuSheet = item }
-                } label: {
-                    Label {
-                        Text(verbatim: menuTitle(for: item))
-                    } icon: {
-                        // iOS draws a Menu with UIKit, which ignores SwiftUI's tint: a symbol
-                        // that carries its own colour is the only way the icons come out teal.
-                        if let symbol = UIImage(systemName: item.icon)?
-                            .withTintColor(UIColor(named: "AccentColor") ?? .systemTeal, renderingMode: .alwaysOriginal) {
-                            Image(uiImage: symbol)
-                        }
-                    }
-                }
-            }
+        Button {
+            Haptics.impact(.light)
+            kaPostsPresent { showFeedDrawer = true }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.scaled(size: 22, weight: .semibold))
                 .foregroundColor(.primary)
                 .frame(width: 40, height: 40)
                 .contentShape(Rectangle())
-                .overlay(alignment: .topTrailing) {
-                    if kaPostsNotifCenter.unseenCount > 0 {
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 10, height: 10)
-                            .offset(x: -2, y: 4)
-                    }
-                }
         }
-        .accessibilityLabel(Text(
-            kaPostsNotifCenter.unseenCount > 0
-                ? "Menu, \(kaPostsNotifCenter.unseenCount) unseen notifications"
-                : "Menu"
-        ))
+        .buttonStyle(.plain)
+        .accessibilityLabel("Menu")
     }
 
-    private func menuTitle(for item: SideMenuItem) -> String {
-        if item == .notifications, kaPostsNotifCenter.unseenCount > 0 {
-            return "\(item.rawValue) (\(kaPostsNotifCenter.badgeText))"
-        }
-        return item.rawValue
+    /// `selectedFeed` as the pager's page number.
+    private var selectedFeedIndex: Binding<Int> {
+        Binding(
+            get: { FeedTab.allCases.firstIndex(of: selectedFeed) ?? 0 },
+            set: { selectedFeed = FeedTab.allCases[$0] }
+        )
     }
 
     private func feedTabButton(_ tab: FeedTab) -> some View {
@@ -1026,7 +1040,9 @@ struct KaPostsView: View {
                         // Endless scroll: the row ~5 from the end pulls the next pages in,
                         // well before the user reaches the bottom.
                         .onAppear {
-                            guard post.id == triggerId else { return }
+                            // The pages beside the one on screen are drawn too; only the feed
+                            // being read pulls in more.
+                            guard post.id == triggerId, selectedFeed == tab else { return }
                             Task { await loadFeedPage(reset: false) }
                         }
                         // X-style "View thread" under a thread root - opens the detail, where
@@ -1078,6 +1094,8 @@ struct KaPostsView: View {
                     // so this is the foreground half of the promise above: no network from a
                     // feed nobody is looking at. The next tick after resume picks it up.
                     guard UIApplication.shared.applicationState == .active else { continue }
+                    // Each feed page carries this task; only the one on screen asks.
+                    guard selectedFeed == tab else { continue }
                     await checkForNewPosts()
                 }
             }
@@ -1275,8 +1293,11 @@ struct KaPostsView: View {
     /// two dozen mutation sites would each have to remember to bump: `Array ==` short-circuits
     /// on shared storage, so an untouched input costs one pointer compare, and a changed one
     /// costs the compare we would have paid many times over in the rebuild anyway.
+    ///
+    /// One memo per tab: the three feeds are pages side by side, so all of them can be drawn in
+    /// the same pass, and a single shared memo would miss on every one of them.
     private final class FeedMemo {
-        var tab: FeedTab?
+        var filled = false
         var posts: [DraftPost] = []
         var remotePosts: [DraftPost] = []
         var muted: Set<String> = []
@@ -1284,7 +1305,16 @@ struct KaPostsView: View {
         var following: Set<String> = []
         var result: [DraftPost] = []
     }
-    @State private var feedMemo = FeedMemo()
+    private final class FeedMemos {
+        private var byTab: [FeedTab: FeedMemo] = [:]
+        func memo(for tab: FeedTab) -> FeedMemo {
+            if let memo = byTab[tab] { return memo }
+            let memo = FeedMemo()
+            byTab[tab] = memo
+            return memo
+        }
+    }
+    @State private var feedMemos = FeedMemos()
 
     /// Your own session posts show in Feed and Following; Popular ranks by engagement across the
     /// whole swept window (see `deepenPopularRanking`), newest first among equal scores.
@@ -1292,8 +1322,8 @@ struct KaPostsView: View {
     /// Memoised (see `FeedMemo`): body asks for this on every pass, and the old shape rescanned,
     /// re-filtered and - on Popular - re-sorted the whole window each time.
     private func posts(for tab: FeedTab) -> [DraftPost] {
-        let memo = feedMemo
-        if memo.tab == tab,
+        let memo = feedMemos.memo(for: tab)
+        if memo.filled,
            memo.posts == posts,
            memo.remotePosts == remotePosts,
            memo.muted == moderationStore.muted,
@@ -1302,7 +1332,7 @@ struct KaPostsView: View {
             return memo.result
         }
         let result = computePosts(for: tab)
-        memo.tab = tab
+        memo.filled = true
         memo.posts = posts
         memo.remotePosts = remotePosts
         memo.muted = moderationStore.muted
@@ -3802,6 +3832,19 @@ struct KaPostsView: View {
     /// X-style profile: KNS banner across the top, avatar overlapping it, name, following/followers
     /// counts, then the feed of your own posts. Followers is a placeholder 0 until follows are
     /// wired on-chain; Following is the live local follow count.
+    /// The teal capsule the buttons under your own profile's name share.
+    private func profileHeaderButtonLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(title)
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundColor(.accentColor)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+    }
+
     private var myProfileSheet: some View {
         let myAddress = WalletManager.shared.currentWallet?.publicAddress ?? ""
         let myInfo = knsService.profileCache[myAddress]
@@ -3925,21 +3968,25 @@ struct KaPostsView: View {
                         // on the Profile tab. Routes to that same editor instead of rebuilding
                         // it: `KNSProfileEditorSheet` is driven by a spread of ProfileView's own
                         // state, and a second copy would be a second thing to keep correct.
-                        Button {
-                            menuSheet = nil
-                            NotificationCenter.default.post(name: .openKNSProfileEditor, object: nil)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "person.text.rectangle")
-                                Text("Edit Profile")
+                        HStack(spacing: 10) {
+                            Button {
+                                menuSheet = nil
+                                NotificationCenter.default.post(name: .openKNSProfileEditor, object: nil)
+                            } label: {
+                                profileHeaderButtonLabel("Edit Profile", systemImage: "person.text.rectangle")
                             }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.accentColor)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .buttonStyle(.plain)
+                            // The address's balance, history and coins - the screen that used to be
+                            // the Wallet tab. Pushed, so the dock stays underneath it.
+                            if !myAddress.isEmpty {
+                                NavigationLink {
+                                    ChattingAddressManageView(address: myAddress, title: "Wallet")
+                                } label: {
+                                    profileHeaderButtonLabel("Wallet", systemImage: "wallet.bifold")
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
                         .padding(.top, 8)
                     }
                     .padding(.horizontal, 16)
@@ -7013,8 +7060,8 @@ private struct KaPostComposerView: View {
             ZStack {
                 BalanceToolbarLabel()
                 HStack {
-                    ConnectionStatusIndicator()
                     Spacer()
+                    ConnectionStatusIndicator()
                 }
             }
             .padding(.horizontal, 16)
@@ -8903,6 +8950,18 @@ struct KaPostsNotificationsView: View {
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
+            // What notifies you: push on or off, the KaPosts kinds, the wallet, sound. Pushed
+            // inside this tab, so the dock stays underneath.
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink {
+                        NotificationsHubPage()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Notification Settings")
+                }
+            }
             .task { await load() }
             // The open-conversation rule for KaPosts: while this stream is on screen,
             // AppDelegate.willPresent suppresses kaposts banners (local and push alike).
@@ -9182,7 +9241,7 @@ struct KaPostsNotificationsView: View {
 // MARK: - KaPosts page wrapper (shared navigation chrome)
 
 /// KaPosts inside its navigation chrome - used by BOTH the standalone dock tab and the
-/// chats-slot presentation, so the header (green connection dot leading, balance centered,
+/// chats-slot presentation, so the header (balance centered, green connection dot top right,
 /// bold large title) is rendered by the exact same UIKit bar as Chats and Public Chats and
 /// never shifts between pages.
 struct KaPostsPageView: View {
@@ -9194,11 +9253,11 @@ struct KaPostsPageView: View {
                 .navigationTitle("KaPosts")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        ConnectionStatusIndicator()
-                    }
                     ToolbarItem(placement: .principal) {
                         BalanceToolbarLabel()
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        ConnectionStatusIndicator()
                     }
                 }
         }
@@ -9318,8 +9377,8 @@ private struct BioClampedHeightKey: PreferenceKey {
 // MARK: - Persistent status chrome
 
 extension View {
-    /// Repeats the feed's own header indicators - green connection dot leading, chatting balance
-    /// centered - on every screen that stacks in front of it. Reading a thread or a profile is
+    /// Repeats the feed's own header indicators - chatting balance centered, green connection dot
+    /// top right - on every screen that stacks in front of it. Reading a thread or a profile is
     /// still "being in KaPosts", and both indicators answer questions that come up mid-read:
     /// whether a like that isn't landing is the network's fault, and whether there is enough KAS
     /// to reply at all.
@@ -9355,16 +9414,16 @@ extension View {
 }
 
 /// The dot-and-balance bar every KaPosts screen carries - and, on a screen that is the root of
-/// a slide cover, a back chevron in front of the dot, since otherwise the only way out of it
-/// is the edge swipe. The action comes down the environment from `kaPostsSlideCover`; a
+/// a slide cover, a back chevron on the leading side, since otherwise the only way out of it
+/// is the edge swipe. The dot sits top right, so the leading side is free for Back. The action comes down the environment from `kaPostsSlideCover`; a
 /// screen pushed INSIDE a cover (a follow list) has the system back and clears it.
 private struct KaPostsStatusChrome: ViewModifier {
     @Environment(\.kaPostsBack) private var back
 
     func body(content: Content) -> some View {
         content.toolbar {
-            ToolbarItemGroup(placement: .navigationBarLeading) {
-                if let back {
+            if let back {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         Haptics.selection()
                         back()
@@ -9374,10 +9433,12 @@ private struct KaPostsStatusChrome: ViewModifier {
                     }
                     .accessibilityLabel("Back")
                 }
-                ConnectionStatusIndicator()
             }
             ToolbarItem(placement: .principal) {
                 BalanceToolbarLabel()
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                ConnectionStatusIndicator()
             }
         }
     }
@@ -9464,6 +9525,11 @@ enum KaPostsSlideSnapshot {
     static func pop() {
         if !stack.isEmpty { stack.removeLast() }
     }
+
+    /// Every cover closed at once (the dock copy): no level is left to reveal.
+    static func reset() {
+        stack.removeAll()
+    }
 }
 
 /// Dismisses a KaPosts cover, or pops a thread one level in place, with the cover's own
@@ -9525,6 +9591,13 @@ final class KaPostsSlideDriverView: UIView, UIGestureRecognizerDelegate {
     private weak var dim: UIView?
     private weak var beneath: UIImageView?
     private var attached = false
+    /// The dock copy over this cover (`KaPostsDockCopy`), in the presentation container above
+    /// the sliding view, so it holds still while the screen moves.
+    private var dockHost: UIHostingController<KaPostsDockCopy>?
+    /// How much the dock copy adds to the cover's bottom safe area, so the screen's last rows
+    /// and its reply box sit above the dock instead of under it.
+    private var dockSafeAreaInset: CGFloat = 0
+    private var keyboardObservers: [NSObjectProtocol] = []
 
     init(onBack: @escaping () -> Void) {
         self.onBack = onBack
@@ -9534,6 +9607,50 @@ final class KaPostsSlideDriverView: UIView, UIGestureRecognizerDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        keyboardObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    /// Lays the dock copy where the system dock sits: a floating capsule inset from the sides
+    /// and a little into the bottom safe area.
+    private func installDock(in container: UIView, for controller: UIViewController) {
+        let dock = UIHostingController(rootView: KaPostsDockCopy())
+        if #available(iOS 16.4, *) { dock.safeAreaRegions = [] }
+        dock.view.backgroundColor = .clear
+        let bottomInset = container.window?.safeAreaInsets.bottom ?? container.safeAreaInsets.bottom
+        let gap = max(bottomInset - 12, 8)
+        let height = KaPostsDockCopy.height
+        dock.view.frame = CGRect(x: 21,
+                                 y: container.bounds.height - gap - height,
+                                 width: container.bounds.width - 42,
+                                 height: height)
+        dock.view.autoresizingMask = [.flexibleTopMargin, .flexibleWidth]
+        container.addSubview(dock.view)
+        dockHost = dock
+
+        dockSafeAreaInset = max(0, height + gap + 6 - bottomInset)
+        controller.additionalSafeAreaInsets.bottom = dockSafeAreaInset
+
+        // The keyboard covers where the dock is: it steps aside, and so does its inset, so a
+        // reply box sits right on the keyboard.
+        let center = NotificationCenter.default
+        keyboardObservers = [
+            center.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.setDockHidden(true)
+            },
+            center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.setDockHidden(false)
+            },
+        ]
+    }
+
+    private func setDockHidden(_ hidden: Bool) {
+        guard let dockView = dockHost?.view else { return }
+        UIView.animate(withDuration: 0.2) { dockView.alpha = hidden ? 0 : 1 }
+        dockView.isUserInteractionEnabled = !hidden
+        host?.additionalSafeAreaInsets.bottom = hidden ? 0 : dockSafeAreaInset
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -9567,6 +9684,7 @@ final class KaPostsSlideDriverView: UIView, UIGestureRecognizerDelegate {
         container.insertSubview(shade, aboveSubview: picture)
         beneath = picture
         dim = shade
+        installDock(in: container, for: controller)
 
         let view = controller.view!
         view.backgroundColor = .systemBackground

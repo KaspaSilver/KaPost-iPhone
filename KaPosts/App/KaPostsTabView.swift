@@ -1,56 +1,86 @@
 import SwiftUI
 
-/// The KaPosts dock: Feed, Public Chats, Profile, Wallet, Settings - always these five, in this
-/// order. KaPosts is one address doing one thing, so there is no Customize Dock.
+/// The KaPosts dock: Feed, Public Chats, Profile, Notifications, Settings - always these five,
+/// in this order. KaPosts is one address doing one thing, so there is no Customize Dock. The
+/// Wallet is a button on your Profile.
 struct KaPostsTabView: View {
-    enum Tab: Int {
-        case feed, publicChats, profile, wallet, settings
+    enum Tab: Int, CaseIterable, Identifiable {
+        case feed, publicChats, profile, notifications, settings
+
+        var id: Int { rawValue }
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .feed: return "Feed"
+            case .publicChats: return "Public Chats"
+            case .profile: return "Profile"
+            case .notifications: return "Notifications"
+            case .settings: return "Settings"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .feed: return "square.text.square"
+            case .publicChats: return "bubble.left.and.text.bubble.right"
+            case .profile: return "person.crop.circle"
+            case .notifications: return "bell"
+            case .settings: return "gearshape"
+            }
+        }
     }
 
-    @State private var selectedTab: Tab = .feed
+    /// Shared with the dock copy on full-screen screens (`KaPostsDockCopy`), which selects tabs
+    /// too.
+    @ObservedObject private var dock = KaPostsDockRouter.shared
     /// The address profile editor (name, picture, banner, bio) - the profile KaPosts shows.
     @State private var showProfileEditor = false
     @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
-    @ObservedObject private var walletManager = WalletManager.shared
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $dock.selectedTab) {
             KaPostsPageView()
-                .tabItem { Label("Feed", systemImage: "square.text.square") }
-                .badge(kaPostsNotifCenter.unseenCount > 0 ? Text(verbatim: kaPostsNotifCenter.badgeText) : nil)
+                .tabItem { Label(Tab.feed.title, systemImage: Tab.feed.icon) }
                 .tag(Tab.feed)
 
             NavigationStack {
                 PublicChatListView()
             }
-            .tabItem { Label("Public Chats", systemImage: "bubble.left.and.text.bubble.right") }
+            .tabItem { Label(Tab.publicChats.title, systemImage: Tab.publicChats.icon) }
             .tag(Tab.publicChats)
 
             KaPostsView(rootMode: .myProfile)
-                .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+                .tabItem { Label(Tab.profile.title, systemImage: Tab.profile.icon) }
                 .tag(Tab.profile)
 
-            NavigationStack {
-                if let address = walletManager.currentWallet?.publicAddress {
-                    ChattingAddressManageView(address: address, title: "Wallet")
-                }
-            }
-            .tabItem { Label("Wallet", systemImage: "wallet.bifold") }
-            .tag(Tab.wallet)
+            KaPostsNotificationsView()
+                // Opening the tab IS seeing them - cleared on appear rather than on leaving, so
+                // the badge does not sit there while you read.
+                .onAppear { kaPostsNotifCenter.markAllSeen() }
+                .tabItem { Label(Tab.notifications.title, systemImage: Tab.notifications.icon) }
+                .badge(kaPostsNotifCenter.unseenCount > 0 ? Text(verbatim: kaPostsNotifCenter.badgeText) : nil)
+                .tag(Tab.notifications)
 
             SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tabItem { Label(Tab.settings.title, systemImage: Tab.settings.icon) }
                 .tag(Tab.settings)
         }
         .tint(.accentColor)
         .onReceive(NotificationCenter.default.publisher(for: .openKaPost)) { _ in
-            selectedTab = .feed
+            // A tapped KaPosts notification push lands on the Notifications tab; a post link
+            // or a post opened from a notification row, on the Feed.
+            if KaPostsDeepLink.pendingOpenNotifications {
+                KaPostsDeepLink.pendingOpenNotifications = false
+                dock.selectedTab = .notifications
+            } else {
+                dock.selectedTab = .feed
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openKaPostsProfile)) { _ in
-            selectedTab = .feed
+            dock.selectedTab = .feed
         }
         .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { _ in
-            selectedTab = .publicChats
+            dock.selectedTab = .publicChats
         }
         // Posted by the profile's Edit Profile button.
         .onReceive(NotificationCenter.default.publisher(for: .openKNSProfileEditor)) { _ in
@@ -71,10 +101,13 @@ struct KaPostsTabView: View {
             } else {
                 chatService.startPolling()
             }
-            if KaPostsDeepLink.pendingPostTxId != nil || KaPostsDeepLink.pendingOpenNotifications {
-                selectedTab = .feed
+            if KaPostsDeepLink.pendingOpenNotifications {
+                KaPostsDeepLink.pendingOpenNotifications = false
+                dock.selectedTab = .notifications
+            } else if KaPostsDeepLink.pendingPostTxId != nil {
+                dock.selectedTab = .feed
             } else if PublicChatService.shared.pendingPublicChatNavigation != nil {
-                selectedTab = .publicChats
+                dock.selectedTab = .publicChats
             }
         }
     }

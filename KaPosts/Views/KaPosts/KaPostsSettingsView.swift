@@ -58,14 +58,6 @@ struct KaPostsSettingsView: View {
                 } header: {
                     Text("Tipping")
                 }
-
-                Section {
-                    NavigationLink {
-                        KaPostsNotificationSettingsView()
-                    } label: {
-                        Label("Notifications", systemImage: "bell")
-                    }
-                }
             }
             .navigationTitle("KaPosts Settings")
             .navigationBarTitleDisplayMode(.inline)

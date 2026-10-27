@@ -144,7 +144,8 @@ struct OtherDomainsDropdown: View {
     private var others: [NameResolution] { resolutions.filter { $0.tld != selected } }
 
     var body: some View {
-        if !others.isEmpty {
+        // KaPosts reads .kachat names only, so there are no other services to offer.
+        if NameServicesClient.otherServicesEnabled, !others.isEmpty {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(others) { resolution in

@@ -183,6 +183,11 @@ struct OwnedServiceName: Identifiable, Equatable {
 final class NameServicesClient: ObservableObject {
     static let shared = NameServicesClient()
 
+    /// KaPosts is part of the KaChat ecosystem and reads `.kachat` names only: nothing here asks
+    /// .kas (KNS), .k (dotk) or .kaspa (Kaspa Names). Their code is kept, switched off, so the
+    /// shared files stay close to KaChat's.
+    static let otherServicesEnabled = false
+
     /// Names per service, for the address last refreshed. Empty until the first answer.
     @Published private(set) var owned: [NameServiceTLD: [OwnedServiceName]] = [:]
     /// Services whose last lookup is still running.
@@ -206,6 +211,7 @@ final class NameServicesClient: ObservableObject {
     /// Every name `address` owns on .k and .kaspa. A lookup that fails keeps what the service
     /// last answered and marks it failed.
     func refresh(for address: String) async {
+        guard Self.otherServicesEnabled else { return }
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !address.isEmpty else { return }
         if ownerAddress != address {
@@ -243,6 +249,7 @@ final class NameServicesClient: ObservableObject {
     /// Names `address` owns on .k and .kaspa, for scanning many addresses - it leaves `owned`
     /// (Your Domains' address) alone. A failed lookup counts as no names.
     func ownedNames(of address: String) async -> [OwnedServiceName] {
+        guard Self.otherServicesEnabled else { return [] }
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !address.isEmpty else { return [] }
         let network = AppSettings.load().networkType
@@ -255,6 +262,7 @@ final class NameServicesClient: ObservableObject {
     /// `address`'s names on .k and .kaspa by service, for one address's Domains tab - it leaves
     /// `owned` alone. A service whose lookup failed is missing from the result.
     func ownedNamesByService(of address: String) async -> [NameServiceTLD: [OwnedServiceName]] {
+        guard Self.otherServicesEnabled else { return [:] }
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !address.isEmpty else { return [:] }
         let network = AppSettings.load().networkType
@@ -306,6 +314,7 @@ final class NameServicesClient: ObservableObject {
     /// .kachat where it is live (testnet). Account discovery asks this so an address that holds
     /// only a name, and no KAS, is still found.
     func ownsAnyName(_ address: String) async -> Bool {
+        guard Self.otherServicesEnabled else { return await ownsKachatName(address) }
         async let kas = KNSService.shared.ownsAnyDomain(address)
         async let others = ownedNames(of: address)
         let (hasKas, otherNames) = await (kas, others)
@@ -393,6 +402,9 @@ final class NameServicesClient: ObservableObject {
     func resolveEverywhere(_ input: String) async -> [NameResolution] {
         let label = NameServiceTLD.splitTypedName(input).label
         guard !label.isEmpty else { return [] }
+        guard Self.otherServicesEnabled else {
+            return [await resolveKachat(label)].compactMap { $0 }
+        }
         let network = AppSettings.load().networkType
         async let kachat = resolveKachat(label)
         async let kas = resolveKas(label)
@@ -417,6 +429,9 @@ final class NameServicesClient: ObservableObject {
     /// no such .kachat name - or no .kachat registry on this network yet.
     static func notFoundMessage(typed input: String, results: [NameResolution]) -> String {
         let wanted = NameServiceTLD.splitTypedName(input).tld ?? .kachat
+        if wanted != .kachat, !otherServicesEnabled {
+            return String(localized: "KaPosts looks up .kachat names only")
+        }
         if wanted == .kachat, results.contains(where: { $0.tld == .kachat && $0.notLive }) || !NameServiceTLD.kachat.isLive {
             return String(localized: ".kachat names aren't live on this network yet")
         }

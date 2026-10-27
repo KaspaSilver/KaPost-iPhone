@@ -5,6 +5,12 @@ import Foundation
 final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     static let shared = KNSService()
 
+    /// KaPosts is part of the KaChat ecosystem and looks up `.kachat` names only, so KNS (.kas
+    /// domains and their profiles) is switched off: every lookup below answers "nothing" without
+    /// a request, and no KNS answers saved by an earlier version are loaded. The code is kept so
+    /// this file stays close to KaChat's.
+    static let isEnabled = false
+
     /// Cache of domains by address
     @Published private(set) var domainCache: [String: KNSAddressInfo] = [:]
     /// Cache of selected KNS profiles by address (primary domain if available)
@@ -75,9 +81,11 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
     private override init() {
         super.init()
-        loadCache()
-        loadProfileCache()
-        healPoisonedNegativeEntriesOnce()
+        if Self.isEnabled {
+            loadCache()
+            loadProfileCache()
+            healPoisonedNegativeEntriesOnce()
+        }
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 20
@@ -192,6 +200,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
     /// Get KNS info for an address (from cache or fetch)
     func getInfo(for address: String, network: NetworkType = .mainnet) async -> KNSAddressInfo? {
+        guard Self.isEnabled else { return nil }
         // Return cached if available - except a stale empty entry, which may be a poisoned
         // negative from the era when fetch errors were cached as "no KNS"; refetch those.
         if let cached = domainCache[address], !shouldRefetchEmptyInfo(cached) {
@@ -207,6 +216,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// yet. Used by the group mentions-only notification gate to recognize Android-composed
     /// `@{primaryKNSDomain}` mention tokens.
     func barePrimaryDomain(for address: String) -> String? {
+        guard Self.isEnabled else { return nil }
         guard Self.showsDomainNamesAsIdentity else { return nil }
         guard let raw = domainCache[address]?.explicitPrimaryDomain?
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else { return nil }
@@ -224,6 +234,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// Concurrent callers for the same address share one in-flight request; failed lookups are
     /// throttled by a short exponential cooldown rather than refetched on every call.
     func fetchInfo(for address: String, network: NetworkType = .mainnet, force: Bool = false) async -> KNSAddressInfo? {
+        guard Self.isEnabled else { return nil }
         guard !address.isEmpty else { return nil }
         if let existing = inFlightInfoFetches[address] {
             return await existing.value
@@ -261,6 +272,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
     /// Fetch KNS info for multiple addresses
     func fetchInfo(for addresses: [String], network: NetworkType = .mainnet) async {
+        guard Self.isEnabled else { return }
         await withTaskGroup(of: Void.self) { group in
             for address in addresses {
                 group.addTask {
@@ -278,6 +290,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// and refetched the lot, seconds after loading perfectly good answers for them from disk.
     /// A `fetchedAt` IS the time of the last successful ask, which is exactly what this wants.
     func refreshIfNeeded(for addresses: [String], network: NetworkType = .mainnet) async {
+        guard Self.isEnabled else { return }
         let now = Date()
         let eligible = addresses.filter { address in
             guard inFlightInfoFetches[address] == nil else { return false }
@@ -445,6 +458,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
     /// Get cached/fetched KNS profile for an address.
     func getProfile(for address: String, network: NetworkType = .mainnet) async -> KNSAddressProfileInfo? {
+        guard Self.isEnabled else { return nil }
         guard Self.showsDomainNamesAsIdentity else { return nil }
         if let cached = profileCache[address], !shouldRefetchEmptyProfile(cached) {
             return cached
@@ -460,6 +474,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// Concurrent callers for the same address share one in-flight request; failed lookups are
     /// throttled by a short exponential cooldown rather than refetched on every call.
     func fetchProfile(for address: String, network: NetworkType = .mainnet, force: Bool = false) async -> KNSAddressProfileInfo? {
+        guard Self.isEnabled else { return nil }
         // The profile only ever carried the .kas name since 5.2, and that name is no longer
         // shown for anyone (`showsDomainNamesAsIdentity`), so there is nothing to ask KNS for.
         guard Self.showsDomainNamesAsIdentity, !address.isEmpty else { return nil }
@@ -497,6 +512,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     ///
     /// Falls back to the cached entry's `fetchedAt` on a cold start - see `refreshIfNeeded`.
     func refreshProfilesIfNeeded(for addresses: [String], network: NetworkType = .mainnet) async {
+        guard Self.isEnabled else { return }
         guard Self.showsDomainNamesAsIdentity else { return }
         let now = Date()
         let eligible = addresses.filter { address in
@@ -534,6 +550,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
     /// Resolve domain full name from domain asset id.
     func resolveDomainName(assetId: String) async -> String? {
+        guard Self.isEnabled else { return nil }
         let trimmedAssetId = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedAssetId.isEmpty else { return nil }
 
@@ -834,6 +851,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     ///   - network: Network type (mainnet or testnet) - ignored, uses settings
     /// - Returns: KNSDomainResolution with owner address, or nil if not found
     func resolveDomain(_ domain: String, network: NetworkType = .mainnet) async -> KNSDomainResolution? {
+        guard Self.isEnabled else { return nil }
         // Ensure domain has .kas suffix
         let fullDomain = domain.lowercased().hasSuffix(".kas") ? domain.lowercased() : "\(domain.lowercased()).kas"
 
@@ -943,6 +961,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// domain. Deliberately reports "unknown" as false rather than throwing: a discovery scan that
     /// aborted on one flaky lookup would report far fewer addresses than exist.
     func ownsAnyDomain(_ address: String) async -> Bool {
+        guard Self.isEnabled else { return false }
         let (domains, hadError) = await fetchAllDomains(for: address, baseURL: baseURL)
         return !hadError && !domains.isEmpty
     }
@@ -1010,12 +1029,14 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// `address`'s .kas domains for showing as its name - nil while `showsDomainNamesAsIdentity`
     /// is off. Use this, not `domainCache`, anywhere the result labels a person.
     func identityInfo(for address: String) -> KNSAddressInfo? {
-        Self.showsDomainNamesAsIdentity ? domainCache[address] : nil
+        guard Self.isEnabled else { return nil }
+        return Self.showsDomainNamesAsIdentity ? domainCache[address] : nil
     }
 
     /// One .kas domain's profile, for editing it in Your Domains. Deliberately NOT cached or
     /// shown elsewhere (`loadsDomainProfiles`). Nil when it has none or the lookup failed.
     func fetchDomainProfileForEditing(assetId: String) async -> KNSDomainProfile? {
+        guard Self.isEnabled else { return nil }
         let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let (data, _) = await fetchDomainProfileResult(assetId: trimmed, baseURL: baseURL)

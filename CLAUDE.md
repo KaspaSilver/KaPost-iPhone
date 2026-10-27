@@ -21,7 +21,10 @@ What is still KaChat-shaped underneath:
   subscription (`startPolling`).
 - `.kachat` names: the services, the profile editor and the name screens
   (`Views/Ecosystem/KachatNamesLiveViews.swift`, `KachatMarketView.swift`) are kept; only the
-  profile editor and the Wallet's Domains tab are reachable.
+  profile editor and the Wallet's Domains tab are reachable. `.kachat` is the only name service
+  KaPosts reads: KNS (.kas), dotk (.k) and Kaspa Names (.kaspa) are switched off at their two
+  entry points (`KNSService.isEnabled`, `NameServicesClient.otherServicesEnabled`), so the
+  Domains tab, address fields, mentions and search see .kachat names only.
 - `AppTab` / dock settings in `Models.swift` and `SettingsViewModel` are KaChat's dock model and
   unused here.
 - Chats live in KaChat: a profile's "Chat in KaChat" opens `kachat://profile/<address>` (or its
@@ -34,10 +37,17 @@ What is still KaChat-shaped underneath:
 | Tab | View |
 |---|---|
 | Feed | `KaPostsPageView` (`Views/KaPosts/KaPostsView.swift`) |
-| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); rooms hide the dock |
-| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet` |
-| Wallet | `ChattingAddressManageView(address:title: "Wallet")` - the one address's balance, history, UTXOs |
-| Settings | `SettingsView`: Customization, Security, Connection, Notifications, KaPosts, Public Chats, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Delete Account |
+| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off |
+| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`, Wallet pushes `ChattingAddressManageView` (balance, history, UTXOs) |
+| Notifications | `KaPostsNotificationsView`; the cog (top right) opens `NotificationsHubPage`, the notification settings |
+| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Public Chats, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Log Out (deleting an account is on the opening screen's Saved Accounts) |
+
+The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
+Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,
+the hamburger's screens, Post Activity) draw `KaPostsDockCopy` over themselves: the slide driver
+(`KaPostsSlideDriverView`) puts it in the cover's presentation container, and a tap closes every
+cover (`.kaPostsCloseCovers`) and selects the tab through `KaPostsDockRouter`. The composers and
+the hamburger card have no dock.
 
 Account setup is KaChat's, unchanged: `ContentView` -> `OnboardingView` (create / import a seed)
 -> `KaPostsTabView`. KaChat's welcome guide and dock wizard are not used.

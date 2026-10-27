@@ -11,18 +11,19 @@ import UserNotifications
 final class PublicChatService: ObservableObject {
     static let shared = PublicChatService()
 
-    /// Hardcoded curated channels shown in a "Popular" section, matching Android. These two are
-    /// AUTO-JOINED for every account (see `ensureFeaturedChannelsJoined`).
+    /// Hardcoded curated channels pinned to the top of the list, matching Android. Like every
+    /// default room they are joined for every account (see `ensureDefaultChannelsJoined`), and
+    /// these two start with notifications on.
     /// nonisolated: read from PublicChatStore's background prune (retention rule) as well as
     /// main-actor UI - immutable Sendable value, safe from anywhere.
     nonisolated static let featuredChannels = ["kaspa", "kachat-bugs"]
 
-    /// Curated per-language rooms, listed behind the collapsible "Other Languages" row under
-    /// Popular. Indexer-tracked exactly like the featured rooms (30-day retention, indexer
-    /// history, no retention gear, remote-push eligible) but deliberately NOT auto-joined: a
-    /// store row is created on first open or bell tap. Auto-joining eleven more rooms would
-    /// multiply push registrations, block-scan subscriptions and cellular cost for every user,
-    /// including the vast majority who want none of them.
+    /// Curated per-language rooms, listed straight in Public Chats under the two featured rooms
+    /// (KaPosts lists every default room; the customize button switches off the unwanted ones).
+    /// Indexer-tracked exactly like the featured rooms (30-day retention, indexer history, no
+    /// retention gear, remote-push eligible). They are joined like the featured rooms but with
+    /// notifications OFF, which is what keeps them cheap: the closed-room sweep and the push
+    /// registration only cover rooms whose bell is on.
     /// Ordered alphabetically by display name, Latin scripts first (see `languageDisplayName`).
     nonisolated static let languageChannels = [
         "kaspa-indonesia",
@@ -209,7 +210,10 @@ final class PublicChatService: ObservableObject {
             // service's own actor, so no hop is needed.
             MainActor.assumeIsolated {
                 guard self.walletAddress == targetWallet else { return }
-                self.refreshChannels()
+                // Joins the default rooms (and refreshes the list) as soon as the wallet's
+                // store is open, so #kaspa and #kachat-bugs notify without Public Chats having
+                // been opened first.
+                self.ensureDefaultChannelsJoined()
                 // Rooms that were open before the wallet landed: their acquire read an empty
                 // store and its mark-read was lost to loadReadState() - reload and mark read
                 // now (persisted under the real key this time).
@@ -362,12 +366,20 @@ final class PublicChatService: ObservableObject {
             messages(forChannel: channel.channelName).last?.blockTime
                 ?? Int64((channel.joinedAt ?? .distantPast).timeIntervalSince1970 * 1000)
         }
+        // Rooms with messages by latest activity; a language room nobody has written in yet
+        // keeps its place in `languageChannels` (they are all joined at the same moment, so
+        // their join times would order them at random).
+        func sortKey(_ channel: PublicChatChannel) -> (Int64, Int) {
+            if let latest = messages(forChannel: channel.channelName).last?.blockTime { return (latest, 0) }
+            if let index = Self.languageChannels.firstIndex(of: channel.channelName) { return (0, -index) }
+            return (lastActivity(channel), 0)
+        }
         let others = channels
             .filter { !Self.featuredChannels.contains($0.channelName) }
             .filter { !Self.serviceChannels.contains($0.channelName) }
             // A default room switched off in Public Chats settings stays out of the list.
             .filter { isCuratedChannelShown($0.channelName) }
-            .sorted { lastActivity($0) > lastActivity($1) }
+            .sorted { sortKey($0) > sortKey($1) }
         return featured + others
     }
 
@@ -388,9 +400,8 @@ final class PublicChatService: ObservableObject {
     }
 
     /// What a default room's switch in Public Chats settings reads: on only when the room is
-    /// joined AND not switched off - i.e. it is in the list and the Chats circles row. A
-    /// language room is not joined until someone opens or switches it on, so it reads off
-    /// until then (it used to read "on" while appearing nowhere).
+    /// joined AND not switched off - i.e. it is in the list. Every default room is joined
+    /// (`ensureDefaultChannelsJoined`), so in practice this is "not switched off".
     func isCuratedChannelOn(_ name: String) -> Bool {
         let normalized = PublicChatChannelName.normalize(name)
         return isCuratedChannelShown(normalized) && channels.contains { $0.channelName == normalized }
@@ -494,10 +505,6 @@ final class PublicChatService: ObservableObject {
         if seeded { persistReadState() }
     }
 
-    /// #kaspa and #kachat-bugs notify by default. Applied once per wallet, so a bell the user
-    /// later switches off stays off.
-    // Rooms join with notifications OFF and stay off until the user turns a bell on - the
-    // curated rooms included. (They used to be switched on once per wallet here.)
 
     // MARK: - Channel membership
 
@@ -510,13 +517,30 @@ final class PublicChatService: ObservableObject {
         return Self.featuredChannels.filter { !joined.contains($0) }
     }
 
-    /// The curated Popular rooms are permanent fixtures of the list screen - make sure they
-    /// have store rows (bell state etc.) without requiring an explicit join.
-    func ensureFeaturedChannelsJoined() {
-        for name in Self.featuredChannels {
+    /// Every default room is in Public Chats from the start: joined (a store row, so it is
+    /// listed and has a bell), unless it was switched off with the customize button. Rooms join
+    /// with notifications off; #kaspa and #kachat-bugs then get theirs switched on once per
+    /// wallet, so a bell the user later turns off stays off.
+    func ensureDefaultChannelsJoined() {
+        for name in Self.curatedChannels where isCuratedChannelShown(name) {
             _ = store.joinChannel(name)
         }
         refreshChannels()
+        applyDefaultNotificationsOnce()
+    }
+
+    private var defaultNotificationsAppliedKey: String? {
+        walletAddress.map { "kaposts_broadcast_default_bells_\($0)" }
+    }
+
+    private func applyDefaultNotificationsOnce() {
+        guard let key = defaultNotificationsAppliedKey,
+              !UserDefaults.standard.bool(forKey: key) else { return }
+        for name in Self.featuredChannels
+        where isCuratedChannelShown(name) && channels.contains(where: { $0.channelName == name }) {
+            setNotifyEnabled(true, forChannel: name)
+        }
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     @discardableResult

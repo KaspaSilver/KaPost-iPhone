@@ -9,7 +9,7 @@ struct SettingsView: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
     @State private var showSeedPhrase = false
-    @State private var showDeleteConfirmation = false
+    @State private var showLogoutConfirmation = false
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
     @State private var toastStyle: ToastStyle = .success
@@ -25,9 +25,6 @@ struct SettingsView: View {
                 }
                 settingsCategoryRow("Connection", icon: "antenna.radiowaves.left.and.right", tint: .accentColor) {
                     ConnectionHubPage()
-                }
-                settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
-                    NotificationsHubPage()
                 }
                 settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
                     KaPostsSettingsView(onClose: {}, embedded: true)
@@ -63,41 +60,43 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                     }
                 }
+                // Log out, not delete: the account stays saved on this iPhone, and deleting it is
+                // done from Saved Accounts on the opening screen.
                 Button(role: .destructive) {
-                    showDeleteConfirmation = true
+                    showLogoutConfirmation = true
                 } label: {
                     Label {
-                        Text("Delete Account")
+                        Text("Log Out")
                             .foregroundColor(.red)
                     } icon: {
-                        Image(systemName: "trash")
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
                             .foregroundColor(.red)
                     }
                 }
             }
             .toast(message: toastMessage, style: toastStyle)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    ConnectionStatusIndicator()
-                }
                 ToolbarItem(placement: .principal) {
                     balanceToolbarView
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    ConnectionStatusIndicator()
                 }
             }
             .sheet(isPresented: $showSeedPhrase) {
                 SeedPhraseView()
             }
             .confirmationDialog(
-                "Delete Account",
-                isPresented: $showDeleteConfirmation,
+                "Log Out",
+                isPresented: $showLogoutConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
-                    deleteAccount()
+                Button("Log Out", role: .destructive) {
+                    Task { await walletManager.logout() }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This deletes the account from this iPhone and removes its push registration. Posts and messages on the Kaspa blockchain cannot be deleted. Make sure you have your recovery phrase.")
+                Text("The account stays saved on this iPhone: sign back in from Saved Accounts on the opening screen, where an account can also be deleted.")
             }
         }
         .onAppear {
@@ -139,16 +138,6 @@ struct SettingsView: View {
             UIPasteboard.general.string = exact
             Haptics.success()
             showToast("Balance copied to clipboard.")
-        }
-    }
-
-    private func deleteAccount() {
-        Task {
-            do {
-                try await walletManager.deleteWallet()
-            } catch {
-                showToast("Couldn't delete the account: \(UserFacingError.message(for: error))", style: .error)
-            }
         }
     }
 
@@ -722,10 +711,9 @@ private struct QuickReactionSlotSelection: Identifiable {
     var id: Int { index }
 }
 
-/// Top-level Settings > Notifications hub: a category list (same row style as the main
-/// Settings screen) splitting notification prefs by feature - Chats (the pre-existing
-/// mode/sound/vibration page, moved here intact from Settings > Chats), Wallet (own-address
-/// receive activity), and KaPosts (per-event-type ping toggles).
+/// Notification settings, behind the cog on the Notifications tab: the push switch, then a
+/// category list (same row style as the main Settings screen) - KaPosts (per-event-type
+/// toggles), Wallet (own-address receive activity), and Sound & Vibration.
 struct NotificationsHubPage: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject var pushManager: PushNotificationManager
@@ -771,12 +759,17 @@ struct NotificationsHubPage: View {
                      : "Turn this on to receive anything you have switched on below, even when the app is closed.")
             }
 
+            // KaPosts' notification settings live here, behind the cog on the Notifications tab
+            // (not in Settings). Public Chats rooms keep their own bells, in each room.
             Section("Notifications") {
-                settingsCategoryRow("Chats", icon: "bubble.left.and.bubble.right", tint: .accentColor) {
-                    NotificationsSettingsView()
+                settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
+                    KaPostsNotificationSettingsView()
                 }
                 settingsCategoryRow("Wallet", icon: "banknote", tint: .accentColor) {
                     WalletNotificationSettingsView()
+                }
+                settingsCategoryRow("Sound & Vibration", icon: "speaker.wave.2", tint: .accentColor) {
+                    NotificationsSettingsView()
                 }
             }
         }
@@ -965,20 +958,12 @@ struct NotificationsSettingsView: View {
                     .onChange(of: settingsViewModel.settings.incomingNotificationVibrationEnabled) { _ in
                         settingsViewModel.saveSettings()
                     }
-            } header: {
-                Text("Sound & Vibration")
             } footer: {
-                Text("Used when a contact has no custom notification mode set.")
-            }
-
-            Section("Per Contact") {
-                Text("Set per-contact notification mode in each chat's info screen: Off, No Sound, or Sound.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
+                Text("How a notification from KaPosts sounds and feels when it arrives.")
             }
         }
         .toast(message: toastMessage, style: toastStyle)
-        .navigationTitle("Chats")
+        .navigationTitle("Sound & Vibration")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -1733,37 +1718,7 @@ struct ConnectionSettingsView: View {
         } header: {
             Text(".kachat Names")
         } footer: {
-            Text("Resolved first, everywhere you can type an address.")
-        }
-        // The other name services this app reads (see `NameServicesClient`). Shown, not
-        // editable. The .kas URL had no empty-string fallback, so saving it blank wrote "" and
-        // every lookup then failed with an unsupported-URL error until it was typed back in. It
-        // now follows the selected network.
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: ".kas")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(settingsViewModel.knsBaseURL)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-            }
-            ForEach([NameServiceTLD.k, .kaspa], id: \.self) { tld in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(verbatim: tld.suffix)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(tld.apiBaseURL(for: settingsViewModel.settings.networkType) ?? String(localized: "Not available on this network"))
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-        } header: {
-            Text("Other Domains")
-        } footer: {
-            Text("Looked up after .kachat, and listed under Other domains when a typed name also exists there.")
+            Text("The only names KaPosts looks up, everywhere you can type an address.")
         }
     }
 

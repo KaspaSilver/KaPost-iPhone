@@ -293,9 +293,6 @@ struct PublicChatChannelView: View {
         conversation
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                ConnectionStatusIndicator()
-            }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 // A room you made yourself: what "public" does and does not mean here. Rooms the
                 // indexer tracks keep their history there, so they need no such warning.
@@ -315,6 +312,8 @@ struct PublicChatChannelView: View {
                     Image(systemName: roomNotifyEnabled ? "bell.fill" : "bell.slash")
                 }
                 .accessibilityLabel(roomNotifyEnabled ? "Notifications on" : "Notifications off")
+                // Far right, like every KaPosts screen: the leading side belongs to Back.
+                ConnectionStatusIndicator()
             }
         }
         .sheet(isPresented: $showNotifySheet) {
