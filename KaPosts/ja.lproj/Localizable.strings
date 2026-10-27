@@ -867,7 +867,7 @@
 "This folder is empty." = "このフォルダは空です。";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts、パブリックチャット、Kaspa Websites は、ドックにないときここに表示されます。設定 > Customization > Customize Dock で管理できます。";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost、パブリックチャット、Kaspa Websites は、ドックにないときここに表示されます。設定 > Customization > Customize Dock で管理できます。";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = ".kachat ドメイン";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "誰かとチャットするには「チャットを作成」を押し、相手の Kaspa アドレスか .kachat 名を入力します。最初のメッセージは、相手が承認できるメッセージリクエストとして届きます。プライバシーを最大にするにはプライベートチャットをオンに。チェーン上で二人を結ぶものはなく、相手もあなたとプライベートチャットを始めるとメッセージが見えます。";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "始めるには 50 Kaspa がおすすめです。.kachat 名を取得してしばらくチャットできます。5 Kaspa で約 2500 件のメッセージを送れます。";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "メッセージ用の公開 ID です。メッセージ手数料と .kachat 名の支払い用に少額を入れてください。使う予定のお金はここに送らないでください。";
-"KaPosts isn't available on Testnet yet" = "KaPosts はまだテストネットでは利用できません";
+"KaPost isn't available on Testnet yet" = "KaPost はまだテストネットでは利用できません";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "テストネット用の KaPost インデクサーはありません。メインネットで閲覧・投稿するには、設定 > 接続 でテストネットをオフにしてください。";
 "Nextcloud is off while Testnet is on." = "テストネットがオンの間、Nextcloud はオフになります。";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "Nextcloud を使ったバックアップ、同期、メディア、通話はメインネットでのみ動作するため、テストネットがメインネットのバックアップを上書きすることはありません。設定 > 接続 でテストネットをオフにすると、Nextcloud の接続は元どおりに戻ります。";

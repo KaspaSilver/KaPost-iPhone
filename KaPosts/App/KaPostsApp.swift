@@ -445,16 +445,18 @@ extension Notification.Name {
     static let openPublicChat = Notification.Name("openBroadcast")
 }
 
-/// What the App Switcher and a system prompt see instead of the app's contents.
+/// What the App Switcher and a system prompt see instead of the app's contents: the app's own
+/// logo (the icon's art), shaped like its home-screen icon.
 private struct PrivacyCoverView: View {
     var body: some View {
         ZStack {
             Rectangle().fill(.ultraThinMaterial)
-            Image("KaspaLogo")
+            Image("KaPostsLogo")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 72, height: 72)
-                .opacity(0.9)
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
         }
         .ignoresSafeArea()
     }

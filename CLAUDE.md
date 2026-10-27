@@ -8,6 +8,11 @@ KaPosts is a standalone iOS app for KaPosts (the on-chain social feed) and Publi
 of KaChat so KaChat can stay focused on 1:1 and group chats. One account = one Kaspa address,
 used to sign and pay for every post, reply, like, follow and room message.
 
+The app is called **KaPost** wherever a person sees it: the home screen name
+(`INFOPLIST_KEY_CFBundleDisplayName`), the permission prompts, every on-screen string and the
+translations. The code, the project, the bundle ID, the `kaposts://` scheme and log tags keep
+"KaPosts". Write "KaPost" in any new user-facing text.
+
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `8b31f71`
 (2026-10-24). KaChat's other features are removed: 1:1 and group chat screens, groups, calls
 (and WebRTC), Nextcloud, Chess, Swap, Cold Storage, Portfolio, the Address Book, Simple Mode,
@@ -66,10 +71,11 @@ target automatically (no pbxproj edits for new files). Exceptions (Info.plist, e
 Version.xcconfig) are listed in the project's exception set.
 
 ```bash
-xcodebuild -project KaPosts.xcodeproj -scheme KaPosts -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
+xcodebuild -project KaPosts.xcodeproj -scheme KaPosts -destination 'platform=iOS Simulator,id=48DEB003-C22C-433B-80B8-8BE35D3019CC' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
 ```
 
-Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
+KaPosts is tested on the **iPhone 17 Pro** simulator (iOS 26.5, UDID
+`48DEB003-C22C-433B-80B8-8BE35D3019CC`). Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
 owner's.
 
 ## Protocol and servers

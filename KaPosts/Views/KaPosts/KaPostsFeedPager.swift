@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Following, Feed and Popular side by side, swiped between with a finger.
+/// Following, Feed and Popular side by side, swiped between with a finger. Connection
+/// Settings' tabs use it too.
 ///
 /// Not a `TabView` in page style: that one is a UIKit scroll view underneath, and the feed
 /// redraws all the time while you swipe (an avatar or a name lands, a page of posts arrives).

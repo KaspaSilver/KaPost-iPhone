@@ -3,6 +3,16 @@
     {
       "filename" : "KaPostsLogo.png",
       "idiom" : "universal"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "KaPostsLogo-dark.png",
+      "idiom" : "universal"
     }
   ],
   "info" : {

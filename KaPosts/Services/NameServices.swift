@@ -430,7 +430,7 @@ final class NameServicesClient: ObservableObject {
     static func notFoundMessage(typed input: String, results: [NameResolution]) -> String {
         let wanted = NameServiceTLD.splitTypedName(input).tld ?? .kachat
         if wanted != .kachat, !otherServicesEnabled {
-            return String(localized: "KaPosts looks up .kachat names only")
+            return String(localized: "KaPost looks up .kachat names only")
         }
         if wanted == .kachat, results.contains(where: { $0.tld == .kachat && $0.notLive }) || !NameServiceTLD.kachat.isLive {
             return String(localized: ".kachat names aren't live on this network yet")

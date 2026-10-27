@@ -26,7 +26,7 @@ struct SettingsView: View {
                 settingsCategoryRow("Connection", icon: "antenna.radiowaves.left.and.right", tint: .accentColor) {
                     ConnectionHubPage()
                 }
-                settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
+                settingsCategoryRow("KaPost", icon: "square.text.square", tint: .accentColor) {
                     KaPostsSettingsView(onClose: {}, embedded: true)
                 }
                 // The same page as the cog on the Notifications tab.
@@ -317,8 +317,8 @@ struct ConnectionHubPage: View {
                 if settingsViewModel.selectedNetworkType != settingsViewModel.launchNetworkType {
                     Label {
                         Text(settingsViewModel.selectedNetworkType == .testnet
-                             ? LocalizedStringKey("Close KaPosts completely and open it again to finish switching to Testnet.")
-                             : LocalizedStringKey("Close KaPosts completely and open it again to finish switching back to Mainnet."))
+                             ? LocalizedStringKey("Close KaPost completely and open it again to finish switching to Testnet.")
+                             : LocalizedStringKey("Close KaPost completely and open it again to finish switching back to Mainnet."))
                     } icon: {
                         Image(systemName: "arrow.clockwise.circle.fill")
                             .foregroundColor(.orange)
@@ -765,7 +765,7 @@ struct NotificationsHubPage: View {
             // KaPosts' notifications are about posts only (no wallet ones). Public Chats rooms keep
             // their own bells, in each room.
             Section("Notifications") {
-                settingsCategoryRow("KaPosts", icon: "square.text.square", tint: .accentColor) {
+                settingsCategoryRow("KaPost", icon: "square.text.square", tint: .accentColor) {
                     KaPostsNotificationSettingsView()
                 }
                 settingsCategoryRow("Sound & Vibration", icon: "speaker.wave.2", tint: .accentColor) {
@@ -913,7 +913,7 @@ struct KaPostsNotificationSettingsView: View {
                     }
             }
         }
-        .navigationTitle("KaPosts")
+        .navigationTitle("KaPost")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -938,7 +938,7 @@ struct NotificationsSettingsView: View {
                         settingsViewModel.saveSettings()
                     }
             } footer: {
-                Text("How a notification from KaPosts sounds and feels when it arrives.")
+                Text("How a notification from KaPost sounds and feels when it arrives.")
             }
         }
         .toast(message: toastMessage, style: toastStyle)
@@ -1463,26 +1463,10 @@ struct ConnectionSettingsView: View {
         return "https://" + trimmed
     }
 
+    /// KaPosts, Public Chats and Push. KaChat's message indexer is not here: KaPosts has no 1:1
+    /// chats, and the same address (`indexerURL`) is the .kachat names indexer, on the Domains tab.
     @ViewBuilder
     private var indexerSections: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Indexer URL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField(indexerPlaceholder(AppSettings.defaultIndexerURL), text: $indexerURL)
-                    .font(.system(.body, design: .monospaced))
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                httpsInlineError(for: indexerURL)
-            }
-        } header: {
-            Text("Message Indexer")
-        } footer: {
-            Text("Message indexer service for chat functionality")
-        }
-
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("KaPost Indexer URL")
@@ -1498,7 +1482,7 @@ struct ConnectionSettingsView: View {
         } header: {
             Text("KaPost Indexer")
         } footer: {
-            Text("K social network indexer that powers KaPosts feeds")
+            Text("K social network indexer that powers KaPost feeds")
         }
 
         Section {
@@ -1671,7 +1655,7 @@ struct ConnectionSettingsView: View {
         } header: {
             Text("Translation Service")
         } footer: {
-            Text("Translates KaPosts written in another language. Runs on the KaPost indexer's box by default; point this at your own if you host one (see TRANSLATION_SERVICE.md).")
+            Text("Translates KaPost posts written in another language. Runs on the KaPost indexer's box by default; point this at your own if you host one (see TRANSLATION_SERVICE.md).")
         }
 
     }
@@ -1681,23 +1665,28 @@ struct ConnectionSettingsView: View {
         // .kachat first: it is what every address field resolves before anything else.
         Section {
             VStack(alignment: .leading, spacing: 4) {
-                Text("KaChat Names (.kachat)")
+                Text(".kachat Names Indexer URL")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                // Read through the chat indexer above when it serves this network's names, else
-                // straight from the chain (KachatNamesRegistry).
-                if settingsViewModel.settings.networkType == .testnet {
-                    Text("Live on Testnet (testnet-10 registry)")
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("Live on Mainnet")
-                        .foregroundColor(.secondary)
-                }
+                // `indexerURL`: KachatNamesRegistry reads names through it while it answers for
+                // this network's registry and keeps up, else straight from the chain.
+                TextField(indexerPlaceholder(AppSettings.defaultIndexerURL), text: $indexerURL)
+                    .font(.system(.body, design: .monospaced))
+                    .autocapitalization(.none)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                httpsInlineError(for: indexerURL)
+            }
+            HStack {
+                Text("Registry")
+                Spacer()
+                Text(settingsViewModel.settings.networkType == .testnet ? "Testnet (testnet-10)" : "Mainnet")
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text(".kachat Names")
         } footer: {
-            Text("The only names KaPosts looks up, everywhere you can type an address.")
+            Text("The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain.")
         }
     }
 
@@ -1748,20 +1737,37 @@ struct ConnectionSettingsView: View {
 
     @State private var selectedTab: ConnectionTab = .indexer
 
+    private var selectedTabIndex: Binding<Int> {
+        Binding(
+            get: { ConnectionTab.allCases.firstIndex(of: selectedTab) ?? 0 },
+            set: { selectedTab = ConnectionTab.allCases[$0] }
+        )
+    }
+
+    @ViewBuilder
+    private func sections(for tab: ConnectionTab) -> some View {
+        switch tab {
+        case .indexer: indexerSections
+        case .node: nodeSections
+        case .translation: translationSections
+        case .domains: domainsSections
+        case .explorer: explorerSections
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             UnderlineTabBar(
                 tabs: ConnectionTab.allCases.map { (tab: $0, title: $0.title) },
                 selection: $selectedTab
             )
-            // Save covers every tab: the fields keep their edits while you switch between them.
-            Form {
-                switch selectedTab {
-                case .indexer: indexerSections
-                case .node: nodeSections
-                case .translation: translationSections
-                case .domains: domainsSections
-                case .explorer: explorerSections
+            // Swipe sideways between the tabs, or tap one. Save covers every tab: the fields keep
+            // their edits while you switch between them.
+            KaPostsFeedPager(pageCount: ConnectionTab.allCases.count, selection: selectedTabIndex) {
+                ForEach(ConnectionTab.allCases, id: \.self) { tab in
+                    Form {
+                        sections(for: tab)
+                    }
                 }
             }
         }

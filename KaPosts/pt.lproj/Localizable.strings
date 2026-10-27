@@ -780,7 +780,7 @@
 "Group Messages" = "Mensagens de grupo";
 "Group Updates" = "Alterações de grupo";
 "Public Chats" = "Chats públicos";
-"KaPost Activity" = "Atividade do KaPosts";
+"KaPost Activity" = "Atividade do KaPost";
 "Chess Moves" = "Lances de xadrez";
 "Chess Games" = "Partidas de xadrez";
 "Saved Records" = "Registros salvos";
@@ -867,7 +867,7 @@
 "This folder is empty." = "Esta pasta está vazia.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts, Chats públicos e Kaspa Websites aparecem aqui quando não estão no seu dock. Gerencie-os em Configurações > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost, Chats públicos e Kaspa Websites aparecem aqui quando não estão no seu dock. Gerencie-os em Configurações > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = "Domínios .kachat";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "Para conversar com alguém, toque em Criar chat e digite o endereço Kaspa ou o nome .kachat da pessoa. Sua primeira mensagem chega como uma solicitação de mensagem que ela pode aceitar. Para mais privacidade, ative Chat privado: nada liga vocês na blockchain, e ela verá suas mensagens quando também iniciar um chat privado com você.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "Recomenda-se 50 Kaspa para começar - o suficiente para reivindicar um nome .kachat e conversar por um tempo. 5 Kaspa bastam para cerca de 2500 mensagens.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "Sua identidade pública de mensagens. Coloque um valor pequeno para pagar as taxas das mensagens e seu nome .kachat - nunca envie para cá dinheiro que pretende gastar.";
-"KaPosts isn't available on Testnet yet" = "O KaPosts ainda não está disponível na Testnet";
+"KaPost isn't available on Testnet yet" = "O KaPost ainda não está disponível na Testnet";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "Não há um indexador KaPost para a testnet. Desative a Testnet em Ajustes > Conexão para ler e publicar na mainnet.";
 "Nextcloud is off while Testnet is on." = "O Nextcloud fica desligado enquanto a Testnet estiver ligada.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "Backups, sincronização, mídia e chamadas pelo Nextcloud funcionam só na mainnet, então a testnet nunca sobrescreve seu backup da mainnet. Desative a Testnet em Ajustes > Conexão e sua conexão com o Nextcloud volta como estava.";

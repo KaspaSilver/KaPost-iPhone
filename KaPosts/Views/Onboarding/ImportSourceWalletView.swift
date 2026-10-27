@@ -50,7 +50,7 @@ struct ImportSourceWalletView: View {
                 Text("Where is this seed phrase from?")
                     .font(.title3.weight(.bold))
                     .multilineTextAlignment(.center)
-                Text("Different wallets store your Kaspa on different address paths. Pick where this seed phrase comes from so KaPosts finds your funds and domains.")
+                Text("Different wallets store your Kaspa on different address paths. Pick where this seed phrase comes from so KaPost finds your funds and domains.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

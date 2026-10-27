@@ -138,7 +138,7 @@ private struct KaPostsUnavailableView: View {
             Image(systemName: "text.bubble")
                 .font(.system(size: 34, weight: .semibold))
                 .foregroundColor(.secondary)
-            Text("KaPosts isn't available on Testnet yet")
+            Text("KaPost isn't available on Testnet yet")
                 .font(.headline)
                 .multilineTextAlignment(.center)
             Text("There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet.")
@@ -709,7 +709,7 @@ struct KaPostsView: View {
             KaPostTipSheet(address: target.address, displayName: posterDisplayName(target.address), tip: target.tip,
                            initialError: target.failure, onTipped: { countTip(target.tip) })
         }
-        .alert("KaPosts", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+        .alert("KaPost", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) { actionError = nil }
         } message: {
             Text(actionError ?? "")
@@ -890,7 +890,7 @@ struct KaPostsView: View {
             // the feed moves. The hamburger sits before it.
             HStack(spacing: 12) {
                 feedMenuButton
-                Text("KaPosts")
+                Text("KaPost")
                     .font(.largeTitle.weight(.bold))
                 Spacer(minLength: 0)
             }
@@ -2723,6 +2723,8 @@ struct KaPostsView: View {
         draftSegments: [String]? = nil,
         pollOptions: [String]? = nil
     ) {
+        // No cool down: the action goes at once, so there is nothing to undo.
+        guard KaPostsActionScheduler.cooldownEnabled else { return }
         withAnimation(.easeOut(duration: 0.25)) {
             undoToast = UndoPostToast(
                 key: key, postId: postId,
@@ -4321,7 +4323,22 @@ struct KaPostsView: View {
         guard address != WalletManager.shared.currentWallet?.publicAddress else { return }
         // A tip names the post it is for, so the post counts it (KAPOSTS_INDEXER.md 5.11).
         let target = post.remoteId.flatMap { id in post.posterPubkey.map { KaPostTip(postId: id, authorPubkey: $0) } }
-        if let amount = settingsViewModel.settings.kaPostsDefaultTipSompi, amount > 0 {
+        let settings = settingsViewModel.settings
+        // A default tip set in a currency sends what it is worth in KAS right now.
+        if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
+            let currency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
+            let fiatText = formatFiatAmount(fiat, currency: currency)
+            guard let price = KaspaPriceService.shared.price(in: currency), price > 0 else {
+                KaspaPriceService.shared.refreshPrice()
+                tipTarget = TipTarget(address: address, tip: target,
+                                      failure: "Tip didn't send: there is no KAS price yet to turn \(fiatText) into KAS.")
+                return
+            }
+            let sompi = UInt64((fiat / price * 100_000_000).rounded())
+            sendDefaultTip(sompi, to: address, tip: target, fiatText: fiatText)
+            return
+        }
+        if let amount = settings.kaPostsDefaultTipSompi, amount > 0 {
             sendDefaultTip(amount, to: address, tip: target)
             return
         }
@@ -4331,8 +4348,9 @@ struct KaPostsView: View {
     /// KaPosts > Settings > "Send a default tip instantly": the configured amount goes out at
     /// once, through exactly the path the tip sheet's Send uses - same contact creation, same
     /// funding source and destination rules as a payment in that person's chat. A failure
-    /// falls back to the amount screen so the tip can still be sent by hand.
-    private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?) {
+    /// falls back to the amount screen so the tip can still be sent by hand. `fiatText` is the
+    /// currency amount the KAS was worked out from, for a tip set in a currency.
+    private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?, fiatText: String? = nil) {
         let recipient: Contact
         if let existing = ContactsManager.shared.getContact(byAddress: address) {
             recipient = existing
@@ -4356,7 +4374,8 @@ struct KaPostsView: View {
                 countTip(tip)
                 // A deferred send (no confirmed inputs yet) has no transaction to show; the
                 // retry timer owns it from here.
-                showActionToast("Tipped \(kasText) \(KaspaUnit.symbol) to \(name)", txId: txId ?? "")
+                let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
+                showActionToast("Tipped \(amountText) to \(name)", txId: txId ?? "")
             } catch {
                 AppLog.log("[KaPosts] Instant tip failed: %@", error.localizedDescription)
                 // the amount screen opens with the reason, so the tip can be sent by hand
@@ -4791,7 +4810,7 @@ struct KaPostsView: View {
     private func scheduledLine(_ entry: KaPostScheduledEntry) -> String {
         let when = DateFormatter.localizedString(from: entry.notBefore, dateStyle: .medium, timeStyle: .short)
         switch entry.status {
-        case .scheduled: return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaPosts around then"
+        case .scheduled: return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaPost around then"
         case .submitted: return "Posted \(entry.submittedAt.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? when)"
         case .failed: return "Failed to post at \(when)"
         case .cancelled: return "Cancelled"
@@ -5430,7 +5449,7 @@ private struct KaPostCellView: View {
         components.scheme = "mailto"
         components.path = "kaspasilver@gmail.com"
         components.queryItems = [
-            URLQueryItem(name: "subject", value: "KaPosts report"),
+            URLQueryItem(name: "subject", value: "KaPost report"),
             URLQueryItem(name: "body", value: """
             I want to report this post.
 
@@ -7734,10 +7753,16 @@ private struct KaPostComposerMentionBar: View {
 /// actually submits. Keyed "kind:postId"; the UI shows a countdown in the icon's place (or an
 /// Undo toast for posts) and cancelling the key drops the action entirely - nothing has touched
 /// the network yet. Singleton so countdowns survive cell recycling and screen switches.
+///
+/// With KaPosts > Settings > Cool down before post off, there is no window: `schedule` runs
+/// the action at once and no Undo toast shows.
 @MainActor
 final class KaPostsActionScheduler: ObservableObject {
     static let shared = KaPostsActionScheduler()
     static let undoDelay: TimeInterval = 5
+
+    /// Whether actions wait out the undo window (the "Cool down before post" setting).
+    static var cooldownEnabled: Bool { AppSettings.load().kaPostsCooldownEnabled }
 
     /// Fire deadline per pending key - cells read this to render the countdown.
     @Published private(set) var deadlines: [String: Date] = [:]
@@ -7747,6 +7772,10 @@ final class KaPostsActionScheduler: ObservableObject {
 
     func schedule(key: String, action: @escaping @MainActor () -> Void) {
         cancel(key: key)
+        guard Self.cooldownEnabled else {
+            action()
+            return
+        }
         deadlines[key] = Date().addingTimeInterval(Self.undoDelay)
         tasks[key] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.undoDelay * 1_000_000_000))
@@ -8833,9 +8862,6 @@ struct KaPostsNotificationsView: View {
     /// `.kachat` names, banners and bios (`KachatLive.identityName` and friends) land on their own.
     @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
     @ObservedObject private var kachatSocialImages = KachatSocialImageResolver.shared
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
-    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @ObservedObject private var knsService = KNSService.shared
     @ObservedObject private var moderationStore = KaPostsModerationStore.shared
 
@@ -8910,9 +8936,6 @@ struct KaPostsNotificationsView: View {
     @State private var loadFailed = false
     /// Endless-scroll state for the notification stream (cursor-paginated by the indexer).
     @State private var page = KaPostsPageState()
-    /// The notification whose action sheet is up. Tapping a row asks what to do with it rather
-    /// than committing to one of the two answers.
-    @State private var actionTarget: Item?
 
     var body: some View {
         NavigationStack {
@@ -8968,56 +8991,19 @@ struct KaPostsNotificationsView: View {
             .onAppear { KaPostsNotificationService.shared.isNotificationsScreenVisible = true }
             .onDisappear { KaPostsNotificationService.shared.isNotificationsScreenVisible = false }
         }
-        .sheet(item: $actionTarget) { item in
-            notificationActionsSheet(item)
-                .presentationDetents([.height(item.targetTxId == nil ? 250 : 320)])
-                .presentationDragIndicator(.visible)
-        }
     }
 
-    /// The half sheet behind a tapped notification. Same shape as Address Actions and the other
-    /// half-sheet menus, so a menu is a menu wherever it appears.
-    @ViewBuilder
-    private func notificationActionsSheet(_ item: Item) -> some View {
-        VStack(spacing: 0) {
-            Text(displayName(for: item.actorAddress))
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
-            VStack(spacing: 12) {
-                if item.targetTxId != nil {
-                    ActionSheetRow(
-                        title: "Open in KaPosts",
-                        subtitle: "Goes to the post this is about, in the app.",
-                        systemImage: "bubble.left.and.bubble.right"
-                    ) {
-                        guard let target = item.targetTxId else { return }
-                        actionTarget = nil
-                        KaPostsDeepLink.pendingPostTxId = target
-                        dismiss()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                            NotificationCenter.default.post(name: .openKaPost, object: nil, userInfo: [:])
-                        }
-                    }
-                }
-                if let url = settingsViewModel.settings.kaspaExplorer.txURL(for: item.id) {
-                    ActionSheetRow(
-                        title: "View in Explorer",
-                        subtitle: "Opens the transaction on your chosen block explorer.",
-                        systemImage: "globe"
-                    ) {
-                        actionTarget = nil
-                        openURL(url)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
+    /// A tapped notification goes straight to what it is about: the post (a reply or quote
+    /// itself, or your post for a like, repost or tip), on the Feed tab. A follow has no post,
+    /// so it opens the follower's profile.
+    private func open(_ item: Item) {
+        if let target = item.targetTxId {
+            KaPostsDeepLink.pendingPostTxId = target
+            NotificationCenter.default.post(name: .openKaPost, object: nil, userInfo: [:])
+        } else if !item.actorAddress.isEmpty {
+            KaPostsDeepLink.pendingProfileAddress = item.actorAddress
+            NotificationCenter.default.post(name: .openKaPostsProfile, object: nil)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, 20)
     }
 
     /// Built once, like KaPostCellView's relative formatter: `.relative(presentation:)` makes a
@@ -9071,13 +9057,10 @@ struct KaPostsNotificationsView: View {
                 .foregroundColor(.secondary)
         }
         .contentShape(Rectangle())
-        // The whole row asks what to do with this notification. There used to be a "View" button
-        // wired straight to the explorer sitting next to a row tap that opened the post in-app -
-        // two different destinations, one of them unlabelled, and the button quietly ate taps
-        // meant for the row.
+        // The whole row opens the post; no explorer link.
         .onTapGesture {
             Haptics.impact(.light)
-            actionTarget = item
+            open(item)
         }
         .task(id: item.actorAddress) {
             guard !item.actorAddress.isEmpty,
@@ -9250,7 +9233,7 @@ struct KaPostsPageView: View {
             KaPostsView()
                 // Inline, because the title itself is now pinned chrome inside KaPostsView -
                 // see feedTabBar. The bar keeps the dot and the balance either side of it.
-                .navigationTitle("KaPosts")
+                .navigationTitle("KaPost")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) {

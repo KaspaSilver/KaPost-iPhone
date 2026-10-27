@@ -92,7 +92,7 @@ struct KaPostsFeedDrawer: View {
     private var panel: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
-                Text("KaPosts")
+                Text("KaPost")
                     .font(.largeTitle.weight(.bold))
                 Spacer(minLength: 0)
                 Button {

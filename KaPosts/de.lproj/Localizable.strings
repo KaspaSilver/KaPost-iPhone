@@ -815,7 +815,7 @@
 "This folder is empty." = "Dieser Ordner ist leer.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts, Öffentliche Chats und Kaspa Websites erscheinen hier, wenn sie nicht in deinem Dock sind. Verwalte sie unter Einstellungen > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost, Öffentliche Chats und Kaspa Websites erscheinen hier, wenn sie nicht in deinem Dock sind. Verwalte sie unter Einstellungen > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = ".kachat-Domains";
@@ -878,7 +878,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "Um mit jemandem zu chatten, tippe auf Chat erstellen und gib die Kaspa-Adresse oder den .kachat-Namen ein. Deine erste Nachricht kommt als Nachrichtenanfrage an, die angenommen werden kann. Für die meiste Privatsphäre aktiviere Privater Chat: Nichts verbindet euch on-chain, und deine Nachrichten werden sichtbar, sobald auch dort ein privater Chat mit dir gestartet wird.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "Zum Start werden 50 Kaspa empfohlen - genug, um dir einen .kachat-Namen zu sichern und eine Weile zu chatten. 5 Kaspa reichen für etwa 2500 Nachrichten.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "Deine öffentliche Chat-Identität. Lade sie mit einem kleinen Betrag auf, um Nachrichtengebühren und deinen .kachat-Namen zu bezahlen - schicke hierher nie Geld, das du ausgeben willst.";
-"KaPosts isn't available on Testnet yet" = "KaPosts ist im Testnet noch nicht verfügbar";
+"KaPost isn't available on Testnet yet" = "KaPost ist im Testnet noch nicht verfügbar";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "Für das Testnet gibt es keinen KaPost-Indexer. Schalte Testnet unter Einstellungen > Verbindung aus, um im Mainnet zu lesen und zu posten.";
 "Nextcloud is off while Testnet is on." = "Nextcloud ist aus, solange Testnet an ist.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "Backups, Sync, Medien und Anrufe über Nextcloud funktionieren nur im Mainnet, damit das Testnet dein Mainnet-Backup nie überschreiben kann. Schalte Testnet unter Einstellungen > Verbindung aus, und deine Nextcloud-Verbindung ist wieder wie zuvor da.";

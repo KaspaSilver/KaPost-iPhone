@@ -97,7 +97,7 @@ struct PublicChatRoomInfoView: View {
                 }
             } footer: {
                 Text(isCurated
-                     ? "A curated room, always in your list. Anyone on KaPosts or KaChat can post to it."
+                     ? "A curated room, always in your list. Anyone on KaPost or KaChat can post to it."
                      : "A room you added. Anyone who knows the name can post to it.")
             }
 
@@ -133,7 +133,7 @@ struct PublicChatRoomInfoView: View {
                     }
                 }
             } footer: {
-                Text("Sharing sends a link that opens this room in KaPosts, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room.")
+                Text("Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room.")
             }
 
             Section {

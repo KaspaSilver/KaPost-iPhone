@@ -53,7 +53,7 @@ final class KaPostsAPIClient: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .noIndexer: return "KaPosts isn't available on Testnet yet"
+            case .noIndexer: return "KaPost isn't available on Testnet yet"
             case .badURL: return "Invalid KaPost indexer URL"
             case .api(_, let message): return message
             case .badResponse: return "Unexpected response from the KaPost indexer"
@@ -1397,7 +1397,7 @@ final class KaPostsNotificationService {
         }
 
         let content = UNMutableNotificationContent()
-        content.title = "KaPosts"
+        content.title = "KaPost"
         content.body = "\(await actorName(for: address)) \(action)" + (text.isEmpty ? "" : ": \(text)")
         content.sound = .default
         content.threadIdentifier = "kaposts"

@@ -780,7 +780,7 @@
 "Group Messages" = "رسائل المجموعات";
 "Group Updates" = "تغييرات المجموعات";
 "Public Chats" = "المحادثات العامة";
-"KaPost Activity" = "نشاط KaPosts";
+"KaPost Activity" = "نشاط KaPost";
 "Chess Moves" = "نقلات الشطرنج";
 "Chess Games" = "مباريات الشطرنج";
 "Saved Records" = "السجلات المحفوظة";
@@ -867,7 +867,7 @@
 "This folder is empty." = "هذا المجلد فارغ.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "تظهر KaPosts والمحادثات العامة وKaspa Websites هنا عندما لا تكون في الشريط السفلي. أدِرها من الإعدادات > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "تظهر KaPost والمحادثات العامة وKaspa Websites هنا عندما لا تكون في الشريط السفلي. أدِرها من الإعدادات > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = "نطاقات ‎.kachat";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "للدردشة مع شخص ما، اضغط إنشاء محادثة وأدخل عنوان Kaspa الخاص به أو اسم ‎.kachat. تصل رسالتك الأولى إليه كطلب رسالة يمكنه قبوله. لأقصى خصوصية، فعّل المحادثة الخاصة: لا شيء يربطكما على السلسلة، وسيرى رسائلك عندما يبدأ هو أيضًا محادثة خاصة معك.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "يُنصح بـ 50 Kaspa للبدء - ما يكفي للحصول على اسم ‎.kachat والدردشة لفترة. تكفي 5 Kaspa لنحو 2500 رسالة.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "هويتك العامة للمراسلة. موّلها بمبلغ صغير لدفع رسوم الرسائل واسم ‎.kachat الخاص بك - لا ترسل إلى هنا أبدًا أموالًا تنوي إنفاقها.";
-"KaPosts isn't available on Testnet yet" = "منشورات KaPosts غير متاحة على الشبكة التجريبية بعد";
+"KaPost isn't available on Testnet yet" = "منشورات KaPost غير متاحة على الشبكة التجريبية بعد";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "لا يوجد مفهرس KaPost للشبكة التجريبية. أوقف الشبكة التجريبية من الإعدادات > الاتصال للقراءة والنشر على الشبكة الرئيسية.";
 "Nextcloud is off while Testnet is on." = "Nextcloud متوقف أثناء تشغيل الشبكة التجريبية.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "النسخ الاحتياطي والمزامنة والوسائط والمكالمات عبر Nextcloud تعمل على الشبكة الرئيسية فقط، فلا يمكن للشبكة التجريبية أبدًا الكتابة فوق نسختك الاحتياطية الرئيسية. أوقف الشبكة التجريبية من الإعدادات > الاتصال وسيعود اتصال Nextcloud كما كان.";

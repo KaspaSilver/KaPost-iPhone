@@ -867,7 +867,7 @@
 "This folder is empty." = "Thư mục này trống.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts, Trò chuyện công khai và Kaspa Websites xuất hiện ở đây khi không có trong dock. Quản lý chúng trong Cài đặt > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost, Trò chuyện công khai và Kaspa Websites xuất hiện ở đây khi không có trong dock. Quản lý chúng trong Cài đặt > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = "Tên miền .kachat";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "Để trò chuyện với ai đó, nhấn Tạo cuộc trò chuyện và nhập địa chỉ Kaspa hoặc tên .kachat của họ. Tin nhắn đầu tiên của bạn đến với họ dưới dạng Yêu cầu nhắn tin để họ chấp nhận. Để riêng tư nhất, bật Trò chuyện riêng tư: không có gì liên kết hai bạn trên chuỗi, và họ sẽ thấy tin nhắn khi cũng bắt đầu trò chuyện riêng tư với bạn.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "Nên có 50 Kaspa để bắt đầu - đủ để nhận một tên .kachat và trò chuyện một thời gian. 5 Kaspa đủ cho khoảng 2500 tin nhắn.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "Danh tính nhắn tin công khai của bạn. Nạp một ít để trả phí tin nhắn và tên .kachat - đừng bao giờ gửi vào đây số tiền bạn định chi tiêu.";
-"KaPosts isn't available on Testnet yet" = "KaPosts chưa khả dụng trên Testnet";
+"KaPost isn't available on Testnet yet" = "KaPost chưa khả dụng trên Testnet";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "Chưa có trình lập chỉ mục KaPost cho testnet. Tắt Testnet trong Cài đặt > Kết nối để đọc và đăng trên mainnet.";
 "Nextcloud is off while Testnet is on." = "Nextcloud tắt khi Testnet đang bật.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "Sao lưu, đồng bộ, tệp phương tiện và cuộc gọi qua Nextcloud chỉ hoạt động trên mainnet, nên testnet không bao giờ ghi đè bản sao lưu mainnet của bạn. Tắt Testnet trong Cài đặt > Kết nối và kết nối Nextcloud sẽ trở lại như cũ.";

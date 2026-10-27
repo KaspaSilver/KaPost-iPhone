@@ -780,7 +780,7 @@
 "Group Messages" = "Групповые сообщения";
 "Group Updates" = "Изменения в группах";
 "Public Chats" = "Публичные чаты";
-"KaPost Activity" = "Активность KaPosts";
+"KaPost Activity" = "Активность KaPost";
 "Chess Moves" = "Шахматные ходы";
 "Chess Games" = "Шахматные партии";
 "Saved Records" = "Сохранённые записи";
@@ -867,7 +867,7 @@
 "This folder is empty." = "Эта папка пуста.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts, Публичные чаты и Kaspa Websites появляются здесь, когда их нет в доке. Управляйте ими в Настройки > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost, Публичные чаты и Kaspa Websites появляются здесь, когда их нет в доке. Управляйте ими в Настройки > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = "Домены .kachat";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "Чтобы написать кому-то, нажмите «Создать чат» и введите его адрес Kaspa или имя .kachat. Ваше первое сообщение придёт ему как запрос на переписку, который можно принять. Для максимальной приватности включите «Приватный чат»: в блокчейне вас ничто не связывает, а ваши сообщения станут видны, когда собеседник тоже начнёт приватный чат с вами.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "Для начала рекомендуется 50 Kaspa — этого хватит, чтобы получить имя .kachat и какое-то время общаться. 5 Kaspa хватает примерно на 2500 сообщений.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "Ваша публичная личность для переписки. Пополните её небольшой суммой на комиссии за сообщения и на имя .kachat — никогда не отправляйте сюда деньги, которые собираетесь тратить.";
-"KaPosts isn't available on Testnet yet" = "KaPosts пока недоступен в тестовой сети";
+"KaPost isn't available on Testnet yet" = "KaPost пока недоступен в тестовой сети";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "Для тестовой сети нет индексатора KaPost. Выключите тестовую сеть в Настройки > Подключение, чтобы читать и публиковать в основной сети.";
 "Nextcloud is off while Testnet is on." = "Nextcloud отключён, пока включена тестовая сеть.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "Резервные копии, синхронизация, медиа и звонки через Nextcloud работают только в основной сети, поэтому тестовая сеть никогда не перезапишет вашу резервную копию. Выключите тестовую сеть в Настройки > Подключение, и подключение к Nextcloud вернётся как было.";

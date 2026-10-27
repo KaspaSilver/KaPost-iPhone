@@ -200,7 +200,7 @@
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64/Headers";
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64_x86_64-simulator/Headers";
 				INFOPLIST_FILE = KaPosts/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = KaPosts;
+				INFOPLIST_KEY_CFBundleDisplayName = KaPost;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -238,7 +238,7 @@
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64/Headers";
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64_x86_64-simulator/Headers";
 				INFOPLIST_FILE = KaPosts/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = KaPosts;
+				INFOPLIST_KEY_CFBundleDisplayName = KaPost;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

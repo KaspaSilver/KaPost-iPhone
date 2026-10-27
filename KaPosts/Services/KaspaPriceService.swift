@@ -65,6 +65,15 @@ final class KaspaPriceService: ObservableObject {
         refreshPrice()
     }
 
+    /// 1 KAS in `currency`: the live price for the app's currency, else the last one this
+    /// device saw for that currency (nil if it never fetched one).
+    func price(in currency: AppCurrency) -> Double? {
+        if currency == currentCurrency { return currentPriceUsd }
+        guard let data = UserDefaults.standard.data(forKey: priceKey(currency)),
+              let saved = try? JSONDecoder().decode(PersistedPrice.self, from: data) else { return nil }
+        return saved.price
+    }
+
     private struct PersistedPrice: Codable {
         let price: Double
         let change24h: Double?

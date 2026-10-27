@@ -60,12 +60,12 @@ struct KaChatInternalLinkCardView: View {
             // A reply or a quote is still a KaPosts post, but saying which one it is explains
             // why the text may read as half a conversation.
             switch kaPostEntry?.action {
-            case "reply": return "KaPosts reply"
-            case "quote": return "KaPosts quote"
-            default: return "KaPosts"
+            case "reply": return "KaPost reply"
+            case "quote": return "KaPost quote"
+            default: return "KaPost"
             }
         case .publicChatRoom: return "Public Chat Room"
-        case .profile: return "KaPosts Profile"
+        case .profile: return "KaPost Profile"
         case .paymentRequest: return "Payment Request"
         }
     }
@@ -73,7 +73,7 @@ struct KaChatInternalLinkCardView: View {
     private var title: String {
         switch match.link {
         case .kaPost:
-            return kaPostEntry?.authorName ?? "KaPosts post"
+            return kaPostEntry?.authorName ?? "KaPost post"
         case .publicChatRoom(let channel):
             return "#\(channel)"
         case .profile(let address):
@@ -89,11 +89,11 @@ struct KaChatInternalLinkCardView: View {
     private var subtitle: String {
         switch match.link {
         case .kaPost:
-            guard let entry = kaPostEntry else { return "Tap to open this post in KaPosts." }
+            guard let entry = kaPostEntry else { return "Tap to open this post in KaPost." }
             // A quote with no added comment is a repost: there is no text to show, so say what
             // it is rather than leaving the card looking half-loaded.
             return entry.snippet.isEmpty
-                ? (entry.action == "quote" ? "Reposted a post." : "Tap to open this post in KaPosts.")
+                ? (entry.action == "quote" ? "Reposted a post." : "Tap to open this post in KaPost.")
                 : entry.snippet
         case .publicChatRoom(let channel):
             // Curated rooms and rooms already in the list just open; anything else is created
@@ -105,7 +105,7 @@ struct KaChatInternalLinkCardView: View {
                 : "Tap to join this public chat room."
         case .profile(let address):
             let isContact = ContactsManager.shared.contacts.contains { $0.address.lowercased() == address }
-            return isContact ? "Tap to open your chat." : "Tap to see their KaPosts profile."
+            return isContact ? "Tap to open your chat." : "Tap to see their KaPost profile."
         case .paymentRequest(let request):
             let action = request.isOwn ? AppLocalization.string("Your payment request. Tap to view.") : AppLocalization.string("Tap to pay.")
             var lines: [String] = []
@@ -183,7 +183,7 @@ struct KaChatInternalLinkCardView: View {
         // matches LinkPreviewCardView's identical pairing.
         .onTapGesture(count: 2) { onDoubleTap?() }
         .onTapGesture { KaChatLinkRouter.open(match.link) }
-        .messageActions(title: "KaPosts Link", preview: match.url.absoluteString) { linkActions }
+        .messageActions(title: "KaPost Link", preview: match.url.absoluteString) { linkActions }
         .task(id: kaPostId) {
             guard let kaPostId else { return }
             await kaPostCache.load(postId: kaPostId)
@@ -192,7 +192,7 @@ struct KaChatInternalLinkCardView: View {
 
     private var linkActions: [MessageAction] {
         var actions: [MessageAction] = [
-            MessageAction(title: "Open in KaPosts", subtitle: "Opens it right here in the app.", systemImage: "arrow.up.forward.app") {
+            MessageAction(title: "Open in KaPost", subtitle: "Opens it right here in the app.", systemImage: "arrow.up.forward.app") {
                 KaChatLinkRouter.open(match.link)
             },
             .copyLink { UIPasteboard.general.string = match.url.absoluteString }

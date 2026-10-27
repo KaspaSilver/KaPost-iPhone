@@ -780,7 +780,7 @@
 "Group Messages" = "הודעות קבוצתיות";
 "Group Updates" = "שינויים בקבוצות";
 "Public Chats" = "צ'אטים ציבוריים";
-"KaPost Activity" = "פעילות KaPosts";
+"KaPost Activity" = "פעילות KaPost";
 "Chess Moves" = "מהלכי שחמט";
 "Chess Games" = "משחקי שחמט";
 "Saved Records" = "רשומות שמורות";
@@ -867,7 +867,7 @@
 "This folder is empty." = "התיקייה הזו ריקה.";
 
 /* Kaspa Hub empty state (Swap off) */
-"KaPosts, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPosts, צ'אטים ציבוריים ו-Kaspa Websites מופיעים כאן כשהם לא במעגן שלכם. נהלו אותם בהגדרות > Customization > Customize Dock.";
+"KaPost, Public Chats and Kaspa Websites appear here when they are not in your dock. Manage them in Settings > Customization > Customize Dock." = "KaPost, צ'אטים ציבוריים ו-Kaspa Websites מופיעים כאן כשהם לא במעגן שלכם. נהלו אותם בהגדרות > Customization > Customize Dock.";
 
 /* 5.2: an address's .kachat Domains tab */
 ".kachat Domains" = "דומיינים של ‎.kachat";
@@ -930,7 +930,7 @@
 "To chat with someone, press Create Chat and enter their Kaspa address or .kachat name. Your first message reaches them as a Message Request they can accept. For the most privacy, turn on Private Chat: nothing links you on chain, and they see your messages once they start a private chat with you too." = "כדי לשוחח עם מישהו, הקישו צור צ'אט והזינו את כתובת ה-Kaspa או את שם ה-‎.kachat שלו. ההודעה הראשונה שלכם תגיע אליו כבקשת הודעה שאפשר לאשר. לפרטיות מרבית, הפעילו צ'אט פרטי: שום דבר לא מקשר ביניכם בשרשרת, והוא יראה את ההודעות כשגם הוא יפתח איתכם צ'אט פרטי.";
 "50 Kaspa is recommended to get started - enough to claim a .kachat name and chat for a while. 5 Kaspa is enough for about 2500 messages." = "מומלץ להתחיל עם 50 Kaspa - מספיק כדי לקבל שם ‎.kachat ולשוחח לזמן מה. 5 Kaspa מספיקים לכ-2500 הודעות.";
 "Your public messaging identity. Fund it with a small amount to pay message fees and for your .kachat name - never send money here that you intend to spend." = "הזהות הציבורית שלכם להודעות. טענו סכום קטן כדי לשלם עמלות הודעה ואת שם ה-‎.kachat שלכם - לעולם אל תשלחו לכאן כסף שאתם מתכוונים להוציא.";
-"KaPosts isn't available on Testnet yet" = "KaPosts עדיין לא זמין ברשת הבדיקה";
+"KaPost isn't available on Testnet yet" = "KaPost עדיין לא זמין ברשת הבדיקה";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "אין אינדקסר KaPost לרשת הבדיקה. כבה את רשת הבדיקה בהגדרות > חיבור כדי לקרוא ולפרסם ברשת הראשית.";
 "Nextcloud is off while Testnet is on." = "Nextcloud כבוי כל עוד רשת הבדיקה פועלת.";
 "Backups, sync, media and calls through Nextcloud work on mainnet only, so testnet can never overwrite your mainnet backup. Turn off Testnet in Settings > Connection and your Nextcloud connection comes back as it was." = "גיבויים, סנכרון, מדיה ושיחות דרך Nextcloud פועלים רק ברשת הראשית, כך שרשת הבדיקה לעולם לא תדרוס את הגיבוי של הרשת הראשית. כבה את רשת הבדיקה בהגדרות > חיבור והחיבור ל-Nextcloud יחזור כפי שהיה.";

@@ -154,7 +154,7 @@ struct CreatePaymentRequestView: View {
                         .disabled(!canMake || isWorking)
                     }
 
-                    Text("Anyone who opens or pastes it in KaPosts or KaChat gets Send Kaspa with this filled in, and sees it was made by your address (signed with its key).")
+                    Text("Anyone who opens or pastes it in KaPost or KaChat gets Send Kaspa with this filled in, and sees it was made by your address (signed with its key).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)

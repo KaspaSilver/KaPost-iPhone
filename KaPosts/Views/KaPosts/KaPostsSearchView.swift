@@ -128,7 +128,7 @@ struct KaPostsSearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.scaled(size: 40))
                 .foregroundColor(.secondary)
-            Text("Search KaPosts")
+            Text("Search KaPost")
                 .font(.headline)
             Text("Find posts by what they say, and people by their name or domain. Only people who have posted appear.")
                 .font(.subheadline)

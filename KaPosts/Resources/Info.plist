@@ -24,11 +24,11 @@
 	<key>KaChatIsRelease</key>
 	<string>$(KAPOSTS_IS_RELEASE)</string>
 	<key>NSCameraUsageDescription</key>
-	<string>KaPosts uses the camera to scan QR codes and to take photos for your posts and profile.</string>
+	<string>KaPost uses the camera to scan QR codes and to take photos for your posts and profile.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID is used to unlock your seed phrase and sign back in, when enabled in Settings.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>KaPosts uses the microphone to record voice messages in public chats.</string>
+	<string>KaPost uses the microphone to record voice messages in public chats.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>

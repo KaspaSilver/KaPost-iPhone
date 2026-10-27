@@ -2069,7 +2069,7 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .chats: return "Chats"
         case .swap: return "Swap"
         case .profile: return "Profile"
-        case .kaposts: return "KaPosts"
+        case .kaposts: return "KaPost"
         case .publicChats: return "Public Chats"
         // Short enough for a dock label. `ecosystemTitle` carries the full name, which is what
         // the Ecosystem grid and the screen itself show.
@@ -2410,6 +2410,16 @@ struct AppSettings: Codable {
     var showFeeEstimate: Bool
     /// KaPosts > Settings: the tip a tap on "Tip" sends at once, in sompi. nil = ask every time.
     var kaPostsDefaultTipSompi: UInt64?
+    /// The same default tip set in a currency instead (KaPosts > Settings, the unit tapped from
+    /// KAS to the currency): each tip sends what this is worth in KAS at the price of the moment.
+    /// Only one of this and `kaPostsDefaultTipSompi` is set.
+    var kaPostsDefaultTipFiat: Double?
+    /// The currency `kaPostsDefaultTipFiat` is in (the app's currency when it was set).
+    var kaPostsDefaultTipFiatCurrency: AppCurrency?
+    /// KaPosts > Settings > Cool down before post: every KaPosts action (post, comment, like,
+    /// repost, vote, edit, delete) waits 5 seconds with an Undo before it goes on chain. Off,
+    /// they go at once. On by default.
+    var kaPostsCooldownEnabled: Bool
     /// Optional (unlike most fields here) - this struct has no custom `init(from:)`, so a newly
     /// added *required* field would fail this whole struct's decode for anyone with a
     /// pre-existing settings blob saved before it existed, silently resetting every other setting
@@ -2709,6 +2719,9 @@ struct AppSettings: Codable {
         case higherQualityPhotos
         case showFeeEstimate
         case kaPostsDefaultTipSompi
+        case kaPostsDefaultTipFiat
+        case kaPostsDefaultTipFiatCurrency
+        case kaPostsCooldownEnabled
         case quickReactionEmojis
         case appearance
         case language
@@ -2777,6 +2790,9 @@ struct AppSettings: Codable {
         higherQualityPhotos: Bool = false,
         showFeeEstimate: Bool = true,
         kaPostsDefaultTipSompi: UInt64? = nil,
+        kaPostsDefaultTipFiat: Double? = nil,
+        kaPostsDefaultTipFiatCurrency: AppCurrency? = nil,
+        kaPostsCooldownEnabled: Bool = true,
         quickReactionEmojis: [String]? = nil,
         appearance: AppAppearance = .system,
         language: AppLanguage = .system,
@@ -2834,6 +2850,9 @@ struct AppSettings: Codable {
         self.higherQualityPhotos = higherQualityPhotos
         self.showFeeEstimate = showFeeEstimate
         self.kaPostsDefaultTipSompi = kaPostsDefaultTipSompi
+        self.kaPostsDefaultTipFiat = kaPostsDefaultTipFiat
+        self.kaPostsDefaultTipFiatCurrency = kaPostsDefaultTipFiatCurrency
+        self.kaPostsCooldownEnabled = kaPostsCooldownEnabled
         self.quickReactionEmojis = quickReactionEmojis
         self.appearance = appearance
         self.language = language
@@ -2919,6 +2938,9 @@ struct AppSettings: Codable {
         higherQualityPhotos = try container.decodeIfPresent(Bool.self, forKey: .higherQualityPhotos) ?? false
         showFeeEstimate = try container.decodeIfPresent(Bool.self, forKey: .showFeeEstimate) ?? true
         kaPostsDefaultTipSompi = try container.decodeIfPresent(UInt64.self, forKey: .kaPostsDefaultTipSompi)
+        kaPostsDefaultTipFiat = try container.decodeIfPresent(Double.self, forKey: .kaPostsDefaultTipFiat)
+        kaPostsDefaultTipFiatCurrency = try? container.decodeIfPresent(AppCurrency.self, forKey: .kaPostsDefaultTipFiatCurrency)
+        kaPostsCooldownEnabled = try container.decodeIfPresent(Bool.self, forKey: .kaPostsCooldownEnabled) ?? true
         quickReactionEmojis = try container.decodeIfPresent([String].self, forKey: .quickReactionEmojis)
         appearance = try container.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system
         language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
@@ -3063,6 +3085,9 @@ struct AppSettings: Codable {
         try container.encode(higherQualityPhotos, forKey: .higherQualityPhotos)
         try container.encode(showFeeEstimate, forKey: .showFeeEstimate)
         try container.encodeIfPresent(kaPostsDefaultTipSompi, forKey: .kaPostsDefaultTipSompi)
+        try container.encodeIfPresent(kaPostsDefaultTipFiat, forKey: .kaPostsDefaultTipFiat)
+        try container.encodeIfPresent(kaPostsDefaultTipFiatCurrency, forKey: .kaPostsDefaultTipFiatCurrency)
+        try container.encode(kaPostsCooldownEnabled, forKey: .kaPostsCooldownEnabled)
         try container.encodeIfPresent(quickReactionEmojis, forKey: .quickReactionEmojis)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(language, forKey: .language)

@@ -848,13 +848,78 @@ private struct KachatComingSoonPill: View {
 
 // MARK: - An address's .kachat names
 
-/// A wallet's Domains tab: its `.kachat` names. KaPosts lives in the KaChat ecosystem, so
-/// `.kachat` is the only name service it reads - no .kas (KNS), .k (dotk) or .kaspa cards.
+/// A wallet's Domains tab: the `.kachat` names the address holds, to look at only. Names are
+/// registered, renewed, sold and edited in KaChat Wallet, not here, so the tab says so and opens
+/// that app. `.kachat` is the only name service KaPosts reads - no .kas, .k or .kaspa.
 struct AddressDomainsTab: View {
     let address: String
 
+    /// nil while loading.
+    @State private var names: [String]?
+    @State private var walletAppMissing = false
+
     var body: some View {
-        KachatAddressDomainsList(address: address)
+        ScrollView {
+            VStack(spacing: 16) {
+                manageNote
+                if let names {
+                    if names.isEmpty {
+                        Text("No .kachat names on this address.")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                    } else {
+                        ForEach(names, id: \.self) { name in
+                            DomainNameCardView(title: name)
+                        }
+                    }
+                } else {
+                    ProgressView()
+                        .padding(.vertical, 24)
+                }
+            }
+            .padding()
+        }
+        .refreshable { await load() }
+        .task(id: address) { await load() }
+    }
+
+    private var manageNote: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Manage your domains in KaChat Wallet", systemImage: "wallet.bifold")
+                .font(.headline)
+            Text("KaPost shows the .kachat names on this address. To register, renew, sell or edit them, use the KaChat Wallet app.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Button {
+                guard let url = URL(string: "kachatwallet://") else { return }
+                UIApplication.shared.open(url) { opened in
+                    walletAppMissing = !opened
+                }
+            } label: {
+                Text("Open KaChat Wallet")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.accentColor))
+            }
+            .buttonStyle(.plain)
+            if walletAppMissing {
+                Text("KaChat Wallet isn't installed on this iPhone.")
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+    }
+
+    private func load() async {
+        let normalized = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let held = await NameServicesClient.shared.kachatNames(of: [normalized])
+        names = (held[normalized] ?? []).map(\.display)
     }
 }
 
