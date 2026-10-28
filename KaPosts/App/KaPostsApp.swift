@@ -423,9 +423,9 @@ enum KaChatLinkRouter {
             KaPostsDeepLink.pendingProfileAddress = normalized
             NotificationCenter.default.post(name: .openKaPostsProfile, object: nil)
         case .paymentRequest(let request):
-            // Paid in KaPay; without it, Send Kaspa here with it filled in
+            // Paid in KaPay; your own and a chat payment open here
             // (`PaymentRequestSheetPresenter`, on the dock).
-            KaPayHandoff.pay(request) { PaymentRequestRouter.shared.pending = request }
+            KaPayHandoff.pay(request, inApp: { PaymentRequestRouter.shared.pending = request })
         }
     }
 

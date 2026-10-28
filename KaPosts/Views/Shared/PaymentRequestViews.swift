@@ -440,20 +440,24 @@ struct PaymentRequestSheetPresenter: ViewModifier {
 /// Send, filled in, through KaPay's own scheme (`kapay://pay/...`, the same tail as
 /// `kachat://pay/`). Two stay here: your own (nothing to pay - `OwnPaymentRequestView`), and one
 /// asking for a chat payment (`toChattingAddress`, made in a KaChat 1:1 chat), paid as an
-/// encrypted chat payment so it lands in the chat with them - KaPay can't. Without KaPay
-/// installed, `fallback` runs - KaPost's own Send Kaspa. KaChat follows the same rule.
+/// encrypted chat payment so it lands in the chat with them - KaPay can't; `inApp` opens those.
+/// Without KaPay installed, the App Store opens to get it. KaChat follows the same rule.
 enum KaPayHandoff {
     static let scheme = "kapay"
+    /// Where a request goes when KaPay isn't installed. KaPay isn't listed yet, so this is an App
+    /// Store search for it; swap in its page (`https://apps.apple.com/app/id<KaPay's id>`) once
+    /// it is.
+    static let appStoreURL = URL(string: "https://apps.apple.com/search?term=KaPay")!
 
     @MainActor
-    static func pay(_ request: PaymentRequest, fallback: @escaping () -> Void) {
+    static func pay(_ request: PaymentRequest, inApp: @escaping () -> Void) {
         guard !request.isOwn, !request.toChattingAddress,
               let url = URL(string: "\(scheme)://pay/\(request.linkTail)") else {
-            fallback()
+            inApp()
             return
         }
         UIApplication.shared.open(url) { opened in
-            if !opened { fallback() }
+            if !opened { UIApplication.shared.open(appStoreURL) }
         }
     }
 }
@@ -483,9 +487,9 @@ struct PaymentRequestSheet: View {
 
 /// A payment request link in a KaPost, drawn as a card instead of the link's long text: the
 /// amount (and what it comes to in the app's currency), the memo, who signed it, and a Pay
-/// button. A tap pays it in KaPay (`KaPayHandoff`); without KaPay it opens Send Kaspa here, from
-/// the card itself, so it works inside threads and profiles (full-screen covers the dock's sheet
-/// can't show over) too.
+/// button. A tap pays it in KaPay (`KaPayHandoff`). What stays in KaPost (your own request, a
+/// chat payment) opens from the card itself, so it works inside threads and profiles
+/// (full-screen covers the dock's sheet can't show over) too.
 struct KaPostPaymentRequestCard: View {
     let request: PaymentRequest
 
@@ -509,7 +513,7 @@ struct KaPostPaymentRequestCard: View {
         let isOwn = request.isOwn
         Button {
             Haptics.impact(.light)
-            KaPayHandoff.pay(request) { presented = request }
+            KaPayHandoff.pay(request, inApp: { presented = request })
         } label: {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
@@ -591,7 +595,8 @@ struct KaPostPaymentRequestCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityHint(Text(isOwn ? "Shows your payment request." : "Opens Send Kaspa to pay it."))
+        .accessibilityHint(Text(isOwn ? "Shows your payment request."
+                               : (request.toChattingAddress ? "Opens Send Kaspa to pay it." : "Opens KaPay to pay it.")))
         .contextMenu {
             Button {
                 UIPasteboard.general.string = request.shareURLString
