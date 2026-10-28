@@ -423,8 +423,9 @@ enum KaChatLinkRouter {
             KaPostsDeepLink.pendingProfileAddress = normalized
             NotificationCenter.default.post(name: .openKaPostsProfile, object: nil)
         case .paymentRequest(let request):
-            // Send Kaspa with it filled in (`PaymentRequestSheetPresenter`, on the dock).
-            PaymentRequestRouter.shared.pending = request
+            // Paid in KaPay; without it, Send Kaspa here with it filled in
+            // (`PaymentRequestSheetPresenter`, on the dock).
+            KaPayHandoff.pay(request) { PaymentRequestRouter.shared.pending = request }
         }
     }
 

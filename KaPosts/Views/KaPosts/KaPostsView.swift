@@ -5403,12 +5403,27 @@ private struct KaPostCellView: View {
         translation.displayText(for: translationKey, original: post.text)
     }
 
+    /// A payment request link in the post: drawn as a card (`KaPostPaymentRequestCard`) under
+    /// the text, and left out of the text itself.
+    private var paymentRequestLink: (request: PaymentRequest, matchedText: String)? {
+        guard let match = KaChatInternalLink.match(in: displayedText),
+              case .paymentRequest(let request) = match.link else { return nil }
+        return (request, match.matchedText)
+    }
+
+    /// The text as drawn: the post without its payment request link.
+    private var bodyText: String {
+        guard let link = paymentRequestLink else { return displayedText }
+        return displayedText.replacingOccurrences(of: link.matchedText, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Long enough that the feed should fold it behind "Show more" (X-style ~280-char threshold,
     /// or a wall of newlines). Measured on what is actually rendered, so a translation that runs
     /// longer than its original still folds.
     private var isLongPost: Bool {
         // The newline count only decides short posts, so it is only counted for them.
-        displayedText.count > 280 || displayedText.prefix(281).filter { $0 == "\n" }.count >= 8
+        bodyText.count > 280 || bodyText.prefix(281).filter { $0 == "\n" }.count >= 8
     }
 
     /// True while a long post is folded to eight lines.
@@ -5421,8 +5436,9 @@ private struct KaPostCellView: View {
     /// per cell, per body pass. Eight lines never need more than the first few hundred
     /// characters, so a folded cell renders a prefix and the full text only once expanded.
     private var layoutText: String {
-        guard isFolded, displayedText.count > 1_200 else { return displayedText }
-        var cut = String(displayedText.prefix(1_200))
+        let text = bodyText
+        guard isFolded, text.count > 1_200 else { return text }
+        var cut = String(text.prefix(1_200))
         // Never cut a markdown span or a link mid-token: fall back to the last whitespace.
         if let space = cut.lastIndex(where: { $0.isWhitespace }), cut.distance(from: cut.startIndex, to: space) > 600 {
             cut = String(cut[..<space])
@@ -5703,48 +5719,50 @@ private struct KaPostCellView: View {
                 // Text-only posts, but URLs are TAPPABLE: tapping a link opens a Copy/Open
                 // option menu (never auto-opens - OpenURLAction intercepts). No previews, no
                 // photos, no markdown - just detected links styled accent+underline.
-                Text(Self.linkified(layoutText))
-                    .font(isFocused ? .title3 : .body)
-                    .foregroundColor(.primary)
-                    .tint(.accentColor)
-                    .environment(\.openURL, OpenURLAction { url in
-                        // @mention taps open the profile directly - the Copy/Open dialog
-                        // (showing a raw kachat-mention:// string) is only for real URLs.
-                        if url.scheme == "kachat-mention" {
-                            // the post's signed mentions ride along, so the tap opens who the
-                            // author meant (IOS-068)
-                            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                            if !post.mentionedPubkeys.isEmpty {
-                                components?.queryItems = [URLQueryItem(name: "pk", value: post.mentionedPubkeys.joined(separator: ","))]
+                if !layoutText.isEmpty {
+                    Text(Self.linkified(layoutText))
+                        .font(isFocused ? .title3 : .body)
+                        .foregroundColor(.primary)
+                        .tint(.accentColor)
+                        .environment(\.openURL, OpenURLAction { url in
+                            // @mention taps open the profile directly - the Copy/Open dialog
+                            // (showing a raw kachat-mention:// string) is only for real URLs.
+                            if url.scheme == "kachat-mention" {
+                                // the post's signed mentions ride along, so the tap opens who the
+                                // author meant (IOS-068)
+                                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                                if !post.mentionedPubkeys.isEmpty {
+                                    components?.queryItems = [URLQueryItem(name: "pk", value: post.mentionedPubkeys.joined(separator: ","))]
+                                }
+                                parentOpenURL(components?.url ?? url)
+                                return .handled
                             }
-                            parentOpenURL(components?.url ?? url)
+                            tappedLinkURL = url
                             return .handled
+                        })
+                        .lineLimit(isFolded ? 8 : nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        // Selectable ONLY in the post you tapped into. Anywhere else the long press
+                        // and the drag belong to opening the post, and a card that both navigates and
+                        // selects does neither reliably - which is why holding a feed post offered
+                        // copy-the-whole-thing instead of letting you highlight part of it.
+                        .selectableText(isFocused)
+                        // Half sheet rather than a confirmation dialog - see LinkActionsSheet.
+                        .sheet(item: Binding(
+                            get: { tappedLinkURL.map(IdentifiedURL.init) },
+                            set: { if $0 == nil { tappedLinkURL = nil } }
+                        )) { wrapper in
+                            LinkActionsSheet(
+                                url: wrapper.url,
+                                // A kachat.app link inside a post opens that post here, in-app.
+                                onOpen: { KaChatLinkRouter.openAnywhere(wrapper.url) },
+                                onCopy: {
+                                    UIPasteboard.general.string = wrapper.url.absoluteString
+                                    Haptics.success()
+                                }
+                            )
                         }
-                        tappedLinkURL = url
-                        return .handled
-                    })
-                    .lineLimit(isFolded ? 8 : nil)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // Selectable ONLY in the post you tapped into. Anywhere else the long press
-                    // and the drag belong to opening the post, and a card that both navigates and
-                    // selects does neither reliably - which is why holding a feed post offered
-                    // copy-the-whole-thing instead of letting you highlight part of it.
-                    .selectableText(isFocused)
-                    // Half sheet rather than a confirmation dialog - see LinkActionsSheet.
-                    .sheet(item: Binding(
-                        get: { tappedLinkURL.map(IdentifiedURL.init) },
-                        set: { if $0 == nil { tappedLinkURL = nil } }
-                    )) { wrapper in
-                        LinkActionsSheet(
-                            url: wrapper.url,
-                            // A kachat.app link inside a post opens that post here, in-app.
-                            onOpen: { KaChatLinkRouter.openAnywhere(wrapper.url) },
-                            onCopy: {
-                                UIPasteboard.general.string = wrapper.url.absoluteString
-                                Haptics.success()
-                            }
-                        )
-                    }
+                }
                 if truncatesLongText && isLongPost {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { isExpandedInline.toggle() }
@@ -5754,6 +5772,11 @@ private struct KaPostCellView: View {
                             .foregroundColor(.accentColor)
                     }
                     .buttonStyle(.plain)
+                }
+                // A payment request link: a card with a Pay button, not the link's text.
+                if let link = paymentRequestLink {
+                    KaPostPaymentRequestCard(request: link.request)
+                        .padding(.top, 4)
                 }
                 translateAffordance
 

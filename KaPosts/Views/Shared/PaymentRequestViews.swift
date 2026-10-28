@@ -430,20 +430,176 @@ struct PaymentRequestSheetPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(item: $router.pending) { request in
-                if request.isOwn {
-                    OwnPaymentRequestView(request: request)
-                        .environmentObject(settingsViewModel)
-                } else if let wallet = WalletManager.shared.currentWallet {
-                    WithdrawKaspaView(
-                        fromAddress: wallet.publicAddress,
-                        availableBalanceSompi: wallet.balanceSompi,
-                        paymentRequest: request
-                    )
-                    .environmentObject(ChatService.shared)
-                    .environmentObject(ContactsManager.shared)
-                    .environmentObject(WalletManager.shared)
+                PaymentRequestSheet(request: request)
                     .environmentObject(settingsViewModel)
+            }
+    }
+}
+
+/// Someone else's payment request is paid in KaPay (KaChat's wallet app): it opens there on
+/// Send, filled in, through KaPay's own scheme (`kapay://pay/...`, the same tail as
+/// `kachat://pay/`). Without KaPay installed, `fallback` runs - KaPost's own Send Kaspa.
+/// Your own request stays here (`OwnPaymentRequestView`): there is nothing to pay.
+enum KaPayHandoff {
+    static let scheme = "kapay"
+
+    @MainActor
+    static func pay(_ request: PaymentRequest, fallback: @escaping () -> Void) {
+        guard !request.isOwn, let url = URL(string: "\(scheme)://pay/\(request.linkTail)") else {
+            fallback()
+            return
+        }
+        UIApplication.shared.open(url) { opened in
+            if !opened { fallback() }
+        }
+    }
+}
+
+/// What opening a payment request shows: Send Kaspa filled in with it, or, for your own
+/// request, its details and link.
+struct PaymentRequestSheet: View {
+    let request: PaymentRequest
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+
+    var body: some View {
+        if request.isOwn {
+            OwnPaymentRequestView(request: request)
+        } else if let wallet = WalletManager.shared.currentWallet {
+            WithdrawKaspaView(
+                fromAddress: wallet.publicAddress,
+                availableBalanceSompi: wallet.balanceSompi,
+                paymentRequest: request
+            )
+            .environmentObject(ChatService.shared)
+            .environmentObject(ContactsManager.shared)
+            .environmentObject(WalletManager.shared)
+            .environmentObject(settingsViewModel)
+        }
+    }
+}
+
+/// A payment request link in a KaPost, drawn as a card instead of the link's long text: the
+/// amount (and what it comes to in the app's currency), the memo, who signed it, and a Pay
+/// button. A tap pays it in KaPay (`KaPayHandoff`); without KaPay it opens Send Kaspa here, from
+/// the card itself, so it works inside threads and profiles (full-screen covers the dock's sheet
+/// can't show over) too.
+struct KaPostPaymentRequestCard: View {
+    let request: PaymentRequest
+
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @ObservedObject private var priceService = KaspaPriceService.shared
+    @State private var presented: PaymentRequest?
+
+    private var fiatText: String? {
+        let currency = settingsViewModel.settings.currency
+        guard let price = priceService.price(in: currency), price > 0 else { return nil }
+        return "\u{2248} " + formatFiatAmount(Double(request.amountSompi) / 100_000_000 * price, currency: currency)
+    }
+
+    private var creatorName: String? {
+        guard let creator = request.creator else { return nil }
+        if let name = KachatLive.identityName(creator) { return name }
+        return ContactsManager.shared.displayName(for: creator)
+    }
+
+    var body: some View {
+        let isOwn = request.isOwn
+        Button {
+            Haptics.impact(.light)
+            KaPayHandoff.pay(request) { presented = request }
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image("KaspaLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40, height: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Payment Request")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.accentColor)
+                            .textCase(.uppercase)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(verbatim: "\(request.amountText) \(KaspaUnit.symbol)")
+                                .font(.system(.title2, design: .rounded).weight(.bold))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                            if let fiatText {
+                                Text(verbatim: fiatText)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        if !request.memo.isEmpty {
+                            Text(verbatim: request.memo)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
+                                .padding(.top, 2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 8) {
+                    if let creatorName {
+                        Label {
+                            Text(verbatim: creatorName)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        } icon: {
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundColor(.green)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    } else {
+                        Label("Not signed", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.orange)
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 5) {
+                        Image(systemName: isOwn ? "eye" : "arrow.up.circle.fill")
+                        Text(isOwn ? "View" : "Pay")
+                    }
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(isOwn ? .accentColor : .white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(isOwn ? Color.accentColor.opacity(0.15) : Color.accentColor))
+                    .fixedSize()
                 }
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(Text(isOwn ? "Shows your payment request." : "Opens KaPay to pay it."))
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = request.shareURLString
+                Haptics.success()
+            } label: {
+                Label("Copy Link", systemImage: "doc.on.doc")
+            }
+        }
+        .sheet(item: $presented) { request in
+            PaymentRequestSheet(request: request)
+                .environmentObject(settingsViewModel)
+        }
     }
 }

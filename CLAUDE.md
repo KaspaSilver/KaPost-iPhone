@@ -95,6 +95,10 @@ message" banner. KaPosts registers with `watched_addresses: []` (main address on
 service is asked to send KaPosts' topic only `kaposts` and `broadcast` pushes
 (`docs/KAPOSTS_PUSH_KINDS.md` in the indexer repo).
 
+Payment requests (`kachat://pay/...`, `https://kachat.app/pay/...`) are paid in KaPay, KaChat's
+wallet app: a post shows the link as a card (`KaPostPaymentRequestCard`), and Pay opens
+`kapay://pay/<same tail>` (`KaPayHandoff`). Without KaPay installed, KaPost's own Send Kaspa opens.
+
 Links: KaPosts opens `kaposts://` (same targets as `kachat://`). Shared links still read
 `kachat://` / `https://kachat.app/post/...`, which open KaChat; for them to open KaPosts the
 kachat.app apple-app-site-association needs KaPosts' app ID on `/post/*` and `/broadcast/*`, and

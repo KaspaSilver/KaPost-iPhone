@@ -116,13 +116,11 @@ struct ChattingAddressManageView: View {
                 selection: $selectedTab
             )
 
-            switch selectedTab {
-            case .transactions:
-                transactionsList
-            case .utxos:
-                utxosList
-            case .kachatDomains:
-                AddressDomainsTab(address: address)
+            // Swipe sideways between the tabs, like Connection Settings.
+            KaPostsFeedPager(pageCount: Tab.allCases.count, selection: selectedTabIndex) {
+                ForEach(Tab.allCases, id: \.self) { tab in
+                    page(for: tab)
+                }
             }
         }
         .navigationTitle(title)
@@ -136,32 +134,10 @@ struct ChattingAddressManageView: View {
             ChattingAddressPublicKeyView(address: address)
         }
         .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 12) {
-                Button {
-                    showReceiveSheet = true
-                } label: {
-                    Label("Receive", systemImage: "qrcode")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .foregroundColor(.black)
-                        .background(Capsule().fill(Color.accentColor))
-                }
-                Button {
-                    showSendSheet = true
-                } label: {
-                    Label("Send", systemImage: "arrow.up.circle.fill")
-                        .font(.subheadline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .foregroundColor(.black)
-                        .background(Capsule().fill(Color.accentColor))
-                }
-                .disabled(balanceSompi == 0)
-                .opacity(balanceSompi == 0 ? 0.5 : 1)
+            // Receive and Send belong to the history; the UTXOs and Domains tabs don't show them.
+            if selectedTab == .transactions {
+                sendReceiveButtons
             }
-            .padding(.horizontal)
-            .padding(.bottom, 16)
         }
         .sheet(isPresented: $showReceiveSheet) {
             NavigationStack {
@@ -217,6 +193,54 @@ struct ChattingAddressManageView: View {
             await loadTransactions()
             await loadUtxos()
         }
+    }
+
+    private var selectedTabIndex: Binding<Int> {
+        Binding(
+            get: { Tab.allCases.firstIndex(of: selectedTab) ?? 0 },
+            set: { selectedTab = Tab.allCases[$0] }
+        )
+    }
+
+    @ViewBuilder
+    private func page(for tab: Tab) -> some View {
+        switch tab {
+        case .transactions:
+            transactionsList
+        case .utxos:
+            utxosList
+        case .kachatDomains:
+            AddressDomainsTab(address: address)
+        }
+    }
+
+    private var sendReceiveButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                showReceiveSheet = true
+            } label: {
+                Label("Receive", systemImage: "qrcode")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .foregroundColor(.black)
+                    .background(Capsule().fill(Color.accentColor))
+            }
+            Button {
+                showSendSheet = true
+            } label: {
+                Label("Send", systemImage: "arrow.up.circle.fill")
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .foregroundColor(.black)
+                    .background(Capsule().fill(Color.accentColor))
+            }
+            .disabled(balanceSompi == 0)
+            .opacity(balanceSompi == 0 ? 0.5 : 1)
+        }
+        .padding(.horizontal)
+        .padding(.bottom, 16)
     }
 
     /// The half sheet behind "Address Actions". Same shape as Manage Addresses' and Cold
