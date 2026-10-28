@@ -97,7 +97,9 @@ service is asked to send KaPosts' topic only `kaposts` and `broadcast` pushes
 
 Payment requests (`kachat://pay/...`, `https://kachat.app/pay/...`) are paid in KaPay, KaChat's
 wallet app: a post shows the link as a card (`KaPostPaymentRequestCard`), and Pay opens
-`kapay://pay/<same tail>` (`KaPayHandoff`). Without KaPay installed, KaPost's own Send Kaspa opens.
+`kapay://pay/<same tail>` (`KaPayHandoff`). A chat-payment request (`chat=1`) is paid here, as an
+encrypted chat payment KaPay can't make; so is any request without KaPay installed. KaChat follows
+the same rule.
 
 Links: KaPosts opens `kaposts://` (same targets as `kachat://`). Shared links still read
 `kachat://` / `https://kachat.app/post/...`, which open KaChat; for them to open KaPosts the

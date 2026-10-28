@@ -438,14 +438,17 @@ struct PaymentRequestSheetPresenter: ViewModifier {
 
 /// Someone else's payment request is paid in KaPay (KaChat's wallet app): it opens there on
 /// Send, filled in, through KaPay's own scheme (`kapay://pay/...`, the same tail as
-/// `kachat://pay/`). Without KaPay installed, `fallback` runs - KaPost's own Send Kaspa.
-/// Your own request stays here (`OwnPaymentRequestView`): there is nothing to pay.
+/// `kachat://pay/`). Two stay here: your own (nothing to pay - `OwnPaymentRequestView`), and one
+/// asking for a chat payment (`toChattingAddress`, made in a KaChat 1:1 chat), paid as an
+/// encrypted chat payment so it lands in the chat with them - KaPay can't. Without KaPay
+/// installed, `fallback` runs - KaPost's own Send Kaspa. KaChat follows the same rule.
 enum KaPayHandoff {
     static let scheme = "kapay"
 
     @MainActor
     static func pay(_ request: PaymentRequest, fallback: @escaping () -> Void) {
-        guard !request.isOwn, let url = URL(string: "\(scheme)://pay/\(request.linkTail)") else {
+        guard !request.isOwn, !request.toChattingAddress,
+              let url = URL(string: "\(scheme)://pay/\(request.linkTail)") else {
             fallback()
             return
         }
@@ -588,7 +591,7 @@ struct KaPostPaymentRequestCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityHint(Text(isOwn ? "Shows your payment request." : "Opens KaPay to pay it."))
+        .accessibilityHint(Text(isOwn ? "Shows your payment request." : "Opens Send Kaspa to pay it."))
         .contextMenu {
             Button {
                 UIPasteboard.general.string = request.shareURLString
