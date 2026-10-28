@@ -135,7 +135,7 @@ extension AppSettings {
         }
         // One-time migration for anyone still pointed at a superseded default indexer - the
         // offline kasia.fyi, or the previous community default kasia.wtf now replaced by KaChat's
-        // own indexer (kachat.duckdns.org). Users who set a custom indexer keep it; only the old
+        // own indexer (indexer.kachat.app). Users who set a custom indexer keep it; only the old
         // shipped defaults are moved.
         if settings.indexerURL == legacyDefaultIndexerURL || settings.indexerURL == legacyDefaultIndexerURLKasiaWtf {
             settings.indexerURL = defaultIndexerURL

@@ -81,7 +81,13 @@ owner's.
 ## Protocol and servers
 
 Same as KaChat: payloads under `kchat:1:`, the KaChat indexer for KaPosts and Public Chats, the
-node pool for transactions. The protocol and server docs live in KaChat-iPhone
+node pool for transactions. The mainnet default for the indexer, KaPosts, Public Chats, push and
+translation is `https://indexer.kachat.app` (`AppSettings.defaultIndexerURL`). Its old name,
+`kachat.duckdns.org`, is the same server; saved settings on it move over when they decode, and
+the push manager sends no unregister for the rename. Links on the old name are no longer
+recognized (only `kachat.app` and `kachat://`). Testnet has no indexer (`defaultTestnetIndexerURL`
+is blank, so chat, push, KaPosts and Public Chats are off there); a saved `tnkachat.duckdns.org`
+is cleared on decode. The protocol and server docs live in KaChat-iPhone
 (`KAPOSTS_INDEXER.md`, `PUBLIC_CHATS_INDEXER.md`, `PUSH_EXTENSIONS.md`, `TRANSLATION_SERVICE.md`).
 
 Push registration and updates send `apns_topic` = the bundle id (`com.kachat.kaposts`,

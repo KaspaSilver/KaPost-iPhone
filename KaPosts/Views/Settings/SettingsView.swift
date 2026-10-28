@@ -1454,7 +1454,7 @@ struct ConnectionSettingsView: View {
     }
 
     /// Normalizes a saved endpoint: trims whitespace and defaults a scheme-less value
-    /// ("kachat.duckdns.org") to https://, so bare hostnames keep working exactly like the
+    /// ("indexer.kachat.app") to https://, so bare hostnames keep working exactly like the
     /// Nextcloud server field already did. http:// never reaches here - Save rejects it first.
     private func normalizedHTTPSURL(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1712,11 +1712,11 @@ struct ConnectionSettingsView: View {
 
     }
 
-    /// The field hint: the network's default (on testnet, the testnet-10 indexer).
+    /// The field hint: the network's default. Testnet has no indexer.
     private func indexerPlaceholder(_ mainnetDefault: String) -> String {
         settingsViewModel.settings.networkType == .mainnet
             ? mainnetDefault
-            : AppSettings.defaultTestnetIndexerURL
+            : AppLocalization.string("No testnet indexer yet")
     }
 
     /// One tab per kind of connection, so the page stays short as the app talks to more

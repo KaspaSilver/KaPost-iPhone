@@ -948,6 +948,8 @@ final class PushNotificationManager: ObservableObject {
     /// the OLD service still has this device registered and keeps pushing - the source of
     /// duplicated notifications. One best-effort DELETE against the old base before
     /// registering with the new one; unsigned (legacy backends accept it), single attempt.
+    /// kachat.duckdns.org -> indexer.kachat.app is the same server under a new name, so nothing
+    /// is deleted there: a DELETE would drop the registration the new name shares.
     private func unregisterFromSupersededServiceIfNeeded() async {
         guard let token = deviceToken else { return }
         let currentBase = AppSettings.load().pushIndexerURL
@@ -964,6 +966,7 @@ final class PushNotificationManager: ObservableObject {
         guard let oldBase = storedOldBase,
               !oldBase.isEmpty,
               oldBase != currentBase,
+              !AppSettings.isLegacyKachatDuckDNS(oldBase),
               let url = URL(string: "\(oldBase)\(unregisterEndpoint)") else { return }
         // Clear first - one attempt per supersession, a dead old host must not retry forever.
         UserDefaults.standard.removeObject(forKey: registeredBaseURLDefaultsKey)

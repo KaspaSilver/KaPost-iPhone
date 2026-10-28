@@ -2536,13 +2536,17 @@ struct AppSettings: Codable {
     var lastPoolPersistDate: Date?       // Track when pool was last saved
 
     // Default URLs per network
-    static let defaultIndexerURL = "https://kachat.duckdns.org"
-    static let defaultKaPostIndexerURL = "https://kachat.duckdns.org"
+    /// KaChat's own indexer: chat, KaPosts, public chats, push, translation and `.kachat` names.
+    static let defaultIndexerURL = "https://indexer.kachat.app"
+    static let defaultKaPostIndexerURL = "https://indexer.kachat.app"
     static let defaultPublicChatIndexerURL = defaultKaPostIndexerURL
-    /// The testnet-10 KaChat indexer (Kaspa-Quick-Start's `kachat-testnet` publish target): chat,
-    /// push, KaPosts, public chats and `.kachat` names, all on one name with the mainnet route split.
-    /// Port 7443: 443 on that address is answered by another proxy (the gift service's certificate).
-    static let defaultTestnetIndexerURL = "https://tnkachat.duckdns.org:7443"
+    /// Testnet has no KaChat indexer: chat, push, KaPosts, public chats and `.kachat` names are
+    /// off there until one is published. Its old host (`tnkachat.duckdns.org`) is retired; a
+    /// saved copy of it is cleared when settings decode (`withoutRetiredTestnetIndexer`).
+    static let defaultTestnetIndexerURL = ""
+    static func withoutRetiredTestnetIndexer(_ url: String) -> String {
+        url.lowercased().contains("tnkachat.duckdns.org") ? "" : url
+    }
     /// Retired default - the public K social indexer (`mainnet.kaspatalk.net`). KaPosts now
     /// runs on KaChat's own indexer, which enforces two-way KaChat-only exclusivity server-side
     /// and is a fresh network with no relation to the K social graph. Anyone still on the old
@@ -2552,14 +2556,27 @@ struct AppSettings: Codable {
     /// (`/group-messages/...`, `/group-control/...`). See `AppSettings.load()`'s one-time migration.
     static let legacyDefaultIndexerURL = "https://indexer.kasia.fyi"
     /// The previous shipped default (the community `indexer.kasia.wtf`), now replaced by KaChat's
-    /// own indexer (`kachat.duckdns.org`). Swept in `SettingsViewModel.load()` like kasia.fyi.
+    /// own indexer. Swept in `SettingsViewModel.load()` like kasia.fyi.
     static let legacyDefaultIndexerURLKasiaWtf = "https://indexer.kasia.wtf"
     /// Our own push service (chat/group push + the public chat/KaPosts extensions - see
-    /// PUSH_EXTENSIONS.md). Superseded the community indexer.kasia.wtf once kachat.duckdns.org
+    /// PUSH_EXTENSIONS.md). Superseded the community indexer.kasia.wtf once KaChat's own indexer
     /// went live.
-    static let defaultPushIndexerURL = "https://kachat.duckdns.org"
+    static let defaultPushIndexerURL = "https://indexer.kachat.app"
     /// Server-side KaPost translation - same box as the KaPosts indexer by default.
-    static let defaultTranslationServiceURL = "https://kachat.duckdns.org"
+    static let defaultTranslationServiceURL = "https://indexer.kachat.app"
+    /// Retired default - KaChat's indexer before it moved to `indexer.kachat.app` (the same
+    /// server under a new name). It was the default for chat, KaPosts, public chats, push and
+    /// translation; any of those still on it follow the move when settings decode. Custom URLs
+    /// are untouched.
+    static let legacyDefaultKachatDuckDNSURL = "https://kachat.duckdns.org"
+
+    /// Whether `url` is the retired `kachat.duckdns.org` default, with or without the scheme
+    /// or a trailing slash.
+    static func isLegacyKachatDuckDNS(_ url: String) -> Bool {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let bare = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+        return bare == legacyDefaultKachatDuckDNSURL || bare == "kachat.duckdns.org"
+    }
     static let defaultKNSMainnetURL = "https://api.knsdomains.org/mainnet/api/v1"
     static let defaultKNSTestnetURL = "https://api.knsdomains.org/tn10/api/v1"
     static let defaultKaspaMainnetURL = "https://api.kaspa.org"
@@ -3019,12 +3036,9 @@ struct AppSettings: Codable {
         }
         if networkType == .testnet {
             // The mainnet migrations above substitute mainnet hosts for a blank; on testnet a
-            // blank (left over from before testnet had an indexer) means the testnet indexer.
-            // Custom URLs are kept.
+            // blank means no indexer, and so does the retired testnet host. Custom URLs are kept.
             func testnetIndexer(_ key: CodingKeys) throws -> String {
-                let stored = try container.decodeIfPresent(String.self, forKey: key) ?? ""
-                return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? AppSettings.defaultTestnetIndexerURL : stored
+                AppSettings.withoutRetiredTestnetIndexer(try container.decodeIfPresent(String.self, forKey: key) ?? "")
             }
             indexerURL = try testnetIndexer(.indexerURL)
             kaPostIndexerURL = try testnetIndexer(.kaPostIndexerURL)
@@ -3034,14 +3048,29 @@ struct AppSettings: Codable {
         }
         // The same for the stashed testnet profile, used when switching back to testnet.
         if var stashed = connectionProfiles[NetworkType.testnet.rawValue] {
-            func filled(_ value: String) -> String {
-                value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppSettings.defaultTestnetIndexerURL : value
-            }
-            stashed.indexerURL = filled(stashed.indexerURL)
-            stashed.kaPostIndexerURL = filled(stashed.kaPostIndexerURL)
-            stashed.publicChatIndexerURL = filled(stashed.publicChatIndexerURL)
-            stashed.pushIndexerURL = filled(stashed.pushIndexerURL)
+            stashed.indexerURL = AppSettings.withoutRetiredTestnetIndexer(stashed.indexerURL)
+            stashed.kaPostIndexerURL = AppSettings.withoutRetiredTestnetIndexer(stashed.kaPostIndexerURL)
+            stashed.publicChatIndexerURL = AppSettings.withoutRetiredTestnetIndexer(stashed.publicChatIndexerURL)
+            stashed.pushIndexerURL = AppSettings.withoutRetiredTestnetIndexer(stashed.pushIndexerURL)
             connectionProfiles[NetworkType.testnet.rawValue] = stashed
+        }
+        // KaChat's indexer moved from kachat.duckdns.org to indexer.kachat.app: the old default
+        // follows it, live and in every stashed profile. Custom URLs are left alone.
+        func movedFromDuckDNS(_ value: String) -> String {
+            AppSettings.isLegacyKachatDuckDNS(value) ? AppSettings.defaultIndexerURL : value
+        }
+        indexerURL = movedFromDuckDNS(indexerURL)
+        kaPostIndexerURL = movedFromDuckDNS(kaPostIndexerURL)
+        publicChatIndexerURL = movedFromDuckDNS(publicChatIndexerURL)
+        pushIndexerURL = movedFromDuckDNS(pushIndexerURL)
+        translationServiceURL = movedFromDuckDNS(translationServiceURL)
+        for (network, var profile) in connectionProfiles {
+            profile.indexerURL = movedFromDuckDNS(profile.indexerURL)
+            profile.kaPostIndexerURL = movedFromDuckDNS(profile.kaPostIndexerURL)
+            profile.publicChatIndexerURL = movedFromDuckDNS(profile.publicChatIndexerURL)
+            profile.pushIndexerURL = movedFromDuckDNS(profile.pushIndexerURL)
+            profile.translationServiceURL = movedFromDuckDNS(profile.translationServiceURL)
+            connectionProfiles[network] = profile
         }
         kaspaExplorer = try container.decodeIfPresent(KaspaExplorer.self, forKey: .kaspaExplorer) ?? .default
         trustedNodeAddress = try container.decodeIfPresent(String.self, forKey: .trustedNodeAddress) ?? AppSettings.defaultTrustedNodeAddress
@@ -3339,7 +3368,7 @@ struct ConnectionProfile: Codable, Equatable {
     var savedNodeAddresses: [SavedNodeAddress]
 
     /// What a network starts with. Testnet: the public testnet REST API, automatic node
-    /// discovery, and KaChat's testnet-10 indexer for chat, push, KaPosts and public chats.
+    /// discovery, and no indexer (chat, push, KaPosts and public chats are off there).
     static func defaults(for network: NetworkType) -> ConnectionProfile {
         switch network {
         case .mainnet:

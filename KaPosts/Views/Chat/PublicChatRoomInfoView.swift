@@ -70,7 +70,7 @@ struct PublicChatRoomInfoView: View {
         KaChatInternalLink.publicChatRoomShareText(channel: normalized)
     }
 
-    /// What the field's placeholder should say: the app-wide indexer this room falls back to.
+    /// The app-wide indexer this room falls back to; blank on testnet, which has none.
     private var appWideIndexer: String {
         let settings = AppSettings.load()
         let configured = settings.publicChatIndexerURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,6 +78,11 @@ struct PublicChatRoomInfoView: View {
         return settings.networkType == .mainnet
             ? AppSettings.defaultPublicChatIndexerURL
             : AppSettings.defaultTestnetIndexerURL
+    }
+
+    /// What the field's placeholder should say.
+    private var indexerPlaceholder: String {
+        appWideIndexer.isEmpty ? AppLocalization.string("No testnet indexer yet") : appWideIndexer
     }
 
     var body: some View {
@@ -137,7 +142,7 @@ struct PublicChatRoomInfoView: View {
             }
 
             Section {
-                TextField(appWideIndexer, text: $indexerText)
+                TextField(indexerPlaceholder, text: $indexerText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -167,7 +172,11 @@ struct PublicChatRoomInfoView: View {
                 Text("Indexer for this room")
             } footer: {
                 // The honest explanation of why this is per room at all.
-                Text("A public chat lives on the Kaspa blockDAG, so any indexer watching the same network serves the same room. Point this one wherever you like - your own, or someone else's - without changing the indexer every other room uses. Leave it blank to follow \(appWideIndexer).")
+                if appWideIndexer.isEmpty {
+                    Text("A public chat lives on the Kaspa blockDAG, so any indexer watching the same network serves the same room. Point this one wherever you like - your own, or someone else's - without changing the indexer every other room uses.")
+                } else {
+                    Text("A public chat lives on the Kaspa blockDAG, so any indexer watching the same network serves the same room. Point this one wherever you like - your own, or someone else's - without changing the indexer every other room uses. Leave it blank to follow \(appWideIndexer).")
+                }
             }
         }
         .navigationTitle("Room Info")
