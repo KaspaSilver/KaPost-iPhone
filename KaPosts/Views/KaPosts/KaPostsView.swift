@@ -5808,170 +5808,12 @@ private struct KaPostCellView: View {
                     }
                 }
 
-                HStack(spacing: 18) {
-                    if let onComment {
-                        engagementButton(
-                            icon: "bubble.left",
-                            count: commentCount,
-                            tint: .secondary,
-                            action: onComment
-                        )
-                    }
-                    likeButton
-                    if scheduler.deadlines["dislike:\(post.id)"] != nil {
-                        countdownButton(key: "dislike:\(post.id)")
-                    } else {
-                        engagementButton(
-                            icon: post.dislikedByMe ? "hand.thumbsdown.fill" : "hand.thumbsdown",
-                            count: post.dislikes,
-                            tint: post.dislikedByMe ? .orange : .secondary,
-                            action: onDislike
-                        )
-                    }
-                    if scheduler.deadlines["repost:\(post.id)"] != nil {
-                        countdownButton(key: "repost:\(post.id)")
-                    } else {
-                        engagementButton(
-                            icon: "arrow.2.squarepath",
-                            count: post.reposts,
-                            tint: post.repostedByMe ? .accentColor : .secondary,
-                            action: {
-                                // X-style: a compact anchored menu over the tapped button.
-                                if onRepostAction != nil, post.remoteId != nil, post.posterPubkey != nil {
-                                    showRepostMenu = true
-                                } else {
-                                    onRepost()
-                                }
-                            }
-                        )
-                        // A half sheet rather than an anchored popover, so the two choices get
-                        // room to say what they do - "Repost" and "Quote" as bare words are only
-                        // obvious once you already know the difference.
-                        .sheet(isPresented: $showRepostMenu) {
-                            RepostActionsSheet(
-                                onRepost: {
-                                    onRepostAction?(post.repostedByMe ? .removeRepost : .repost)
-                                },
-                                onQuote: { onRepostAction?(.quote) },
-                                isReposted: post.repostedByMe
-                            )
-                        }
-                    }
-                    // Bookmark sits with the other actions (no inline count - saved posts live in
-                    // the side menu's Bookmarks screen).
-                    engagementButton(
-                        icon: post.bookmarkedByMe ? "bookmark.fill" : "bookmark",
-                        count: 0,
-                        tint: post.bookmarkedByMe ? .accentColor : .secondary,
-                        action: onBookmark
-                    )
-                    // Share: a kachat:// link that drops other KaChat users straight into this
-                    // post's comment thread, plus an explorer link for everyone else. Only for
-                    // posts that exist on the network.
-                    if let remoteId = post.remoteId {
-                        ShareLink(item: shareURL(remoteId: remoteId)) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    // Tip: opens the 1:1 chat with the poster already in KAS-send mode. Hidden on
-                    // your own posts (you can't tip yourself).
-                    if let onTip, !isOwnPost {
-                        Button {
-                            Haptics.impact(.light)
-                            onTip()
-                        } label: {
-                            HStack(spacing: 3) {
-                                Image("KaspaLogo")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 16, height: 16)
-                                Text("Tip")
-                                    .lineLimit(1)
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.accentColor)
-                            // Never let the row squeeze "Tip" into vertical letters - the label
-                            // keeps its intrinsic width and wins the compression fight.
-                            .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .buttonStyle(.plain)
-                        .layoutPriority(1)
-                    }
-                    // How many times it was tipped, the way likes and comments show theirs: a number
-                    // beside its mark (beside the Tip button, on someone else's post). A tap lists
-                    // who tipped (Post Activity > Tips lists them too).
-                    if post.tips > 0, let remoteId = post.remoteId {
-                        Button {
-                            Haptics.impact(.light)
-                            tippersPostId = remoteId
-                        } label: {
-                            HStack(spacing: 4) {
-                                // the Tip button carries the mark already
-                                if isOwnPost || onTip == nil {
-                                    Image("KaspaLogo")
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 16, height: 16)
-                                }
-                                Text(verbatim: "\(post.tips)")
-                                    .font(.caption.weight(.semibold))
-                                    .monospacedDigit()
-                                    .lineLimit(1)
-                            }
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: true, vertical: false)
-                            // sits against the Tip button like a like count against its heart
-                            .padding(.leading, (isOwnPost || onTip == nil) ? 0 : -10)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Text("Who tipped this post"))
-                        .sheet(item: Binding(get: { tippersPostId.map(TippersRoute.init) }, set: { tippersPostId = $0?.id })) { route in
-                            KaPostTippersView(postId: route.id)
-                        }
-                    }
-                    Spacer()
-                    // Bottom-right: on-chain delivery state, mirroring chat bubbles - green check
-                    // once the K transaction is on the network, spinner while submitting, red
-                    // Retry when it didn't go through.
-                    switch post.deliveryStatus {
-                    case .sent:
-                        // An edit's transaction landing restarts the minute (see `sentAt`).
-                        let sentReference = post.sentAt ?? post.timestamp
-                        if post.remoteId != nil, !sentCheckExpired,
-                           Date().timeIntervalSince(sentReference) < 60 {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(.green)
-                                .task(id: sentReference) {
-                                    let remaining = 60 - Date().timeIntervalSince(sentReference)
-                                    if remaining > 0 {
-                                        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                                    }
-                                    withAnimation(.easeOut(duration: 0.3)) { sentCheckExpired = true }
-                                }
-                        }
-                    case .pending:
-                        ProgressView()
-                            .controlSize(.mini)
-                            .tint(.secondary)
-                    case .failed:
-                        Button {
-                            Haptics.impact(.light)
-                            onRetry?()
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .font(.caption)
-                                Text("Retry")
-                                    .font(.caption.weight(.bold))
-                            }
-                            .foregroundColor(.red)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                // The default gaps, else tighter ones: big counts beside Tip used to make the
+                // row wider than the screen and push the whole post sideways.
+                ViewThatFits(in: .horizontal) {
+                    actionRow(spacing: 18)
+                    actionRow(spacing: 12)
+                    actionRow(spacing: 8)
                 }
                 .padding(.top, 2)
 
@@ -6002,6 +5844,177 @@ private struct KaPostCellView: View {
         // countdown fires, not on the tap that armed it.
         .onChange(of: post.likedByMe) { liked in
             if liked { runLikeBurst() }
+        }
+    }
+
+    /// The action row: comment, like, dislike, repost, bookmark, share, Tip and its count, then
+    /// the delivery state.
+    @ViewBuilder
+    private func actionRow(spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            if let onComment {
+                engagementButton(
+                    icon: "bubble.left",
+                    count: commentCount,
+                    tint: .secondary,
+                    action: onComment
+                )
+            }
+            likeButton
+            if scheduler.deadlines["dislike:\(post.id)"] != nil {
+                countdownButton(key: "dislike:\(post.id)")
+            } else {
+                engagementButton(
+                    icon: post.dislikedByMe ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                    count: post.dislikes,
+                    tint: post.dislikedByMe ? .orange : .secondary,
+                    action: onDislike
+                )
+            }
+            if scheduler.deadlines["repost:\(post.id)"] != nil {
+                countdownButton(key: "repost:\(post.id)")
+            } else {
+                engagementButton(
+                    icon: "arrow.2.squarepath",
+                    count: post.reposts,
+                    tint: post.repostedByMe ? .accentColor : .secondary,
+                    action: {
+                        // X-style: a compact anchored menu over the tapped button.
+                        if onRepostAction != nil, post.remoteId != nil, post.posterPubkey != nil {
+                            showRepostMenu = true
+                        } else {
+                            onRepost()
+                        }
+                    }
+                )
+                // A half sheet rather than an anchored popover, so the two choices get
+                // room to say what they do - "Repost" and "Quote" as bare words are only
+                // obvious once you already know the difference.
+                .sheet(isPresented: $showRepostMenu) {
+                    RepostActionsSheet(
+                        onRepost: {
+                            onRepostAction?(post.repostedByMe ? .removeRepost : .repost)
+                        },
+                        onQuote: { onRepostAction?(.quote) },
+                        isReposted: post.repostedByMe
+                    )
+                }
+            }
+            // Bookmark sits with the other actions (no inline count - saved posts live in
+            // the side menu's Bookmarks screen).
+            engagementButton(
+                icon: post.bookmarkedByMe ? "bookmark.fill" : "bookmark",
+                count: 0,
+                tint: post.bookmarkedByMe ? .accentColor : .secondary,
+                action: onBookmark
+            )
+            // Share: a kachat:// link that drops other KaChat users straight into this
+            // post's comment thread, plus an explorer link for everyone else. Only for
+            // posts that exist on the network.
+            if let remoteId = post.remoteId {
+                ShareLink(item: shareURL(remoteId: remoteId)) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            // Tip: opens the 1:1 chat with the poster already in KAS-send mode. Hidden on
+            // your own posts (you can't tip yourself).
+            if let onTip, !isOwnPost {
+                Button {
+                    Haptics.impact(.light)
+                    onTip()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image("KaspaLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                        Text("Tip")
+                            .lineLimit(1)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.accentColor)
+                    // Never let the row squeeze "Tip" into vertical letters - the label
+                    // keeps its intrinsic width and wins the compression fight.
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .buttonStyle(.plain)
+                .layoutPriority(1)
+            }
+            // How many times it was tipped, the way likes and comments show theirs: a number
+            // beside its mark (beside the Tip button, on someone else's post). A tap lists
+            // who tipped (Post Activity > Tips lists them too).
+            if post.tips > 0, let remoteId = post.remoteId {
+                Button {
+                    Haptics.impact(.light)
+                    tippersPostId = remoteId
+                } label: {
+                    HStack(spacing: 4) {
+                        // the Tip button carries the mark already
+                        if isOwnPost || onTip == nil {
+                            Image("KaspaLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 16, height: 16)
+                        }
+                        Text(verbatim: "\(post.tips)")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                    // sits against the Tip button like a like count against its heart
+                    .padding(.leading, (isOwnPost || onTip == nil) ? 0 : -10)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Who tipped this post"))
+                .sheet(item: Binding(get: { tippersPostId.map(TippersRoute.init) }, set: { tippersPostId = $0?.id })) { route in
+                    KaPostTippersView(postId: route.id)
+                }
+            }
+            Spacer()
+            // Bottom-right: on-chain delivery state, mirroring chat bubbles - green check
+            // once the K transaction is on the network, spinner while submitting, red
+            // Retry when it didn't go through.
+            switch post.deliveryStatus {
+            case .sent:
+                // An edit's transaction landing restarts the minute (see `sentAt`).
+                let sentReference = post.sentAt ?? post.timestamp
+                if post.remoteId != nil, !sentCheckExpired,
+                   Date().timeIntervalSince(sentReference) < 60 {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                        .task(id: sentReference) {
+                            let remaining = 60 - Date().timeIntervalSince(sentReference)
+                            if remaining > 0 {
+                                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                            }
+                            withAnimation(.easeOut(duration: 0.3)) { sentCheckExpired = true }
+                        }
+                }
+            case .pending:
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(.secondary)
+            case .failed:
+                Button {
+                    Haptics.impact(.light)
+                    onRetry?()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.caption)
+                        Text("Retry")
+                            .font(.caption.weight(.bold))
+                    }
+                    .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
