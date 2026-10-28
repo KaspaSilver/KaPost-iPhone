@@ -9,11 +9,19 @@ PALETTES = {
     "tinted": ("#000000", ("#EDEDED", "#C4C4C4"), ("#8C8C8C", "#4D4D4D"), "#000000", "#E6E6E6", ("rgba(0,0,0,0.80)", "rgba(0,0,0,0.38)"), "#000000", 0.5),
 }
 
-def k_mark(cx, cy, s, color):
-    # the backward K in a 0..90 x -5..105 box, centred on (cx, cy)
-    return (f'<g transform="translate({cx - 45*s:.1f} {cy - 50*s:.1f}) scale({s})">'
-            f'<polyline points="8,15 61,50 8,85" fill="none" stroke="{color}" stroke-width="17" stroke-miterlimit="4"/>'
-            f'<polygon points="60,-3 77,-5 80,50 74,105 56,103 58,50" fill="{color}"/></g>')
+# The backward K exactly as KaChat's app icon draws it, traced from KaChat's 1024 px icon
+# (KaChat-iPhone AppIcon.appiconset/white.png): the bent bar and the thick chevron, in that
+# icon's pixels. Its bounding box is 360..665 x 254..690, centred on (512.9, 472).
+K_BAR = [(556, 268), (632, 254), (665.4, 472), (632, 690), (556, 676), (588.1, 472)]
+K_CHEVRON = [(407.9, 293.6), (636.2, 472), (407.9, 650.4), (360.4, 587.9), (508.8, 472), (360.4, 356.1)]
+K_CENTRE, K_HEIGHT = (512.9, 472), 436
+
+def k_mark(cx, cy, height, color):
+    # the backward K, `height` px tall, its bounding box centred on (cx, cy)
+    s = height / K_HEIGHT
+    def points(shape):
+        return " ".join(f"{cx + s*(x - K_CENTRE[0]):.1f},{cy + s*(y - K_CENTRE[1]):.1f}" for x, y in shape)
+    return f'<polygon points="{points(K_BAR)}" fill="{color}"/><polygon points="{points(K_CHEVRON)}" fill="{color}"/>'
 
 def svg(variant):
     bg, (top, bottom), (near, far), avatar, k, (title, body), heart, shadow = PALETTES[variant]
@@ -27,7 +35,7 @@ def svg(variant):
   <rect x="244" y="238" width="536" height="220" rx="72" fill="{near}"/>
   <g filter="url(#soft)"><rect x="172" y="318" width="680" height="500" rx="88" fill="url(#card)"/></g>
   <circle cx="316" cy="462" r="86" fill="{avatar}"/>
-  {k_mark(316, 462, 1.25, k)}
+  {k_mark(316, 462, 132, k)}
   <rect x="440" y="420" width="320" height="36" rx="18" fill="{title}"/>
   <rect x="440" y="482" width="200" height="36" rx="18" fill="{body}"/>
   <rect x="246" y="598" width="532" height="36" rx="18" fill="{body}"/>

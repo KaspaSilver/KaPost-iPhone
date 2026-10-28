@@ -8,7 +8,7 @@
   <rect x="244" y="238" width="536" height="220" rx="72" fill="#3F7F75"/>
   <g filter="url(#soft)"><rect x="172" y="318" width="680" height="500" rx="88" fill="url(#card)"/></g>
   <circle cx="316" cy="462" r="86" fill="#1B2029"/>
-  <g transform="translate(259.8 399.5) scale(1.25)"><polyline points="8,15 61,50 8,85" fill="none" stroke="#8AD6C9" stroke-width="17" stroke-miterlimit="4"/><polygon points="60,-3 77,-5 80,50 74,105 56,103 58,50" fill="#8AD6C9"/></g>
+  <polygon points="329.0,400.2 352.1,396.0 362.2,462.0 352.1,528.0 329.0,523.8 338.8,462.0" fill="#8AD6C9"/><polygon points="284.2,408.0 353.3,462.0 284.2,516.0 269.8,497.1 314.8,462.0 269.8,426.9" fill="#8AD6C9"/>
   <rect x="440" y="420" width="320" height="36" rx="18" fill="rgba(27,32,41,0.85)"/>
   <rect x="440" y="482" width="200" height="36" rx="18" fill="rgba(27,32,41,0.45)"/>
   <rect x="246" y="598" width="532" height="36" rx="18" fill="rgba(27,32,41,0.45)"/>
