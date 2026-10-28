@@ -2573,6 +2573,14 @@ struct KaPostsView: View {
         mutatePost(id: post.id) { target in
             target.comments.insert(reply, at: 0)
         }
+        // Answering a reply inside an open thread (someone's reply to your post): open its
+        // replies, so yours shows right under it instead of behind "View 1 reply". The reload
+        // that comes with it keeps this session's reply (see loadThreadReplies).
+        let openThreadId = profileDetailTarget != nil ? profileThreadStack.last
+            : (detailTarget != nil ? threadStack.last : nil)
+        if let openThreadId, openThreadId != post.id, !expandedCommentIds.contains(post.id) {
+            expandReplies(for: post)
+        }
         // A parent that is not on chain yet has nothing to reply TO on the network; the comment
         // still shows locally, exactly as it did before.
         guard let parentRemoteId = post.remoteId else { return }
@@ -6496,13 +6504,14 @@ extension KaPostCellView: Equatable {
 
 // MARK: - Quick tip
 
-/// Quick tip sheet, styled to match the app's Send Kaspa UI (WithdrawKaspaView's Form
-/// language: fixed recipient row, KaspaLogo/fiat amount toggle with conversion + Max, an
-/// Available footer, and a Network Fee row). The send itself goes through
-/// `ChatService.sendPayment`, so the destination and funding follow the exact same Chats
+/// Quick tip sheet: the same steps as every send (SendKaspaComponents), without To since the
+/// recipient is the post's author: From (only when it can change - a tip on a post always comes
+/// from your address), the amount on the app's keypad, then a review with the encrypted memo, the
+/// fee and coin control, and swipe up to send. The send itself goes
+/// through `ChatService.sendPayment`, so the destination and funding follow the exact same Chats
 /// Payment Privacy rules as an in-chat payment (privacy on + pool data -> a fresh private pool
 /// address; otherwise the poster's public chatting address), and the payment bubble still lands
-/// in the 1:1 conversation with them. No fee tiers or coin control - chat payments have neither.
+/// in the 1:1 conversation with them.
 private struct KaPostTipSheet: View {
     let address: String
     let displayName: String
@@ -6519,33 +6528,48 @@ private struct KaPostTipSheet: View {
     @StateObject private var fiatAmountState = KaspaFiatAmountState()
 
     @State private var contact: Contact?
-    /// Where the tip comes from (the From section): the chatting address by default.
+    /// Where the tip comes from (the From pills): the chatting address by default.
     @State private var source: SendSource = .chatting
     @State private var amountInput = ""
     @State private var memo = ""
     @State private var manualUtxos: [UTXO]?
     @State private var showCoinControl = false
-    @State private var showDustWarning = false
     @State private var availableSompi: UInt64?
     @State private var normalFeeSompi: UInt64?
     @State private var isEstimatingFee = false
     @State private var isEstimatingMax = false
     @State private var isSending = false
-    /// The completed tip, driving the sent-confirmation half sheet. Set instead of dismissing, so
-    /// the transaction id is handed over rather than the sheet just closing on nothing.
+    /// The completed tip: the swipe-up screen's confirmation shows it.
     @State private var sentTransaction: SentTransaction?
     @State private var errorMessage: String?
 
     // Fee tiers, mirroring WithdrawKaspaView: Normal/Fast/Priority multiply the estimated base
-    // fee; tapping the fee amount sets a custom total instead (values under the network minimum
-    // are clamped up to it at commit).
+    // fee; the fee's Edit sets a custom total instead (never under the network minimum).
     @State private var feeTier: WithdrawFeeTier = .normal
     @State private var customExtraFeeSompi: UInt64?
     @State private var isEditingFee = false
     @State private var customFeeText = ""
 
+    /// The step on screen; nil until the first move (then `initialStep`).
+    @State private var step: Step?
+    /// The From step's Choose an Address is on (its list shows), before or after a pick.
+    @State private var choosingFrom = false
+    /// The last move went forward: the next step comes in from the right.
+    @State private var stepForward = true
+    /// The amount is Max: a fee or coin change works it out again.
+    @State private var usedMax = false
+    /// The fee being typed on the fee screen, in KAS.
+    @State private var feeDraft = ""
+
     /// The same memo limit as a payment in a chat.
     private static let maxMemoLength = 140
+
+    private enum Step: Int { case from, amount, review, fee }
+
+    /// A tip on a post comes from your address only, so From is skipped.
+    private var initialStep: Step { tip != nil ? .amount : .from }
+
+    private var currentStep: Step { step ?? initialStep }
 
     private var amountSompi: UInt64? {
         guard let sompi = KaspaUnit.sompi(fromUserText: amountInput), sompi > 0 else { return nil }
@@ -6554,6 +6578,17 @@ private struct KaPostTipSheet: View {
 
     private var canSend: Bool {
         amountSompi != nil && !isSending
+    }
+
+    /// The amount is more than the From address holds.
+    private var exceedsBalance: Bool {
+        guard let amountSompi, let availableSompi else { return false }
+        return amountSompi > availableSompi
+    }
+
+    private var isDust: Bool {
+        guard let amountSompi else { return false }
+        return amountSompi < 10_000_001
     }
 
     /// Extra priority tip on top of the base (Normal-tier) fee - custom overrides the tier.
@@ -6575,76 +6610,43 @@ private struct KaPostTipSheet: View {
         return text
     }
 
-    var body: some View {
-        // The same Send Kaspa sheet as a payment inside a chat (SendKaspaComponents): the big
-        // amount, an encrypted memo, where it goes, the balance, fee speed and coin control, and
-        // slide-to-send so a tip can't go out on a stray touch.
-        ScrollView {
-            VStack(spacing: 18) {
-                VStack(spacing: 4) {
-                    Text("Tip")
-                        .font(.headline)
-                    Text("to \(displayName)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(.top, 24)
-
-                SendFromSection(source: $source, availableSompi: $availableSompi, isLocked: tip != nil)
-
-                KaspaAmountEntry(
-                    fiatAmountState: fiatAmountState,
-                    onAmountChange: { amountInput = $0 },
-                    isEstimatingMax: isEstimatingMax,
-                    focusOnAppear: true,
-                    onMax: setMaxAmount
-                )
-
-                memoField
-
-                SendFeeControls(
-                    feeTier: $feeTier,
-                    isEditingFee: $isEditingFee,
-                    customFeeText: $customFeeText,
-                    isEstimatingFee: isEstimatingFee,
-                    feeText: totalFeeSompi.map { "\(trimmedKas($0)) \(KaspaUnit.symbol)" },
-                    onStartEditing: startEditingFee,
-                    onCommit: commitCustomFee,
-                    coinControlSummary: coinControlSummary(manualUtxos),
-                    onCoinControl: { showCoinControl = true }
-                )
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                } else if let amountSompi, amountSompi < 10_000_001 {
-                    KaspaUnit.text("Sending less than 0.1 KAS may fail due to the network dust protection limit.")
-                        .font(.footnote)
-                        .foregroundColor(.orange)
-                        .multilineTextAlignment(.center)
-                }
-
-                SendActionButton(
-                    title: "Slide to Send",
-                    isBusy: isSending,
-                    isEnabled: canSend,
-                    action: submit
-                )
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 24)
+    private func go(to next: Step) {
+        dismissSystemKeyboard()
+        stepForward = next.rawValue > currentStep.rawValue
+        // The leaving step re-renders with the new direction before it animates out.
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { step = next }
         }
-        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var stepTransition: AnyTransition {
+        .asymmetric(insertion: .move(edge: stepForward ? .trailing : .leading),
+                    removal: .move(edge: stepForward ? .leading : .trailing))
+    }
+
+    var body: some View {
+        ZStack {
+            switch currentStep {
+            case .from:
+                fromStep.transition(stepTransition)
+            case .amount:
+                amountStep.transition(stepTransition)
+            case .review:
+                reviewStep.transition(stepTransition)
+            case .fee:
+                feeStep.transition(stepTransition)
+            }
+        }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(isSending)
         .onChange(of: feeTier) { _ in
             customExtraFeeSompi = nil
             isEditingFee = false
+            if usedMax { setMaxAmount() }
+        }
+        .onChange(of: customExtraFeeSompi) { _ in
+            if usedMax { setMaxAmount() }
         }
         .task {
             // Deliberately does NOT create a contact here: opening the tip sheet and
@@ -6654,7 +6656,18 @@ private struct KaPostTipSheet: View {
             if errorMessage == nil, let initialError { errorMessage = initialError }
         }
         // coins picked on one address can't pay from another
-        .onChange(of: source) { _ in manualUtxos = nil }
+        .onChange(of: source) { _ in
+            manualUtxos = nil
+            if usedMax { setMaxAmount() }
+        }
+        // the From address's balance: the amount's Available and its check
+        .task(id: source) {
+            availableSompi = nil
+            guard let fromAddress = source.address else { return }
+            let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([fromAddress])) ?? []
+            guard !Task.isCancelled else { return }
+            availableSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+        }
         .task(id: "\(amountSompi ?? 0)#\(manualUtxos?.count ?? -1)#\(memo)#\(source.spendingIndex ?? -1)") {
             guard let amountSompi else {
                 normalFeeSompi = nil
@@ -6673,30 +6686,267 @@ private struct KaPostTipSheet: View {
             if let fundingAddress = source.address {
                 CoinControlView(fromAddress: fundingAddress, initialSelection: manualUtxos) { selection in
                     manualUtxos = selection
+                    if usedMax { setMaxAmount() }
                 }
             }
         }
-        .confirmationDialog("Small Amount", isPresented: $showDustWarning, titleVisibility: .visible) {
-            Button("Send Anyway") { send() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            KaspaUnit.text("Sending less than 0.1 KAS may fail due to the network dust protection limit.")
-        }
-        .sheet(item: $sentTransaction) { sent in
-            SentConfirmationSheet(transaction: sent) {
-                sentTransaction = nil
-                dismiss()
+    }
+
+    // MARK: Step 1 - From
+
+    /// "Where are you sending from?": Your Address, or Choose an Address with your addresses
+    /// listed right here (no sheet).
+    private var fromStep: some View {
+        SendStepScreen(title: Text("Tip"), onCancel: { dismiss() },
+                       canContinue: !(choosingFrom && source == .chatting)) {
+            go(to: .amount)
+        } content: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    SendStepQuestion(text: "Where are you sending from?")
+                    HStack(spacing: 10) {
+                        SelectablePill(title: "Your Address", selected: !choosingFrom) {
+                            choosingFrom = false
+                            source = .chatting
+                        }
+                        SelectablePill(title: "Choose an Address", selected: choosingFrom) {
+                            choosingFrom = true
+                        }
+                    }
+                    if choosingFrom {
+                        Text("Pick which of your addresses the Kaspa leaves from.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        OwnAddressList(selected: source == .chatting ? nil : source.address) { picked in
+                            source = picked
+                            // your address picked from the list: back on its own pill
+                            if picked == .chatting { choosingFrom = false }
+                        }
+                    } else if let fromAddress = source.address {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Your Address")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
+                                    .font(.caption.monospaced())
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if let availableSompi {
+                                Text(verbatim: "\(KaspaUnit.plain(availableSompi)) \(KaspaUnit.symbol)")
+                                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                        .padding(14)
+                        .background(sendKaspaGlass(cornerRadius: 16))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
             }
-            .presentationDetents([.height(sent.sheetHeight)])
-            .presentationDragIndicator(.visible)
         }
     }
 
-    /// "available: 12.5 KAS" for the funding source (spending address with Payment Privacy on,
-    /// the chatting address otherwise).
-    private var availableText: String {
-        let template = KaspaUnit.label(AppLocalization.string("available: %@ KAS"))
-        return String(format: template, locale: AppLocalization.locale, availableSompi.map(trimmedKas) ?? "--")
+    // MARK: Step 2 - Amount
+
+    private var amountStep: some View {
+        SendStepScreen(title: Text("Tip"),
+                       onBack: amountBack,
+                       onCancel: { dismiss() }, continueTitle: "Review",
+                       canContinue: amountSompi != nil && !exceedsBalance && !isEstimatingMax) {
+            go(to: .review)
+        } content: {
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    recipientChip
+                    fromChip
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+
+                KaspaKeypadAmountEntry(
+                    fiatAmountState: fiatAmountState,
+                    onAmountChange: { amountInput = $0 },
+                    isEstimatingMax: isEstimatingMax,
+                    footnote: amountFootnote,
+                    footnoteIsError: exceedsBalance || errorMessage != nil,
+                    onMax: setMaxAmount,
+                    onKeyTyped: {
+                        usedMax = false
+                        errorMessage = nil
+                    }
+                )
+            }
+        }
+    }
+
+    /// Under the typed amount: what's wrong with it, else what's available.
+    private var amountFootnote: String? {
+        if let errorMessage { return errorMessage }
+        if exceedsBalance { return AppLocalization.string("This is more than the address you're sending from holds.") }
+        guard let availableSompi else { return nil }
+        return KaspaUnit.label(String(format: AppLocalization.string("Available: %@ KAS"), locale: AppLocalization.locale, trimmedKas(availableSompi)))
+    }
+
+    /// "To <the poster>", so the amount step says where the tip goes.
+    private var recipientChip: some View {
+        SendStepChip(label: "To", value: displayName)
+    }
+
+    /// Back from the amount: to From, when the tip started there.
+    private var amountBack: (() -> Void)? {
+        guard initialStep == .from else { return nil }
+        return { go(to: .from) }
+    }
+
+    /// "From Your Address" (or the picked address), on the amount step.
+    private var fromChip: some View {
+        SendStepChip(label: "From", value: sourceTitle)
+    }
+
+    // MARK: Step 3 - Review
+
+    private var reviewStep: some View {
+        SwipeUpToSendScrollView(
+            screenTitle: "Review",
+            onCancel: { dismiss() },
+            onBack: { go(to: .amount) },
+            title: "Swipe up to Send",
+            isBusy: isSending,
+            isEnabled: canSend,
+            amountSompi: amountSompi,
+            recipient: displayName,
+            sent: sentTransaction,
+            failureMessage: errorMessage,
+            onDone: {
+                sentTransaction = nil
+                dismiss()
+            },
+            action: send
+        ) {
+            VStack(spacing: 18) {
+                reviewAmount
+                    .padding(.top, 8)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    reviewRow("To") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(verbatim: displayName).fontWeight(.semibold)
+                            Text(verbatim: address)
+                                .font(.caption.monospaced())
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Divider()
+                    reviewRow("From") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(verbatim: sourceTitle).fontWeight(.semibold)
+                            if let fromAddress = source.address {
+                                Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
+                                    .font(.caption.monospaced())
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    Divider()
+                    reviewRow("Total") {
+                        if let amountSompi, let totalFeeSompi {
+                            Text(verbatim: "\(trimmedKas(amountSompi + totalFeeSompi)) \(KaspaUnit.symbol)")
+                                .fontWeight(.semibold)
+                                .monospacedDigit()
+                        } else if isEstimatingFee || isEstimatingMax {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(verbatim: "—").foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .font(.subheadline)
+                .padding(14)
+                .background(sendKaspaGlass(cornerRadius: 20))
+
+                memoField
+
+                // The only things that can still change: the memo, the fee and the coins it spends.
+                SendFeeControls(
+                    feeTier: $feeTier,
+                    isEditingFee: $isEditingFee,
+                    customFeeText: $customFeeText,
+                    isEstimatingFee: isEstimatingFee,
+                    feeText: totalFeeSompi.map { "\(trimmedKas($0)) \(KaspaUnit.symbol)" },
+                    onStartEditing: startEditingFee,
+                    onCommit: commitCustomFee,
+                    coinControlSummary: coinControlSummary(manualUtxos),
+                    onCoinControl: { showCoinControl = true },
+                    onEditFee: openFeeEditor
+                )
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                } else if isDust {
+                    // Said before the swipe, since a swipe can't stop to ask.
+                    KaspaUnit.text("Sending less than 0.1 KAS may fail due to the network dust protection limit.")
+                        .font(.footnote)
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// The tip being sent, big, with its value in your currency under it.
+    private var reviewAmount: some View {
+        VStack(spacing: 6) {
+            Text("You're sending")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            if let amountSompi {
+                Text(verbatim: "\(trimmedKas(amountSompi)) \(KaspaUnit.symbol)")
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                if let price = portfolioViewModel.currentPriceUsd, price > 0 {
+                    Text(verbatim: formatFiatAmount(Double(amountSompi) / 100_000_000.0 * price,
+                                                    currency: portfolioViewModel.currentCurrency))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                ProgressView()
+                    .frame(height: 48)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func reviewRow<Value: View>(_ label: LocalizedStringKey, @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .foregroundColor(.secondary)
+            Spacer(minLength: 12)
+            value()
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private var sourceTitle: String {
+        switch source {
+        case .chatting: return AppLocalization.string("Your Address")
+        case .spending(_, _, let label): return label
+        }
     }
 
     private var memoField: some View {
@@ -6715,15 +6965,23 @@ private struct KaPostTipSheet: View {
         .background(sendKaspaGlass(cornerRadius: 22))
     }
 
-    /// The slide finished: a tip under the network's dust limit asks first, as in a chat.
-    private func submit() {
-        guard let amountSompi, !isSending else { return }
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        if amountSompi < 10_000_001 {
-            showDustWarning = true
-            return
+    // MARK: Network fee (from the review)
+
+    /// The fee editor: the whole fee typed on the keypad, Confirm back to the review.
+    private var feeStep: some View {
+        SendFeeEditorScreen(draft: $feeDraft, minimumSompi: normalFeeSompi,
+                            onCancel: { go(to: .review) }) { typed in
+            // never under the network's minimum
+            guard let normalFeeSompi else { return }
+            customExtraFeeSompi = typed > normalFeeSompi ? typed - normalFeeSompi : 0
+            go(to: .review)
         }
-        send()
+    }
+
+    private func openFeeEditor() {
+        guard let totalFeeSompi else { return }
+        feeDraft = trimmedKas(totalFeeSompi)
+        go(to: .fee)
     }
 
     /// Estimation-only stand-in when the poster isn't a contact yet: fee/max sizing needs a
@@ -6733,7 +6991,9 @@ private struct KaPostTipSheet: View {
     }
 
     private func setMaxAmount() {
+        usedMax = true
         isEstimatingMax = true
+        errorMessage = nil
         Task {
             let max = try? await ChatService.shared.estimateMaxPaymentAmount(
                 to: estimationContact, note: memo, sourceSpendingIndex: source.spendingIndex,
@@ -6767,7 +7027,7 @@ private struct KaPostTipSheet: View {
     }
 
     private func send() {
-        guard let amountSompi else { return }
+        guard let amountSompi, !isSending else { return }
         // The chat with the poster is created HERE, on an actual send - not when the
         // sheet opened - so a cancelled tip never leaves an orphan conversation.
         let recipient: Contact
@@ -6789,6 +7049,7 @@ private struct KaPostTipSheet: View {
         let tipSource = source.spendingIndex
         Task {
             do {
+                try await SendFailureSimulation.failIfEnabled()
                 let txId = try await ChatService.shared.sendPayment(
                     to: recipient, amountSompi: amountSompi, note: tipMemo, extraFeeSompi: tipExtraFee,
                     sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: tip
