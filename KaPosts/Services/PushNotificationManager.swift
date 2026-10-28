@@ -216,8 +216,8 @@ final class PushNotificationManager: ObservableObject {
             return
         }
 
-        let watchedAddresses = collectWatchedAddresses()
-        guard !watchedAddresses.isEmpty else { return }
+        // KaPosts watches no chat address; its main address is what it registers on.
+        guard collectPrimaryAddress() != nil else { return }
 
         Task {
             do {
@@ -422,9 +422,9 @@ final class PushNotificationManager: ObservableObject {
         let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
         let primaryAddress = collectPrimaryAddress()
 
-        // Group ids alone are a valid registration - requiring a non-empty 1:1 list meant a user
-        // with groups but no push-eligible 1:1 chats never registered for group pushes at all.
-        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty else {
+        // The main address alone is a valid registration: KaPosts has no chats to watch, and its
+        // KaPosts key and rooms ride along with it.
+        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty || primaryAddress != nil else {
             throw PushError.noWatchedAddresses
         }
 
@@ -657,8 +657,7 @@ final class PushNotificationManager: ObservableObject {
         guard hasPushService else { return }
 
         if !isRegistered {
-            let watchedAddresses = collectWatchedAddresses()
-            guard !watchedAddresses.isEmpty else { return }
+            guard collectPrimaryAddress() != nil else { return }
             if shouldDeferRegistrationForWalletBindingConflict() {
                 return
             }
@@ -748,7 +747,7 @@ final class PushNotificationManager: ObservableObject {
         // Only unregister when there is NOTHING left to watch. Group ids alone are a valid
         // registration - unregistering whenever the 1:1 list was empty killed ALL group pushes for
         // users with groups but no push-eligible 1:1 chats.
-        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty {
+        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty && primaryAddress == nil {
             AppLog.log("[Push] No eligible chats for push, unregistering device from indexer")
             await unregister()
             lastWatchedSignature = ""
@@ -1566,9 +1565,11 @@ final class PushNotificationManager: ObservableObject {
         return KaPostsWatchStore.shared.watchedPubkeys
     }
 
+    /// KaPosts has no 1:1 chats, so it watches no chat address: watching one made the push
+    /// service send that chat's messages here, as bare "New message" banners (KaPosts has no
+    /// notification extension to read them). It registers on its main address instead.
     private func collectWatchedAddresses() -> [String] {
-        let settings = AppSettings.load()
-        return ChatService.shared.pushEligibleConversationAddresses(settings: settings)
+        []
     }
 
     /// `blinded_group_id` is per-sender, not per-group, so for each local group we watch every

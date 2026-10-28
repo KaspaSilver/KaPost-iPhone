@@ -4125,48 +4125,50 @@ struct KaPostsView: View {
                             .clipped()
                     }
 
-                    KNSAvatarView(
-                        avatarURLString: info?.avatarURL,
-                        fallbackText: posterDisplayName(address),
-                        size: 76,
-                        contactAddress: address
-                    )
-                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 3))
-                    .padding(.leading, 16)
+                    // The avatar with the actions beside it, above the name, so a long name never
+                    // squeezes Follow and Chat.
+                    HStack(alignment: .bottom, spacing: 8) {
+                        KNSAvatarView(
+                            avatarURLString: info?.avatarURL,
+                            fallbackText: posterDisplayName(address),
+                            size: 76,
+                            contactAddress: address
+                        )
+                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 3))
+                        Spacer(minLength: 8)
+                        if address != WalletManager.shared.currentWallet?.publicAddress {
+                            Button {
+                                Haptics.impact(.light)
+                                // a handed pubkey, or one the indexer showed data for - never a guess
+                                toggleFollowSubmitting(address: address, pubkey: target.pubkey ?? posterProfileResolvedPubkey)
+                            } label: {
+                                Text(followStore.isFollowing(address) ? "Following" : "Follow")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .tint(followStore.isFollowing(address) ? Color.secondary.opacity(0.35) : Color.accentColor)
+                            .fixedSize()
+                        }
+                        Button {
+                            Haptics.impact(.light)
+                            openInKaChat(address)
+                        } label: {
+                            Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                                .font(.caption.weight(.bold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(.accentColor)
+                        .fixedSize()
+                    }
+                    .padding(.horizontal, 16)
                     .padding(.top, -38)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        // Name with the actions in a single tidy row: name - Follow - Chat.
-                        HStack(spacing: 8) {
-                            Text(posterDisplayName(address))
-                                .font(.title3.weight(.bold))
-                                .lineLimit(1)
-                                .layoutPriority(1)
-                            Spacer(minLength: 8)
-                            if address != WalletManager.shared.currentWallet?.publicAddress {
-                                Button {
-                                    Haptics.impact(.light)
-                                    // a handed pubkey, or one the indexer showed data for - never a guess
-                                    toggleFollowSubmitting(address: address, pubkey: target.pubkey ?? posterProfileResolvedPubkey)
-                                } label: {
-                                    Text(followStore.isFollowing(address) ? "Following" : "Follow")
-                                        .font(.caption.weight(.bold))
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .tint(followStore.isFollowing(address) ? Color.secondary.opacity(0.35) : Color.accentColor)
-                            }
-                            Button {
-                                Haptics.impact(.light)
-                                openInKaChat(address)
-                            } label: {
-                                Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                                    .font(.caption.weight(.bold))
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .tint(.accentColor)
-                        }
+                        Text(posterDisplayName(address))
+                            .font(.title3.weight(.bold))
+                            .lineLimit(1)
                         HStack(spacing: 16) {
                             Button {
                                 posterProfileFollowListKind = .following

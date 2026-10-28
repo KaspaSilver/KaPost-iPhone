@@ -89,6 +89,12 @@ Push registration and updates send `apns_topic` = the bundle id (`com.kachat.kap
 KaPosts pushes on KaPosts' topic. Without it Apple rejects them with `DeviceTokenNotForTopic`;
 while the service doesn't honour it, KaPosts notifies through its in-app poller only.
 
+KaPosts has no notification service extension, so a chat push would show as a bare "New
+message" banner. KaPosts registers with `watched_addresses: []` (main address only), and
+`willPresent` drops any push whose thread isn't `kaposts` or `broadcast:<room>`. The push
+service is asked to send KaPosts' topic only `kaposts` and `broadcast` pushes
+(`docs/KAPOSTS_PUSH_KINDS.md` in the indexer repo).
+
 Links: KaPosts opens `kaposts://` (same targets as `kachat://`). Shared links still read
 `kachat://` / `https://kachat.app/post/...`, which open KaChat; for them to open KaPosts the
 kachat.app apple-app-site-association needs KaPosts' app ID on `/post/*` and `/broadcast/*`, and

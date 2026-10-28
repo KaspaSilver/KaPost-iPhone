@@ -275,6 +275,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         let userInfo = notification.request.content.userInfo
         let threadId = notification.request.content.threadIdentifier
         let body = notification.request.content.body
+        // KaPost has no 1:1 or group chats: the push service only means to send it KaPost and
+        // Public Chats pushes ("kaposts", "broadcast:<room>"). Any other push (a chat message,
+        // handshake or payment for the address) gets no banner here.
+        if notification.request.trigger is UNPushNotificationTrigger,
+           threadId != "kaposts", !threadId.hasPrefix("broadcast:") {
+            completionHandler([])
+            return
+        }
         Task { @MainActor in
             let settings = AppSettings.load()
             var options: UNNotificationPresentationOptions = [.banner, .badge]
