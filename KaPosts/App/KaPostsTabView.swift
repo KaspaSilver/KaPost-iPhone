@@ -36,6 +36,7 @@ struct KaPostsTabView: View {
     /// The address profile editor (name, picture, banner, bio) - the profile KaPosts shows.
     @State private var showProfileEditor = false
     @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
+    @ObservedObject private var publicChatBadge = PublicChatUnreadBadge.shared
 
     var body: some View {
         TabView(selection: $dock.selectedTab) {
@@ -47,6 +48,8 @@ struct KaPostsTabView: View {
                 PublicChatListView()
             }
             .tabItem { Label(Tab.publicChats.title, systemImage: Tab.publicChats.icon) }
+            // unread messages across the rooms
+            .badge(publicChatBadge.count > 0 ? Text(verbatim: publicChatBadge.badgeText) : nil)
             .tag(Tab.publicChats)
 
             KaPostsView(rootMode: .myProfile)
@@ -101,6 +104,8 @@ struct KaPostsTabView: View {
             } else {
                 chatService.startPolling()
             }
+            // The rooms' stored messages, so the Public Chats badge counts before the list opens.
+            PublicChatService.shared.primeChannelSummaries()
             if KaPostsDeepLink.pendingOpenNotifications {
                 KaPostsDeepLink.pendingOpenNotifications = false
                 dock.selectedTab = .notifications

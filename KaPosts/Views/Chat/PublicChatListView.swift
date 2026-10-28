@@ -41,17 +41,25 @@ struct PublicChatListView: View {
     /// The customize sheet: a switch for every default room.
     @State private var showCustomize = false
 
-    /// Rooms picked in Select mode, owned by the Chats screen (its toolbar and bottom bar act
-    /// on them). Constant empty when this list stands alone.
-    private var roomSelection: Binding<Set<String>>
+    /// Rooms picked in Select mode. Owned by the Chats screen when embedded there (its toolbar
+    /// and bottom bar act on them); standing alone (KaPost's Public Chats tab), this list has its
+    /// own Select, Select All and bottom bar.
+    private var externalRoomSelection: Binding<Set<String>>?
+    @State private var ownRoomSelection: Set<String> = []
+    @State private var ownEditMode: EditMode = .inactive
+    /// Picked rooms waiting on the bulk Delete's confirmation.
+    @State private var showBulkDelete = false
     @Environment(\.editMode) private var editMode
-    private var isSelecting: Bool { editMode?.wrappedValue == .active }
+    private var roomSelection: Binding<Set<String>> { externalRoomSelection ?? $ownRoomSelection }
+    private var isSelecting: Bool {
+        externalRoomSelection != nil ? editMode?.wrappedValue == .active : ownEditMode == .active
+    }
 
     init(initialChannel: String? = nil, embeddedInChats: Bool = false, selection: Binding<String?>? = nil, roomSelection: Binding<Set<String>>? = nil) {
         self.embeddedInChats = embeddedInChats
         self.initialChannel = initialChannel
         self.externalSelection = selection
-        self.roomSelection = roomSelection ?? .constant([])
+        self.externalRoomSelection = roomSelection
     }
 
     private func openJoinSheet() {
@@ -137,22 +145,42 @@ struct PublicChatListView: View {
             // Chats tab.
             if !embeddedInChats {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        Haptics.impact(.light)
-                        showCustomize = true
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
+                    if isSelecting {
+                        let allRooms = Set(listedChannels.map(\.channelName))
+                        Button(!allRooms.isEmpty && ownRoomSelection == allRooms ? "Deselect All" : "Select All") {
+                            ownRoomSelection = ownRoomSelection == allRooms ? [] : allRooms
+                        }
+                    } else {
+                        Button {
+                            Haptics.impact(.light)
+                            showCustomize = true
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .accessibilityLabel("Choose rooms")
                     }
-                    .accessibilityLabel("Choose rooms")
                 }
                 ToolbarItem(placement: .principal) {
                     BalanceToolbarLabel()
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    ConnectionStatusIndicator()
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button(isSelecting ? "Cancel" : "Select") {
+                        Haptics.impact(.light)
+                        withAnimation { setSelecting(!isSelecting) }
+                    }
+                    if !isSelecting {
+                        ConnectionStatusIndicator()
+                    }
                 }
             }
         }
+        // Select mode's actions, for every picked room at once.
+        .safeAreaInset(edge: .bottom) {
+            if isSelecting && !embeddedInChats {
+                bulkActionBar
+            }
+        }
+        .sheet(isPresented: $showBulkDelete) { bulkDeleteSheet }
         .toast(message: toastMessage, style: .success)
         .sheet(isPresented: $showCustomize) {
             PublicChatsSettingsView()
@@ -270,6 +298,8 @@ struct PublicChatListView: View {
                 .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
+        // Standing alone, Select mode is this list's own (the Chats screen sets it when embedded).
+        .modifier(OwnEditMode(editMode: externalRoomSelection == nil ? $ownEditMode : nil))
         // Its own floating button for joining or creating a room - only standalone (Kaspa Hub).
         // Inside Chats, the Chats screen's + covers it ("New Public Chat", in its New sheet).
         .overlay(alignment: .bottomTrailing) {
@@ -305,6 +335,122 @@ struct PublicChatListView: View {
     }
 
     private struct RoomActionTarget: Identifiable { let id: String }
+
+    /// Puts this list's own Select mode in the environment, so List shows its checkmarks; nil
+    /// leaves the host's (the Chats screen's) in place.
+    private struct OwnEditMode: ViewModifier {
+        let editMode: Binding<EditMode>?
+        func body(content: Content) -> some View {
+            if let editMode {
+                content.environment(\.editMode, editMode)
+            } else {
+                content
+            }
+        }
+    }
+
+    // MARK: - Select mode (standing alone)
+
+    private func setSelecting(_ on: Bool) {
+        ownEditMode = on ? .active : .inactive
+        if !on { ownRoomSelection = [] }
+    }
+
+    /// The picked rooms that are still listed, in list order.
+    private var pickedChannels: [PublicChatChannel] {
+        listedChannels.filter { ownRoomSelection.contains($0.channelName) }
+    }
+
+    /// Mute turns notifications off for every picked room; once they are all off, it turns them
+    /// back on.
+    private var pickedAllMuted: Bool {
+        !pickedChannels.isEmpty && pickedChannels.allSatisfy { !$0.notifyEnabled }
+    }
+
+    private var bulkActionBar: some View {
+        let picked = pickedChannels
+        let names = picked.map(\.channelName)
+        let muted = pickedAllMuted
+        return HStack(spacing: 0) {
+            bulkButton("Read", systemImage: "envelope.open") {
+                names.forEach { publicChatService.markChannelRead($0) }
+                finishBulk(String(localized: "Marked \(names.count) as read"))
+            }
+            bulkButton("Unread", systemImage: "envelope.badge") {
+                names.forEach { publicChatService.markChannelUnread($0) }
+                finishBulk(String(localized: "Marked \(names.count) as unread"))
+            }
+            bulkButton(muted ? "Unmute" : "Mute", systemImage: muted ? "bell" : "bell.slash") {
+                names.forEach { publicChatService.setNotifyEnabled(muted, forChannel: $0) }
+                finishBulk(muted ? String(localized: "Notifications on for \(names.count)")
+                                 : String(localized: "Notifications off for \(names.count)"))
+            }
+            bulkButton("Delete", systemImage: "trash", tint: .red) {
+                showBulkDelete = true
+            }
+        }
+        .disabled(picked.isEmpty)
+        .opacity(picked.isEmpty ? 0.45 : 1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private func bulkButton(_ title: LocalizedStringKey, systemImage: String, tint: Color = .accentColor,
+                            action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.impact(.light)
+            action()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 19, weight: .semibold))
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundColor(tint)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func finishBulk(_ message: String) {
+        withAnimation { setSelecting(false) }
+        showToast(message)
+    }
+
+    /// Bulk Delete asks first: rooms you added go with their messages; default rooms are only
+    /// switched off (`PublicChatService.removeFromList`).
+    private var bulkDeleteSheet: some View {
+        let names = pickedChannels.map(\.channelName)
+        return VStack(spacing: 14) {
+            Image(systemName: "trash")
+                .font(.scaled(size: 30))
+                .foregroundColor(.red)
+                .padding(.top, 26)
+            Text("Delete \(names.count) Public Chat\(names.count == 1 ? "" : "s")?")
+                .font(.title3.weight(.bold))
+            Text("Rooms you added are removed with their messages. Default rooms are only switched off - turn them back on any time in Public Chats settings.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            ActionSheetRow(title: "Delete", subtitle: "Removes the picked rooms from this device.", systemImage: "trash", tint: .red) {
+                names.forEach { publicChatService.removeFromList($0) }
+                showBulkDelete = false
+                finishBulk(String(localized: "Deleted \(names.count)"))
+            }
+            ActionSheetRow(title: "Keep", subtitle: "Leave the rooms as they are.", systemImage: "xmark") {
+                showBulkDelete = false
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .presentationDetents([.height(380)])
+        .presentationDragIndicator(.visible)
+    }
 
     /// The long-press half sheet, same shape as a group's: read state, notifications, the room
     /// link, and delete - which for a default room only switches it off (see

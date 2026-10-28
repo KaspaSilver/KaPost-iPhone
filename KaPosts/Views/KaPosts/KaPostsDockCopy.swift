@@ -26,6 +26,7 @@ extension Notification.Name {
 struct KaPostsDockCopy: View {
     @ObservedObject private var router = KaPostsDockRouter.shared
     @ObservedObject private var notifCenter = KaPostsNotificationCenter.shared
+    @ObservedObject private var publicChatBadge = PublicChatUnreadBadge.shared
 
     /// The capsule's height, matching the system dock.
     static let height: CGFloat = 62
@@ -55,7 +56,7 @@ struct KaPostsDockCopy: View {
 
     private func item(_ tab: KaPostsTabView.Tab) -> some View {
         let selected = router.selectedTab == tab
-        let badge = tab == .notifications && notifCenter.unseenCount > 0
+        let badgeText = badgeText(for: tab)
         return Button {
             Haptics.selection()
             NotificationCenter.default.post(name: .kaPostsCloseCovers, object: nil)
@@ -67,8 +68,8 @@ struct KaPostsDockCopy: View {
                     .font(.system(size: 20, weight: .medium))
                     .frame(height: 24)
                     .overlay(alignment: .topTrailing) {
-                        if badge {
-                            Text(notifCenter.badgeText)
+                        if let badgeText {
+                            Text(badgeText)
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 5)
@@ -93,7 +94,24 @@ struct KaPostsDockCopy: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(tab.title))
-        .accessibilityValue(badge ? Text("\(notifCenter.unseenCount) unseen") : Text(""))
+        .accessibilityValue(accessibilityBadge(for: tab))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// Notifications: unseen activity. Public Chats: unread messages across the rooms.
+    private func badgeText(for tab: KaPostsTabView.Tab) -> String? {
+        switch tab {
+        case .notifications: return notifCenter.unseenCount > 0 ? notifCenter.badgeText : nil
+        case .publicChats: return publicChatBadge.count > 0 ? publicChatBadge.badgeText : nil
+        default: return nil
+        }
+    }
+
+    private func accessibilityBadge(for tab: KaPostsTabView.Tab) -> Text {
+        switch tab {
+        case .notifications where notifCenter.unseenCount > 0: return Text("\(notifCenter.unseenCount) unseen")
+        case .publicChats where publicChatBadge.count > 0: return Text("\(publicChatBadge.count) unread")
+        default: return Text("")
+        }
     }
 }
