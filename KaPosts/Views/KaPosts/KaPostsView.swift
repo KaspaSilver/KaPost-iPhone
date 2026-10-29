@@ -634,6 +634,11 @@ struct KaPostsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .kaPostsCloseCovers)) { _ in
             closeAllCovers()
         }
+        // Feed tapped on the dock: back to the top of the feed.
+        .onReceive(NotificationCenter.default.publisher(for: .kaPostsScrollFeedToTop)) { _ in
+            guard rootMode == .feed else { return }
+            pendingScrollToFeedTop = true
+        }
     }
 
     /// Every full-screen KaPosts screen this view presents, closed at once and without the

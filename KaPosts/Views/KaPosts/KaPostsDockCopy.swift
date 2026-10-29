@@ -6,12 +6,23 @@ import Combine
 final class KaPostsDockRouter: ObservableObject {
     static let shared = KaPostsDockRouter()
     @Published var selectedTab: KaPostsTabView.Tab = .feed
+
+    /// A tab tapped on either dock. Feed also takes the feed back to its top, whether it was
+    /// already showing or you came from another tab.
+    func select(_ tab: KaPostsTabView.Tab) {
+        if tab == .feed {
+            NotificationCenter.default.post(name: .kaPostsScrollFeedToTop, object: nil)
+        }
+        selectedTab = tab
+    }
 }
 
 extension Notification.Name {
     /// A tap on the dock copy: every KaPosts full-screen screen closes at once, without the
     /// slide, so the tab underneath is what shows.
     static let kaPostsCloseCovers = Notification.Name("kaPostsCloseCovers")
+    /// The Feed tab tapped on a dock: the feed jumps to its top.
+    static let kaPostsScrollFeedToTop = Notification.Name("kaPostsScrollFeedToTop")
 }
 
 /// The dock, drawn again on top of KaPosts' full-screen screens (threads, profiles, the menu's
@@ -60,7 +71,7 @@ struct KaPostsDockCopy: View {
         return Button {
             Haptics.selection()
             NotificationCenter.default.post(name: .kaPostsCloseCovers, object: nil)
-            router.selectedTab = tab
+            router.select(tab)
         } label: {
             VStack(spacing: 3) {
                 Image(systemName: tab.icon)

@@ -39,7 +39,9 @@ struct KaPostsTabView: View {
     @ObservedObject private var publicChatBadge = PublicChatUnreadBadge.shared
 
     var body: some View {
-        TabView(selection: $dock.selectedTab) {
+        // Through `select`, which also hears a tap on the tab already showing - that is how
+        // Feed gets back to its top.
+        TabView(selection: Binding(get: { dock.selectedTab }, set: { dock.select($0) })) {
             KaPostsPageView()
                 .tabItem { Label(Tab.feed.title, systemImage: Tab.feed.icon) }
                 .tag(Tab.feed)
