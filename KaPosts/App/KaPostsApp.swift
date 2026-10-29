@@ -220,6 +220,23 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         }
     }
 
+    /// A reply or quote push opens the reply or quote itself - the same target the in-app banners
+    /// use. The push's `postId` is the post it was made ON (PUSH_EXTENSIONS.md), and opening that
+    /// left you on your own post waiting for the indexer to list the new reply. The action's txid
+    /// is the push's `apns-collapse-id`, which iOS gives us as the request identifier; the thread
+    /// opens on its parent with the reply already in it (`openResolvedPost`).
+    static func kaPostsPushOpensAction(userInfo: [AnyHashable: Any], body: String) -> Bool {
+        if let explicit = userInfo["kaposts_kind"] as? String {
+            return explicit == "reply" || explicit == "quote"
+        }
+        let lowered = body.lowercased()
+        return lowered.contains("replied to your") || lowered.contains("quoted your")
+    }
+
+    private static func isTxId(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy(\.isHexDigit)
+    }
+
     /// iPhone is locked to portrait; iPad may rotate.
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
@@ -343,7 +360,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                     KaPostsNotificationService.shared.recordDisplayed(actionId: actionId)
                 }
             }
-            if let postId = userInfo["postId"] as? String, !postId.isEmpty {
+            let body = response.notification.request.content.body
+            let actionId = response.notification.request.identifier
+            if Self.kaPostsPushOpensAction(userInfo: userInfo, body: body), Self.isTxId(actionId) {
+                // A reply or a quote: open it, not the post it was made on.
+                KaPostsDeepLink.pendingPostTxId = actionId.lowercased()
+            } else if let postId = userInfo["postId"] as? String, !postId.isEmpty {
                 KaPostsDeepLink.pendingPostTxId = postId
             } else {
                 KaPostsDeepLink.pendingOpenNotifications = true
