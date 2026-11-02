@@ -21,6 +21,9 @@ import CryptoKit
 /// `<address>` is a full Kaspa address; in the universal form a mainnet address may drop its
 /// `kaspa:` prefix (the app writes it without, so the link reads cleanly), and a missing
 /// prefix means mainnet.
+/// A pre-written post, `kaposts://compose?text=<percent-encoded post>`, is not one of these
+/// targets: other apps hand it to KaPost through iOS (`composeText(from:)`), so it has no share
+/// form, no preview, and does nothing tapped inside a post or a chat.
 /// Everything a pasted link carries is attacker-controlled, so `parse` re-validates the channel
 /// name from scratch (`normalizeAndValidateChannel`) rather than trusting the URL's text - a
 /// malformed or hostile name is rejected outright, never joined.
@@ -125,6 +128,19 @@ enum KaChatInternalLink: Equatable {
         default:
             return nil
         }
+    }
+
+    /// The post in a `kaposts://compose?text=...` link, for the composer to open with. Nothing
+    /// is sent until the person taps Post, but the text is someone else's: no control or direction
+    /// marks they could not see in the editor, and no longer than a post can be.
+    static func composeText(from url: URL) -> String? {
+        guard url.scheme?.lowercased() == "kaposts", url.host?.lowercased() == "compose",
+              url.pathComponents.filter({ $0 != "/" }).isEmpty,
+              let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "text" })?.value else { return nil }
+        let kept = raw.unicodeScalars.filter { $0 == "\n" || !isDisallowedScalar($0) }
+        let text = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(KaPostsView.postCharacterLimit))
     }
 
     /// A KaPosts id is a Kaspa transaction id (hex), but the id charset is the indexer's to

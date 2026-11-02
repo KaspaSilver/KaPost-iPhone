@@ -65,8 +65,12 @@ struct PublicChatChannelView: View {
     private struct SenderSheetTarget: Identifiable {
         let address: String
         let isOwnMessage: Bool
+        /// The message whose avatar was tapped, for Report.
+        let message: PublicChatMessage
         var id: String { address }
     }
+    /// A report that couldn't go to Mail; non-nil shows `contentReportFallback`.
+    @State private var unsentReport: ContentReport?
     @State private var toastToken = UUID()
     /// Send Kaspa from a member's menu: the send screen with their address filled in.
     @State private var sendTarget: SendTarget?
@@ -220,6 +224,7 @@ struct PublicChatChannelView: View {
     private var chrome: some View {
         navigation
         .toast(message: toastMessage, style: .success)
+        .contentReportFallback($unsentReport)
         // Extracted, like the group screen's: inline, this closure inside an already-long
         // modifier chain is the kind of expression the type checker gives up on.
         .sheet(item: $senderSheetTarget) { senderSheet(for: $0) }
@@ -696,10 +701,12 @@ struct PublicChatChannelView: View {
                 showToast(message.senderAddress.addressCopiedToastText)
             },
             onHideSender: { publicChatService.hideSender(message.senderAddress, inChannel: channelName) },
+            onReport: { reportMessage(message) },
             onAvatarTap: {
                 senderSheetTarget = SenderSheetTarget(
                     address: message.senderAddress,
-                    isOwnMessage: message.senderAddress == myAddress
+                    isOwnMessage: message.senderAddress == myAddress,
+                    message: message
                 )
             },
             onReply: { publicChatService.startReplyTo(message) },
@@ -1202,6 +1209,24 @@ struct PublicChatChannelView: View {
         }
     }
 
+    /// Reporting (App Store guideline 1.2, `ContentReport`): the message's id, room, sender and text.
+    private func reportMessage(_ message: PublicChatMessage) {
+        let report = ContentReport(body: """
+        I want to report this public chat message.
+
+        Room: #\(channelName)
+        Message: \(message.id)
+        Sender: \(message.senderAddress)
+        Text: \(String(displayContent(for: message).text.prefix(500)))
+
+        What is wrong with it:
+
+        """)
+        guard !report.send() else { return }
+        // Let the half sheet that offered this finish dismissing before the alert goes up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
+    }
+
     /// The sender half sheet a tapped avatar opens: what the avatar's popup menu used to offer,
     /// with a line under each option saying what it does - the same shape as the group thread's
     /// and every other menu in the app that became a sheet. One sheet serves every row.
@@ -1262,6 +1287,25 @@ struct PublicChatChannelView: View {
                     senderSheetTarget = nil
                     publicChatService.hideSender(address, inChannel: channelName)
                 }
+                ActionSheetRow(
+                    title: "Report",
+                    subtitle: "Report abusive or objectionable content. Opens an email with this message attached.",
+                    systemImage: "flag",
+                    tint: .red
+                ) {
+                    senderSheetTarget = nil
+                    reportMessage(target.message)
+                }
+                ActionSheetRow(
+                    title: "Block \(displayName(for: address))",
+                    subtitle: "Hides their posts and room messages, and stops them interacting with you.",
+                    systemImage: "hand.raised",
+                    tint: .red
+                ) {
+                    senderSheetTarget = nil
+                    KaPostsModerationStore.shared.block(address)
+                    showToast("Blocked. Undo it in the Feed's menu, under Blocked.")
+                }
             }
 
             Spacer(minLength: 0)
@@ -1269,7 +1313,8 @@ struct PublicChatChannelView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.medium, .large])
+        // Tall enough to show every row, Report and Block included.
+        .presentationDetents([.height(target.isOwnMessage ? 266 : 578), .large])
         .presentationDragIndicator(.visible)
     }
 
@@ -1344,6 +1389,7 @@ private struct PublicChatMessageRow: View, Equatable {
     let onViewProfile: () -> Void
     let onCopyAddress: () -> Void
     let onHideSender: () -> Void
+    let onReport: () -> Void
     /// Tapping the avatar. The parent presents the sender half sheet (see
     /// `PublicChatChannelView.senderSheet`); the row itself no longer owns a menu.
     let onAvatarTap: () -> Void
@@ -1807,6 +1853,9 @@ private struct PublicChatMessageRow: View, Equatable {
         }
         if voicePayload == nil {
             actions.append(.copyMessage { onCopyMessage() })
+        }
+        if !isOwnMessage {
+            actions.append(.report { onReport() })
         }
         switch translation.state(for: translationKey) {
         case .translated:

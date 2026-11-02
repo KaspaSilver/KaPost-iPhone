@@ -813,8 +813,30 @@ final class PublicChatStore {
         }
     }
 
-    /// Senders hidden in this room: room-scoped rows plus legacy global ("" channel) rows.
+    /// Accounts blocked in KaPosts (`KaPostsModerationStore`), hidden in every room. Not rows:
+    /// that store owns the list, per account, and the Blocked screen is where they are undone.
+    private static let blockedSendersLock = NSLock()
+    private static var blockedSendersStorage: Set<String> = []
+    static var blockedSenders: Set<String> {
+        get {
+            blockedSendersLock.lock()
+            defer { blockedSendersLock.unlock() }
+            return blockedSendersStorage
+        }
+        set {
+            blockedSendersLock.lock()
+            defer { blockedSendersLock.unlock() }
+            blockedSendersStorage = newValue
+        }
+    }
+
+    /// Everyone whose messages this room leaves out: its hides plus blocked accounts.
     func hiddenSenderAddresses(forChannel channel: String) -> Set<String> {
+        roomHiddenSenderAddresses(forChannel: channel).union(Self.blockedSenders)
+    }
+
+    /// Senders hidden in this room: room-scoped rows plus legacy global ("" channel) rows.
+    func roomHiddenSenderAddresses(forChannel channel: String) -> Set<String> {
         guard isLoaded else { return [] }
         let normalized = PublicChatChannelName.normalize(channel)
         var result: Set<String> = []
@@ -829,10 +851,10 @@ final class PublicChatStore {
     }
 
     /// Every hide, grouped for one-pass filtering during block scans and push registration:
-    /// `global` = legacy all-room rows, `perChannel` = room-scoped rows.
+    /// `global` = legacy all-room rows and blocked accounts, `perChannel` = room-scoped rows.
     func hiddenSendersByChannel() -> (global: Set<String>, perChannel: [String: Set<String>]) {
-        guard isLoaded else { return ([], [:]) }
-        var global: Set<String> = []
+        guard isLoaded else { return (Self.blockedSenders, [:]) }
+        var global = Self.blockedSenders
         var perChannel: [String: Set<String>] = [:]
         let context = viewContext
         context.performAndWait {

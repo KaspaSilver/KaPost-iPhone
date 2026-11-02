@@ -383,7 +383,33 @@ final class WalletManager: ObservableObject {
     @discardableResult
     func commitCreatedWallet(seedPhrase: SeedPhrase, passphrase: String, alias: String) async throws -> Wallet {
         let sp = SeedPhrase(words: seedPhrase.words, passphrase: passphrase.isEmpty ? nil : passphrase)
-        return try await importWallet(from: sp, alias: alias)
+        let wallet = try await importWallet(from: sp, alias: alias)
+        // nobody has seen these words yet: the Feed's card stays until they're backed up
+        AccountBackupStatus.shared.markPending(wallet.publicAddress)
+        return wallet
+    }
+
+    /// Create New Account, in one tap or with a passphrase: the account under the next free name.
+    /// Nothing syncs until the dock is up (`KaPostsTabView` releases the hold).
+    func commitNewAccount(seedPhrase: SeedPhrase, passphrase: String) async throws {
+        ChatService.shared.holdSyncForOnboarding()
+        do {
+            _ = try await commitCreatedWallet(seedPhrase: seedPhrase, passphrase: passphrase, alias: nextDefaultAccountName())
+        } catch {
+            ChatService.shared.releaseSyncForOnboarding()
+            throw error
+        }
+    }
+
+    /// The name a new account gets, renameable later: "My Account", then "My Account 2" and on,
+    /// skipping any name a saved account already has.
+    func nextDefaultAccountName() -> String {
+        let base = AppLocalization.string("My Account")
+        let taken = Set(savedAccounts.map { $0.alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        guard taken.contains(base.lowercased()) else { return base }
+        var number = 2
+        while taken.contains("\(base) \(number)".lowercased()) { number += 1 }
+        return "\(base) \(number)"
     }
 
     /// Convenience one-shot create (generate + commit with no passphrase). Retained for callers
@@ -513,6 +539,8 @@ final class WalletManager: ObservableObject {
             throw KasiaError.seedPhraseParsingFailed(wordCount: words.count)
         }
         let wallet = try await importWallet(from: seedPhrase, alias: alias, family: family)
+        // whoever typed the words has them
+        AccountBackupStatus.shared.markDone(wallet.publicAddress)
         // A restored seed finds its spending addresses by itself - legacy and quantum, the same
         // sweep as Manage Addresses' Discover Addresses - so balances and change rotation are
         // right without anyone knowing to tap it (owner's call, 2026-10-21). Only this path: a
@@ -544,6 +572,7 @@ final class WalletManager: ObservableObject {
             await MessageStore.shared.destroyLocalStoreFiles()
         }
         if let walletAddressToDelete {
+            AccountBackupStatus.shared.forget(walletAddressToDelete)
             KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: walletAddressToDelete)
             // its .kachat reminders would keep firing for names this phone no longer holds - on
             // both networks: the tag is from the address, whose checksum differs per prefix
@@ -701,7 +730,10 @@ final class WalletManager: ObservableObject {
                 for address in Self.accountAddressVariants(account.publicAddress) {
                     ContactsManager.shared.deletePersistedContacts(forWalletAddress: address)
                     await KachatNameReminders.removeAll(forWallet: address)
+                    KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: address)
+                    KaPostsNotificationCenter.removeAllData(forWalletAddress: address)
                 }
+                AccountBackupStatus.shared.forget(account.publicAddress)
                 removeSavedAccountFromStorage(account)
                 return
             }
@@ -725,6 +757,8 @@ final class WalletManager: ObservableObject {
             PublicChatStore.shared.clearAll()
             KaPostsFollowStore.shared.setCurrentWallet(address)
             KaPostsModerationStore.shared.setCurrentWallet(address)
+            KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: address)
+            KaPostsNotificationCenter.removeAllData(forWalletAddress: address)
         }
 
         do {
@@ -738,6 +772,7 @@ final class WalletManager: ObservableObject {
             return
         }
 
+        AccountBackupStatus.shared.forget(account.publicAddress)
         removeSavedAccountFromStorage(account)
         currentWallet = nil
         isBalanceRefreshing = false
@@ -755,6 +790,18 @@ final class WalletManager: ObservableObject {
         SharedDataManager.syncWalletAddressForExtension()
         NotificationCenter.default.post(name: .settingsDidChange, object: nil)
         SharedDataManager.setPrivateKeyAvailable(false)
+        KaPostsNotificationCenter.shared.reload()
+    }
+
+    /// Settings > Delete Account: the signed-in account, removed the way the sign-in screen's
+    /// Delete removes it.
+    func deleteCurrentAccount() async {
+        guard let wallet = currentWallet else { return }
+        cachedPrivateKey = nil
+        // files the account first, whatever the list holds, so the removal finds it
+        updateSavedAccounts(from: wallet)
+        guard let account = savedAccounts.first else { return }
+        await removeSavedAccount(account)
     }
 
     func updateAlias(_ alias: String) async throws {

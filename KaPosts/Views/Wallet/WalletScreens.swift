@@ -739,6 +739,8 @@ struct ChattingAddressQRView: View {
     let balanceSompi: UInt64?
     var subtitle: String = "This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name."
 
+    @EnvironmentObject private var walletManager: WalletManager
+    @ObservedObject private var backupStatus = AccountBackupStatus.shared
     @State private var qrImage: UIImage?
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
@@ -800,6 +802,19 @@ struct ChattingAddressQRView: View {
             )
             .contentShape(Rectangle())
             .onTapGesture { copyAddress() }
+            // a reminder only: receiving is never blocked
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if backupStatus.isPending(walletManager.currentWallet?.publicAddress) {
+                    Label("This account isn't backed up yet. Use the card at the top of the Feed to back it up.",
+                          systemImage: "exclamationmark.shield.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.orange.opacity(0.12))
+                }
+            }
             .toast(message: toastMessage)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -1545,7 +1560,10 @@ struct WithdrawKaspaView: View {
     private func resolveKNSDomain(_ domain: String) {
         isResolvingKNS = true
 
-        Task {
+        // On the main actor: the check below must read the field as it is now. Read from a
+        // background task while typing fast, it could see an older value, take this lookup for a
+        // stale one and stop - leaving "Looking up domain..." up for good.
+        Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
 
             guard addressInput.trimmingCharacters(in: .whitespacesAndNewlines) == domain ||

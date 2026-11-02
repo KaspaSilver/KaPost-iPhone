@@ -667,6 +667,7 @@ struct KaPostsView: View {
             if rootMode == .myProfile {
                 myProfileSheet
             } else {
+                AccountBackupFeedCards()
                 feedTabBar
                 // Following, Feed and Popular side by side: swipe left and right between them,
                 // or tap the tab bar. Each touch locks to one direction, so a vertical scroll
@@ -691,7 +692,7 @@ struct KaPostsView: View {
         // status bar with rounded top corners, which clipped the connection dot in its own
         // header into a crescent and left the composer looking like a panel over the feed
         // rather than the screen it is.
-        .fullScreenCover(isPresented: $showComposer, onDismiss: { clearRestoredComposerDraft() }) {
+        .fullScreenCover(isPresented: $showComposer, onDismiss: { composerClosed() }) {
             KaPostComposerView(
                 onPost: { text in
                     schedulePost(text: text)
@@ -764,10 +765,10 @@ struct KaPostsView: View {
             KaPostEngagementView(post: target)
                 .kaPostsSlideCover { engagementTarget = nil }
         }
-        .fullScreenCover(item: $quoteComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
+        .fullScreenCover(item: $quoteComposerTarget, onDismiss: { composerClosed() }) { target in
             quoteComposerSheet(for: target)
         }
-        .fullScreenCover(item: $replyComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
+        .fullScreenCover(item: $replyComposerTarget, onDismiss: { composerClosed() }) { target in
             replyComposerSheet(for: target)
         }
         // Tapping an @mention anywhere in KaPosts (feed, thread detail, profiles - sheets
@@ -791,6 +792,8 @@ struct KaPostsView: View {
             // The profile tab loads its own posts (myProfileSheet's tasks); the feed, the
             // scheduled posts and the deep links are the Feed tab's.
             guard rootMode == .feed else { return }
+            // Cold-start compose link: first, so the composer doesn't wait on the feed loading.
+            presentPendingComposeLink()
             if let myAddress = WalletManager.shared.currentWallet?.publicAddress {
                 followStore.removeIfPresent(myAddress)
             }
@@ -832,6 +835,8 @@ struct KaPostsView: View {
             } else if KaPostsDeepLink.pendingOpenScheduled {
                 KaPostsDeepLink.pendingOpenScheduled = false
                 kaPostsPresent { menuSheet = .scheduled }
+            } else {
+                presentPendingComposeLink()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openKaPostsProfile)) { _ in
@@ -2790,6 +2795,31 @@ struct KaPostsView: View {
         restoredPollOptions = []
     }
 
+    private func composerClosed() {
+        clearRestoredComposerDraft()
+        presentPendingComposeLink()
+    }
+
+    /// A pre-written post from another app (`kaposts://compose`) opens the new-post composer,
+    /// after the tab switch has landed: a cover presented from a tab still coming on screen is
+    /// dropped. A composer already open keeps what is being written, and the link's post opens
+    /// when it closes. A confirmed 0 KAS gets the funding card, as the compose button does.
+    private func presentPendingComposeLink() {
+        guard let text = KaPostsDeepLink.pendingComposeText,
+              !showComposer, quoteComposerTarget == nil, replyComposerTarget == nil else { return }
+        KaPostsDeepLink.pendingComposeText = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            if walletManager.hasConfirmedZeroChattingBalance {
+                showComposeFundingSheet = true
+            } else {
+                restoredComposerText = text
+                restoredComposerSegments = []
+                restoredPollOptions = []
+                showComposer = true
+            }
+        }
+    }
+
     /// Puts an undone draft back where it was written, so the five seconds are a chance to fix
     /// something rather than a chance to lose it.
     ///
@@ -4016,6 +4046,7 @@ struct KaPostsView: View {
             // Banner starts BELOW the bar rather than ignoring the top safe area: it
             // used to run under the notch and under the dot/balance/Done row,
             // leaving the profile's own chrome sitting on top of an image.
+            .kaPostsFixedTitle("Profile")
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
@@ -5424,11 +5455,21 @@ private struct KaPostCellView: View {
         return (request, match.matchedText)
     }
 
-    /// The text as drawn: the post without its payment request link.
+    /// A KaPlay bot challenge link in the post: drawn as a card (`KaPostBotChallengeCard`) under
+    /// the text, and left out of the text itself.
+    private var botChallengeLink: KaPlayBotChallenge.Match? {
+        KaPlayBotChallenge.match(in: displayedText)
+    }
+
+    /// The text as drawn: the post without the links drawn as cards.
     private var bodyText: String {
-        guard let link = paymentRequestLink else { return displayedText }
-        return displayedText.replacingOccurrences(of: link.matchedText, with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let paymentLink = paymentRequestLink
+        let challengeLink = botChallengeLink
+        guard paymentLink != nil || challengeLink != nil else { return displayedText }
+        var text = displayedText
+        if let paymentLink { text = text.replacingOccurrences(of: paymentLink.matchedText, with: "") }
+        if let challengeLink { text = text.replacingOccurrences(of: challengeLink.matchedText, with: "") }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Long enough that the feed should fold it behind "Show more" (X-style ~280-char threshold,
@@ -5471,28 +5512,24 @@ private struct KaPostCellView: View {
         return 88 + CGFloat(rows) * 78
     }
 
-    /// Reporting (App Store guideline 1.2): the post's id, author and text go to support by
-    /// email, where a person reads them. Posts are on a public chain and cannot be taken down by
-    /// anyone, so the remedies that act at once are the two rows under this one - Mute and Block
-    /// remove the author from this reader's KaPosts on the spot.
+    /// Reporting (App Store guideline 1.2, `ContentReport`): the post's id, author and text. Posts
+    /// are on a public chain and cannot be taken down by anyone, so the remedies that act at once
+    /// are the two rows under this one - Mute and Block remove the author from this reader's
+    /// KaPosts on the spot.
     private func reportPost() {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = "kaspasilver@gmail.com"
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "KaPost report"),
-            URLQueryItem(name: "body", value: """
-            I want to report this post.
+        let report = ContentReport(body: """
+        I want to report this post.
 
-            Post: \(post.remoteId ?? "not yet on chain")
-            Author: \(post.posterAddress)
-            Text: \(String(post.text.prefix(500)))
+        Post: \(post.remoteId ?? "not yet on chain")
+        Author: \(post.posterAddress)
+        Text: \(String(post.text.prefix(500)))
 
-            What is wrong with it:
+        What is wrong with it:
 
-            """)
-        ]
-        if let url = components.url { openURL(url) }
+        """)
+        guard !report.send() else { return }
+        // Let the half sheet finish dismissing before the alert goes up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
     }
 
     /// "1h 12m left" / "8m left" for the Edit row.
@@ -5565,7 +5602,7 @@ private struct KaPostCellView: View {
                     }
                     ActionSheetRow(
                         title: "Block \(displayName)",
-                        subtitle: "Hides their posts and stops them interacting with you.",
+                        subtitle: "Hides their posts and room messages, and stops them interacting with you.",
                         systemImage: "hand.raised",
                         tint: .red
                     ) {
@@ -5588,6 +5625,8 @@ private struct KaPostCellView: View {
     /// in the app, so each option can say what it does; the old popover menu had room for a
     /// verb and nothing else.
     @State private var showOverflowSheet = false
+    /// A report that couldn't go to Mail; non-nil shows `contentReportFallback`.
+    @State private var unsentReport: ContentReport?
     /// Observed for the 5s undo countdown pills. Deadlines only change when the user arms or
     /// cancels an action - never while scrolling - so this subscription is cheap.
     ///
@@ -5710,6 +5749,7 @@ private struct KaPostCellView: View {
                             .presentationDetents([.height(overflowSheetHeight)])
                             .presentationDragIndicator(.visible)
                     }
+                    .contentReportFallback($unsentReport)
                     .fullScreenCover(isPresented: $showEditComposer) {
                         KaPostComposerView(
                             onPost: { text in onEdit?(text) },
@@ -5789,6 +5829,11 @@ private struct KaPostCellView: View {
                 // A payment request link: a card with a Pay button, not the link's text.
                 if let link = paymentRequestLink {
                     KaPostPaymentRequestCard(request: link.request)
+                        .padding(.top, 4)
+                }
+                // A KaPlay bot challenge: a card with a Challenge button, not the link's text.
+                if let link = botChallengeLink {
+                    KaPostBotChallengeCard(challenge: link.challenge)
                         .padding(.top, 4)
                 }
                 translateAffordance
@@ -8288,7 +8333,14 @@ final class KaPostsModerationStore: ObservableObject {
     static let shared = KaPostsModerationStore()
 
     @Published private(set) var muted: Set<String> = []
-    @Published private(set) var blocked: Set<String> = []
+    @Published private(set) var blocked: Set<String> = [] {
+        didSet {
+            guard blocked != oldValue else { return }
+            // Next turn of the main queue: this also runs while `shared` is being made.
+            let current = blocked
+            Task { @MainActor in PublicChatService.shared.setBlockedSenders(current) }
+        }
+    }
 
     /// Per account, like `KaPostsFollowStore` - who you mute is a decision of one identity, not
     /// of the device. Same legacy rule: the pre-scoping lists go to the account when it is the
@@ -9274,6 +9326,7 @@ struct KaPostsNotificationsView: View {
                     .refreshable { await load() }
                 }
             }
+            .kaPostsFixedTitle("Notifications")
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
@@ -9697,6 +9750,20 @@ extension View {
 
     func kaPostsStatusChrome() -> some View {
         modifier(KaPostsStatusChrome())
+    }
+
+    /// A dock tab's title, fixed above its scrolling content like the Feed's: the status chrome
+    /// fills the nav bar's center, and a system large title would move with the scroll view.
+    func kaPostsFixedTitle(_ title: LocalizedStringKey) -> some View {
+        VStack(spacing: 0) {
+            Text(title)
+                .font(.largeTitle.weight(.bold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+            Divider()
+            self
+        }
     }
 }
 

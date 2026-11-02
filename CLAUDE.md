@@ -45,7 +45,7 @@ What is still KaChat-shaped underneath:
 | Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once |
 | Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`, Wallet pushes `ChattingAddressManageView` (balance, history, UTXOs) |
 | Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (post notifications only - no wallet ones) |
-| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Notifications, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Log Out (deleting an account is on the opening screen's Saved Accounts) |
+| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Notifications, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Delete Account (`DeleteAccountSheet`, the warning the opening screen's Delete also shows; `WalletManager.deleteCurrentAccount`), Log Out |
 
 The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
 Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,
@@ -54,8 +54,30 @@ the hamburger's screens, Post Activity) draw `KaPostsDockCopy` over themselves: 
 cover (`.kaPostsCloseCovers`) and selects the tab through `KaPostsDockRouter`. The composers and
 the hamburger card have no dock.
 
-Account setup is KaChat's, unchanged: `ContentView` -> `OnboardingView` (create / import a seed)
--> `KaPostsTabView`. KaChat's welcome guide and dock wizard are not used.
+Account setup follows KaPay: `ContentView` -> `OnboardingView` (create / import a seed) ->
+`KaPostsTabView`. KaChat's welcome guide and dock wizard are not used. Create New Account makes an
+account in one tap: 24 words, no passphrase, the next free default name
+(`WalletManager.nextDefaultAccountName`). "Advanced: Create with a Passphrase" (`CreateWalletView`)
+is the only other way. Import still takes 12 or 24 words. Creating never shows the seed phrase: an
+account made here is owed a backup (`AccountBackupStatus`), and until the backup steps
+(`AccountBackupView`) are finished the top of the Feed shows `AccountBackupCard` (red once the
+account holds funds; KaPost has no Wallet tab, the owner chose the Feed on 2026-11-01), Receive shows
+a reminder and the Delete Account warning leads with Back Up Account; deleting is never blocked.
+Imported and older accounts are never owed one. Finishing the steps starts a six-month timer; when
+it runs out the same place shows `BackupHygieneCard`, and `BackupHygieneView` asks for five random
+words, then the passphrase if there is one. Every sign-in gets new tabs (`ContentView`'s
+`signInSession`), opening on the Feed.
+
+## Moderation (App Store guideline 1.2)
+
+- Terms: `ContentView` shows `TermsAcceptanceView` until `KaPostTerms.currentVersion` is agreed to on
+  this device; bump it when the text changes. Settings > Terms of Use shows them again.
+- Report: a post's three dots, or in a room the message's long-press and the sender half sheet.
+  `ContentReport` emails support; with no mail account it copies the report and says where to send it.
+- Block: `KaPostsModerationStore` owns the list. It pushes the list to `PublicChatService.setBlockedSenders`,
+  so a blocked account also leaves every room and its pushes stop. A room's own Hide User stays separate.
+- Removal: no word filter, by the owner's choice (2026-11-02). The owner removes bad content by hand
+  with the indexer's admin tool (`kachat-admin`), from reports or from seeing it.
 
 ## Identifiers
 

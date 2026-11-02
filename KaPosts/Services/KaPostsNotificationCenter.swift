@@ -24,6 +24,11 @@ final class KaPostsNotificationCenter: ObservableObject {
     private var walletAddress: String { WalletManager.shared.currentWallet?.publicAddress ?? "" }
     private var unseenKey: String { "kapostsNotifCenter.unseen.\(walletAddress)" }
 
+    /// Delete Account: one wallet's count, from this device.
+    static func removeAllData(forWalletAddress walletAddress: String) {
+        UserDefaults.standard.removeObject(forKey: "kapostsNotifCenter.unseen.\(walletAddress)")
+    }
+
     /// Call on account switch (and at init) to load the active wallet's count.
     func reload() {
         unseenCount = max(0, UserDefaults.standard.integer(forKey: unseenKey))

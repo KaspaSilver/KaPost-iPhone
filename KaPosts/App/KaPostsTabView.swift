@@ -85,6 +85,9 @@ struct KaPostsTabView: View {
             dock.selectedTab = .feed
         }
         .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { _ in
+            // A tapped room push or room link: a thread or profile open over the tabs would sit
+            // on top of the room, so they close first, as for a tap on the dock copy.
+            NotificationCenter.default.post(name: .kaPostsCloseCovers, object: nil)
             dock.selectedTab = .publicChats
         }
         // Posted by the profile's Edit Profile button.
@@ -111,7 +114,7 @@ struct KaPostsTabView: View {
             if KaPostsDeepLink.pendingOpenNotifications {
                 KaPostsDeepLink.pendingOpenNotifications = false
                 dock.selectedTab = .notifications
-            } else if KaPostsDeepLink.pendingPostTxId != nil {
+            } else if KaPostsDeepLink.pendingPostTxId != nil || KaPostsDeepLink.pendingComposeText != nil {
                 dock.selectedTab = .feed
             } else if PublicChatService.shared.pendingPublicChatNavigation != nil {
                 dock.selectedTab = .publicChats

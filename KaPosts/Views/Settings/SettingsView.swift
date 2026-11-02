@@ -10,6 +10,12 @@ struct SettingsView: View {
 
     @State private var showSeedPhrase = false
     @State private var showLogoutConfirmation = false
+    @State private var showDeleteAccountConfirmation = false
+    /// The seed phrase over the Delete Account warning, which it closes back to.
+    @State private var showSeedPhraseOverDeleteWarning = false
+    /// The backup steps over the Delete Account warning, for an account that hasn't finished them.
+    @State private var showBackupOverDeleteWarning = false
+    @ObservedObject private var backupStatus = AccountBackupStatus.shared
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
     @State private var toastStyle: ToastStyle = .success
@@ -41,19 +47,16 @@ struct SettingsView: View {
                 settingsCategoryRow("Diagnostics", icon: "stethoscope", tint: .accentColor) {
                     DiagnosticsSettingsPage()
                 }
+                settingsCategoryRow("Terms of Use", icon: "doc.plaintext", tint: .accentColor) {
+                    TermsOfUseView()
+                }
                 settingsCategoryRow("Open Source Licenses", icon: "doc.text", tint: .accentColor) {
                     OpenSourceLicensesView()
                 }
                 // Direct action, not a sub-page: straight into the seed phrase (behind the
                 // biometric gate when enabled).
                 Button {
-                    if settingsViewModel.settings.biometricSeedPhraseEnabled {
-                        DeviceAuth.authenticate(reason: "Unlock to view your seed phrase") {
-                            showSeedPhrase = true
-                        }
-                    } else {
-                        showSeedPhrase = true
-                    }
+                    unlockSeedPhrase { showSeedPhrase = true }
                 } label: {
                     Label {
                         Text("View Seed Phrase")
@@ -63,20 +66,34 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                     }
                 }
-                // Log out, not delete: the account stays saved on this iPhone, and deleting it is
-                // done from Saved Accounts on the opening screen.
-                Button(role: .destructive) {
-                    showLogoutConfirmation = true
-                } label: {
-                    Label {
-                        Text("Log Out")
-                            .foregroundColor(.red)
-                    } icon: {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .foregroundColor(.red)
+                Section {
+                    Button(role: .destructive) {
+                        showDeleteAccountConfirmation = true
+                    } label: {
+                        Label {
+                            Text("Delete Account")
+                                .foregroundColor(.red)
+                        } icon: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                    }
+                    Button(role: .destructive) {
+                        showLogoutConfirmation = true
+                    } label: {
+                        Label {
+                            Text("Log Out")
+                                .foregroundColor(.red)
+                        } icon: {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .foregroundColor(.red)
+                        }
                     }
                 }
             }
+            .kaPostsFixedTitle("Settings")
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
             .toast(message: toastMessage, style: toastStyle)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -89,21 +106,46 @@ struct SettingsView: View {
             .sheet(isPresented: $showSeedPhrase) {
                 SeedPhraseView()
             }
-            .confirmationDialog(
-                "Log Out",
-                isPresented: $showLogoutConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Log Out", role: .destructive) {
+            // Half sheet rather than a confirmation dialog, matching every other chooser in the
+            // app - and it gives the consequence a row of its own beside the action.
+            .sheet(isPresented: $showLogoutConfirmation) {
+                ConfirmActionSheet(
+                    title: "Log Out",
+                    confirmTitle: "Log Out",
+                    confirmSubtitle: "Signs out of this account. Its data stays on this device.",
+                    confirmSystemImage: "rectangle.portrait.and.arrow.right"
+                ) {
                     Task { await walletManager.logout() }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("The account stays saved on this iPhone: sign back in from Saved Accounts on the opening screen, where an account can also be deleted.")
+            }
+            .sheet(isPresented: $showDeleteAccountConfirmation) {
+                DeleteAccountSheet(
+                    confirmSubtitle: "Removes this account and its data from this device.",
+                    onViewSeedPhrase: { unlockSeedPhrase { showSeedPhraseOverDeleteWarning = true } },
+                    notBackedUp: backupStatus.isPending(walletManager.currentWallet?.publicAddress),
+                    onBackUp: { AccountBackupView.unlock { showBackupOverDeleteWarning = true } }
+                ) {
+                    Task { await walletManager.deleteCurrentAccount() }
+                }
+                .sheet(isPresented: $showSeedPhraseOverDeleteWarning) {
+                    SeedPhraseView()
+                }
+                .sheet(isPresented: $showBackupOverDeleteWarning) {
+                    AccountBackupView()
+                }
             }
         }
         .onAppear {
             Task { _ = try? await walletManager.refreshBalance() }
+        }
+    }
+
+    /// The seed phrase, behind the biometric gate when enabled.
+    private func unlockSeedPhrase(_ show: @escaping () -> Void) {
+        if settingsViewModel.settings.biometricSeedPhraseEnabled {
+            DeviceAuth.authenticate(reason: "Unlock to view your seed phrase", onSuccess: show)
+        } else {
+            show()
         }
     }
 
@@ -1204,6 +1246,10 @@ struct SeedPhraseView: View {
                     Text("Anyone with your seed phrase can access your account. Never share it with anyone.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+
+                    Text("Best practice is to write your seed phrase down to back it up, and never store it online.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
                 .padding()
                 .background(Color.orange.opacity(0.1))
@@ -1292,7 +1338,7 @@ struct SeedPhraseView: View {
                             isRevealed = true
                             let token = UUID()
                             revealToken = token
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
                                 if revealToken == token {
                                     isRevealed = false
                                 }

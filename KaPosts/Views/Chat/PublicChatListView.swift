@@ -100,7 +100,9 @@ struct PublicChatListView: View {
             // notification handler) is consumed on mount - ChatListView no longer brokers this.
             if let pending = publicChatService.pendingPublicChatNavigation {
                 publicChatService.pendingPublicChatNavigation = nil
-                openChannelFromHandoff(pending)
+                // On the next tick: the stack is still coming on screen with its tab during this
+                // onAppear, and the room has to push onto it once it is there.
+                DispatchQueue.main.async { openChannelFromHandoff(pending) }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { notification in
@@ -137,7 +139,9 @@ struct PublicChatListView: View {
         // One page, no tabs: the curated Popular rooms pinned on top (enter/exit freely, no
         // leaving - they're permanent), then everything the user joined under Your Channels.
         combinedList
+        .kaPostsFixedTitle(embeddedInChats ? "Chats" : "Public Chats")
         .navigationTitle(embeddedInChats ? "Chats" : "Public Chats")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // Same header anatomy as every KaPosts screen: total balance dead-center, green
             // connection dot top right. Top left, the customize button: which default rooms

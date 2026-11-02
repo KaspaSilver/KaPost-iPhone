@@ -605,8 +605,20 @@ final class PublicChatService: ObservableObject {
         }
     }
 
+    /// The room's own hides, for its Hidden Users list. Blocked accounts are left out: they are
+    /// undone on the Blocked screen.
     func hiddenSenderAddresses(forChannel channel: String) -> Set<String> {
-        store.hiddenSenderAddresses(forChannel: channel)
+        store.roomHiddenSenderAddresses(forChannel: channel)
+    }
+
+    /// Who `KaPostsModerationStore` has blocked. Their messages leave every room, and the push
+    /// service stops sending them.
+    func setBlockedSenders(_ addresses: Set<String>) {
+        PublicChatStore.blockedSenders = addresses
+        for channel in messagesByChannel.keys {
+            loadMessages(for: channel)
+        }
+        Task { await PushNotificationManager.shared.updateWatchedAddresses() }
     }
 
     // MARK: - Per-room indexer

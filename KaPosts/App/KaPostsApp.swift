@@ -163,7 +163,9 @@ struct KaPostsApp: App {
         // Every in-app target link - posts, rooms, profiles, payment requests, in their
         // `kachat://` and `https://kachat.app/...` forms - is parsed in one place and routed in
         // one place, shared with the in-app preview cards.
-        if let link = KaChatInternalLink.parse(url) {
+        if let text = KaChatInternalLink.composeText(from: url) {
+            KaChatLinkRouter.openComposer(text: text)
+        } else if let link = KaChatInternalLink.parse(url) {
             KaChatLinkRouter.open(link)
         }
     }
@@ -401,6 +403,8 @@ enum KaPostsDeepLink {
     static var pendingOpenScheduled = false
     /// Someone's KaPosts profile, asked for from another tab (a Public Chats member, a link).
     static var pendingProfileAddress: String?
+    /// A pre-written post from another app (`kaposts://compose`), for the new-post composer.
+    static var pendingComposeText: String?
 }
 
 /// The single place an already-validated `KaChatInternalLink` becomes navigation. Used by the
@@ -449,6 +453,15 @@ enum KaChatLinkRouter {
             // (`PaymentRequestSheetPresenter`, on the dock).
             KaPayHandoff.pay(request, inApp: { PaymentRequestRouter.shared.pending = request })
         }
+    }
+
+    /// A pre-written post from another app: the new-post composer on the Feed, filled in. Pending
+    /// for a cold start or a link that arrives before sign-in; the Feed consumes it on mount.
+    @MainActor
+    static func openComposer(text: String) {
+        KaPostsDeepLink.pendingComposeText = text
+        NotificationCenter.default.post(name: .kaPostsCloseCovers, object: nil)
+        NotificationCenter.default.post(name: .openKaPost, object: nil, userInfo: [:])
     }
 
     @MainActor
