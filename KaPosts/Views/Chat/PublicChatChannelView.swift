@@ -1706,8 +1706,8 @@ private struct PublicChatMessageRow: View, Equatable {
                 isOutgoing: isOwnMessage,
                 // Public Chat rooms are open to anyone, so previews never auto-fetch here - each
                 // card is tap-to-load (Decision 5A), including the local user's own posts for
-                // one consistent rule in public rooms.
-                autoFetch: false
+                // one consistent rule in public rooms. Only KaChat's own site loads by itself.
+                autoFetch: KaChatSiteLink.isSiteLink(linkURL)
             )
         }
     }
@@ -1760,8 +1760,8 @@ private struct PublicChatMessageRow: View, Equatable {
                     onDoubleTap: onReact != nil ? { activeQuickReactionMessageId.wrappedValue = message.id } : nil,
                     isOutgoing: isOwnMessage,
                     // Public Chat rooms are open to anyone, so previews never auto-fetch here -
-                    // each card is tap-to-load (Decision 5A).
-                    autoFetch: false
+                    // each card is tap-to-load (Decision 5A). Only KaChat's own site loads by itself.
+                    autoFetch: KaChatSiteLink.isSiteLink(loneLinkURL)
                 )
             } else {
                 bubbleContent(voicePayload: voicePayload)

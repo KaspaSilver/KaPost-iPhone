@@ -5461,14 +5461,23 @@ private struct KaPostCellView: View {
         KaPlayBotChallenge.match(in: displayedText)
     }
 
+    /// A link to KaChat's own site in the post: drawn as a preview card under the text, and left
+    /// out of the text itself.
+    private var siteLink: KaChatSiteLink.Match? {
+        KaChatSiteLink.match(in: displayedText)
+    }
+
     /// The text as drawn: the post without the links drawn as cards.
     private var bodyText: String {
         let paymentLink = paymentRequestLink
         let challengeLink = botChallengeLink
-        guard paymentLink != nil || challengeLink != nil else { return displayedText }
+        let siteLink = siteLink
+        guard paymentLink != nil || challengeLink != nil || siteLink != nil else { return displayedText }
         var text = displayedText
         if let paymentLink { text = text.replacingOccurrences(of: paymentLink.matchedText, with: "") }
         if let challengeLink { text = text.replacingOccurrences(of: challengeLink.matchedText, with: "") }
+        // Only this one: the same text can also be the start of a longer link to another page.
+        if let siteLink, let range = text.range(of: siteLink.matchedText) { text.removeSubrange(range) }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -5834,6 +5843,11 @@ private struct KaPostCellView: View {
                 // A KaPlay bot challenge: a card with a Challenge button, not the link's text.
                 if let link = botChallengeLink {
                     KaPostBotChallengeCard(challenge: link.challenge)
+                        .padding(.top, 4)
+                }
+                // A link to KaChat's site: its preview, or the link itself if that can't load.
+                if let link = siteLink {
+                    LinkPreviewCardView(url: link.url, txId: post.remoteId ?? "", fallbackText: link.matchedText)
                         .padding(.top, 4)
                 }
                 translateAffordance

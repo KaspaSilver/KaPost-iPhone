@@ -582,6 +582,75 @@ final class KaPostLinkPreviewCache: ObservableObject {
 
 }
 
+/// A link to KaChat's own site (`home.kachat.app`, any page). Unlike a stranger's link it previews
+/// by itself: fetching it tells nobody but us who is reading, so a post draws it as a card, and a
+/// public chat room doesn't wait for a tap as it does for other links (see `LinkPreviewCardView`).
+enum KaChatSiteLink {
+    static let host = "home.kachat.app"
+
+    /// Exactly this host over the web. `home.kachat.app.evil.com` and `home.kachat.app@evil.com`
+    /// are other hosts, and so is any port.
+    static func isSiteLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
+        return url.host?.lowercased() == host && url.user == nil && url.port == nil
+    }
+
+    struct Match: Equatable {
+        let url: URL
+        /// The exact substring matched, which a post leaves out of its text.
+        let matchedText: String
+    }
+
+    /// With or without a scheme, as "home.kachat.app/news/" is how people write it. The lookbehind
+    /// and lookahead keep it from matching inside a longer host, an email or another site's path.
+    private static let regex = try? NSRegularExpression(
+        pattern: #"(?<![\w.@/-])(?:https?://)?home\.kachat\.app(?![\w@:-]|\.\w)(?:[/?#][^\s<>"']*)?"#,
+        options: .caseInsensitive
+    )
+    /// Trailing prose punctuation is not part of the link ("... home.kachat.app/news/.").
+    private static let trailingTrim = CharacterSet(charactersIn: ".,;:!?)]}'\"*")
+
+    private final class MatchBox: NSObject {
+        let value: Match?
+        init(_ value: Match?) { self.value = value }
+    }
+
+    /// Same caching convention (and reason) as `KaChatInternalLink.match`: this runs from post
+    /// cell bodies, several times per cell per frame while scrolling.
+    private static let matchCache: NSCache<NSString, MatchBox> = {
+        let cache = NSCache<NSString, MatchBox>()
+        cache.countLimit = 2_048
+        return cache
+    }()
+
+    /// The first link to the site in a post's text.
+    static func match(in text: String) -> Match? {
+        let key = text as NSString
+        if let cached = matchCache.object(forKey: key) { return cached.value }
+        let result = uncachedMatch(in: text)
+        matchCache.setObject(MatchBox(result), forKey: key)
+        return result
+    }
+
+    private static func uncachedMatch(in text: String) -> Match? {
+        guard text.lowercased().contains(host), let regex else { return nil }
+        let ns = text as NSString
+        var found: Match?
+        regex.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) { result, _, stop in
+            guard let result else { return }
+            var candidate = ns.substring(with: result.range)
+            while let last = candidate.unicodeScalars.last, trailingTrim.contains(last) {
+                candidate.removeLast()
+            }
+            let hasScheme = candidate.lowercased().hasPrefix("http")
+            guard let url = URL(string: hasScheme ? candidate : "https://" + candidate), isSiteLink(url) else { return }
+            found = Match(url: url, matchedText: candidate)
+            stop.pointee = true
+        }
+        return found
+    }
+}
+
 /// Open Graph metadata scraped from a message link, for rendering a rich preview card.
 struct LinkPreviewData: Equatable {
     let url: URL

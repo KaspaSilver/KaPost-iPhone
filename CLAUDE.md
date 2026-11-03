@@ -84,7 +84,8 @@ words, then the passphrase if there is one. Every sign-in gets new tabs (`Conten
 - Bundle ID `com.kachat.kaposts`, App Group `group.com.kachat.kaposts`, keychain group
   `$(AppIdentifierPrefix)com.kachat.kaposts`, URL scheme `kaposts`
 - Team `RP4Z22SFSD` (the KaChat developer's Apple team; KaPosts ships under that account)
-- Version: `KaPosts/Version.xcconfig` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`)
+- Version: `KaPosts/Version.xcconfig` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`). KaPost's version
+  number matches KaChat's, from 5.2.3 on.
 
 ## Build
 
@@ -128,6 +129,10 @@ wallet app: a post shows the link as a card (`KaPostPaymentRequestCard`), and Pa
 `kapay://pay/<same tail>` (`KaPayHandoff`). A chat-payment request (`chat=1`) is paid here, as an
 encrypted chat payment KaPay can't make. Without KaPay installed, the App Store opens
 (`KaPayHandoff.appStoreURL`: a search for KaPay until it is listed). KaChat follows the same rule.
+
+Links to KaChat's own site (`home.kachat.app`, any page, `KaChatSiteLink`) preview by themselves: a
+post draws the page's card (`LinkPreviewCardView`) in place of the link's text, and a room loads it
+without the tap other links wait for. Other web links in posts stay plain text.
 
 Links: KaPosts opens `kaposts://` (same targets as `kachat://`). Shared links still read
 `kachat://` / `https://kachat.app/post/...`, which open KaChat; for them to open KaPosts the
