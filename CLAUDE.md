@@ -42,10 +42,10 @@ What is still KaChat-shaped underneath:
 | Tab | View |
 |---|---|
 | Feed | `KaPostsPageView` (`Views/KaPosts/KaPostsView.swift`) |
-| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once |
-| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`, Wallet pushes `ChattingAddressManageView` (balance, history, UTXOs) |
+| Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once. Rows swipe (left: Delete, Mute, Pin; right: read state), and a pinned room moves into the circles row above the list, saved per account |
+| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`, Wallet pushes `ChattingAddressManageView` (balance, history, UTXOs), Request opens `CreatePaymentRequestView` |
 | Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (post notifications only - no wallet ones) |
-| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Notifications, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Delete Account (`DeleteAccountSheet`, the warning the opening screen's Delete also shows; `WalletManager.deleteCurrentAccount`), Log Out |
+| Settings | `SettingsView`: Customization, Security, Connection, KaPosts, Notifications, Cache, Diagnostics, Open Source Licenses, View Seed Phrase, Back Up to NFC Card, Delete Account (`DeleteAccountSheet`, the warning the opening screen's Delete also shows; `WalletManager.deleteCurrentAccount`), Log Out |
 
 The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
 Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,
@@ -63,10 +63,22 @@ account made here is owed a backup (`AccountBackupStatus`), and until the backup
 (`AccountBackupView`) are finished the top of the Feed shows `AccountBackupCard` (red once the
 account holds funds; KaPost has no Wallet tab, the owner chose the Feed on 2026-11-01), Receive shows
 a reminder and the Delete Account warning leads with Back Up Account; deleting is never blocked.
-Imported and older accounts are never owed one. Finishing the steps starts a six-month timer; when
+Imported and older accounts are never owed one. An import that answers Yes to the passphrase question
+checks the first 50 addresses, picks the first with funds and lets you pick another; one without a
+passphrase opens address #0. Importing or finishing the steps starts a six-month timer; when
 it runs out the same place shows `BackupHygieneCard`, and `BackupHygieneView` asks for five random
 words, then the passphrase if there is one. Every sign-in gets new tabs (`ContentView`'s
 `signInSession`), opening on the Feed.
+
+## NFC card backup
+
+`Services/NFCCard.swift`, ported from KaChat-iPhone, whose CLAUDE.md has the design; the card commands and
+backup format are `docs/PROTOCOL.md` in KaChat-NFC, so a card works across apps. Beta only: `NFCCard.isAvailable`
+is false once `KAPOSTS_IS_RELEASE` is YES, and on iPad. Settings > Back Up to NFC Card (`NFCCardBackupView`) only
+exists for an account with a BIP39 passphrase, which is never written to the card. Import Account > Restore from
+NFC Card (`NFCCardRestoreView`). The App ID needs Near Field Communication Tag Reading on. Before an App Store
+submission without this feature, remove the NFC entitlement from `KaPosts.entitlements` and
+`KaPostsRelease.entitlements` and the NFC keys from `Resources/Info.plist`.
 
 ## Moderation (App Store guideline 1.2)
 

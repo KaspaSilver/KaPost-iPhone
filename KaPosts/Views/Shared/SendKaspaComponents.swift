@@ -21,6 +21,20 @@ func sendKaspaGlass(cornerRadius: CGFloat) -> some View {
 /// Who the Kaspa goes to: an address or a name, with Paste and Scan QR beside the field and a
 /// line saying what the input resolved to. The screen keeps its own lookup logic (it watches
 /// `input`); this only shows it. With `lockedAddress` (Compound UTXOs) the recipient is fixed.
+extension View {
+    /// The Send Kaspa sheets' size. On iPad a `.large` sheet is a short centred form, too short
+    /// for Review (the fee hint ended up under the slide-to-send bar); page sizing gives it most
+    /// of the screen. iPhone is unchanged, and iPadOS 17 and earlier keep the form size.
+    @ViewBuilder
+    func sendKaspaSheetSizing() -> some View {
+        if #available(iOS 18.0, *) {
+            presentationSizing(.page)
+        } else {
+            self
+        }
+    }
+}
+
 struct SendRecipientCard: View {
     @Binding var input: String
     var lockedAddress: String? = nil

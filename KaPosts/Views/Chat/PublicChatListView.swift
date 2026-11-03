@@ -31,6 +31,9 @@ struct PublicChatListView: View {
         externalSelection ?? $ownSelectedChannel
     }
     @State private var channelToLeave: String?
+    /// Rooms pinned up out of the list into the circles row above it, newest pin first, saved per
+    /// account.
+    @State private var roomPins: [String] = []
     /// The room whose long-press half sheet is up.
     @State private var roomActionTarget: String?
     @State private var toastMessage: String?
@@ -150,7 +153,7 @@ struct PublicChatListView: View {
             if !embeddedInChats {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if isSelecting {
-                        let allRooms = Set(listedChannels.map(\.channelName))
+                        let allRooms = Set(unpinnedChannels.map(\.channelName))
                         Button(!allRooms.isEmpty && ownRoomSelection == allRooms ? "Deselect All" : "Select All") {
                             ownRoomSelection = ownRoomSelection == allRooms ? [] : allRooms
                         }
@@ -255,6 +258,126 @@ struct PublicChatListView: View {
         publicChatService.listedChannels
     }
 
+    /// The rooms in the row above the list, in pin order. A room no longer listed finds nothing.
+    private var pinnedChannels: [PublicChatChannel] {
+        let listed = listedChannels
+        return roomPins.compactMap { name in listed.first { $0.channelName == name } }
+    }
+
+    /// The list's rows: pinned rooms live in the row above it.
+    private var unpinnedChannels: [PublicChatChannel] {
+        listedChannels.filter { !roomPins.contains($0.channelName) }
+    }
+
+    private var roomPinsKey: String? {
+        WalletManager.shared.currentWallet.map { "kapost_room_pins_\($0.publicAddress)" }
+    }
+
+    private func loadRoomPins() {
+        guard let key = roomPinsKey else { roomPins = []; return }
+        roomPins = UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+
+    private func toggleRoomPin(_ name: String) {
+        if let index = roomPins.firstIndex(of: name) {
+            roomPins.remove(at: index)
+            showToast("Unpinned")
+        } else {
+            roomPins.insert(name, at: 0)
+            showToast("Pinned to the top row")
+        }
+        if let key = roomPinsKey { UserDefaults.standard.set(roomPins, forKey: key) }
+    }
+
+    /// Tap opens, hold opens the room's half sheet (with Unpin). Swipe sideways for all of them.
+    private var pinnedRoomsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(pinnedChannels) { channel in
+                    PinnedCircleButton(
+                        name: "#\(channel.channelName)",
+                        unreadCount: publicChatService.unreadCount(forChannel: channel.channelName),
+                        showsPin: true,
+                        isSelecting: isSelecting,
+                        // The hold's touch-up still fires the circle's Button (simultaneousGesture).
+                        onTap: {
+                            guard roomActionTarget == nil else { return }
+                            selectedChannel = channel.channelName
+                        },
+                        onLongPress: { roomActionTarget = channel.channelName }
+                    ) {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.2))
+                            .overlay(
+                                Text("#")
+                                    .font(.scaled(size: 26, weight: .bold, design: .rounded))
+                                    .foregroundColor(.accentColor)
+                            )
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+
+    /// A default room is never really deleted - it is switched off, exactly like its toggle in
+    /// Public Chats settings, and that toggle brings it back. Nothing is lost, so it needs no
+    /// confirmation. A room you added asks first.
+    private func deleteRoom(_ name: String) {
+        if PublicChatService.curatedChannels.contains(name) {
+            publicChatService.removeFromList(name)
+            showToast(String(localized: "#\(name) is off - turn it back on in Public Chats settings"))
+        } else {
+            channelToLeave = name
+        }
+    }
+
+    /// A room swiped left: Delete, Mute and Pin. No full swipe, so a long swipe can't start a delete.
+    @ViewBuilder
+    private func roomSwipeLeftActions(_ channel: PublicChatChannel) -> some View {
+        Button {
+            deleteRoom(channel.channelName)
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .tint(.red)
+        Button {
+            toggleNotify(channel)
+        } label: {
+            Label(LocalizedStringKey(channel.notifyEnabled ? "Mute" : "Unmute"),
+                  systemImage: channel.notifyEnabled ? "bell.slash" : "bell")
+        }
+        .tint(.orange)
+        Button {
+            toggleRoomPin(channel.channelName)
+        } label: {
+            Label("Pin", systemImage: "pin")
+        }
+        .tint(.accentColor)
+    }
+
+    /// A room swiped right: Mark as Read or Mark as Unread, by its unread state.
+    @ViewBuilder
+    private func roomSwipeRightActions(_ channel: PublicChatChannel) -> some View {
+        if publicChatService.unreadCount(forChannel: channel.channelName) > 0 {
+            Button {
+                publicChatService.markChannelRead(channel.channelName)
+            } label: {
+                Label("Mark as Read", systemImage: "envelope.open")
+            }
+            .tint(.accentColor)
+        } else {
+            Button {
+                publicChatService.markChannelUnread(channel.channelName)
+            } label: {
+                Label("Mark as Unread", systemImage: "envelope.badge")
+            }
+            .tint(.accentColor)
+        }
+    }
+
     private func roomRow(_ channel: PublicChatChannel) -> some View {
         Button {
             // In Select mode a tap picks the room, as on the Chats and Group Chats pages -
@@ -283,13 +406,25 @@ struct PublicChatListView: View {
                 roomActionTarget = channel.channelName
             }
         )
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            roomSwipeLeftActions(channel)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            roomSwipeRightActions(channel)
+        }
         .tag(channel.channelName)
         .listRowBackground(Color.clear)
     }
 
     private var combinedList: some View {
         List(selection: roomSelection) {
-            ForEach(listedChannels) { channel in
+            if !pinnedChannels.isEmpty {
+                pinnedRoomsRow
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+            ForEach(unpinnedChannels) { channel in
                 roomRow(channel)
             }
 
@@ -328,7 +463,10 @@ struct PublicChatListView: View {
             .padding(.bottom, 16)
             }
         }
-        .onAppear { publicChatService.primeChannelSummaries() }
+        .onAppear {
+            publicChatService.primeChannelSummaries()
+            loadRoomPins()
+        }
         .onChange(of: publicChatService.channels) { _ in publicChatService.primeChannelSummaries() }
         .sheet(item: Binding(
             get: { roomActionTarget.map(RoomActionTarget.init) },
@@ -497,6 +635,18 @@ struct PublicChatListView: View {
                     if let channel { toggleNotify(channel) }
                 }
 
+                let isPinned = roomPins.contains(name)
+                ActionSheetRow(
+                    title: isPinned ? "Unpin" : "Pin to Top Row",
+                    subtitle: isPinned
+                        ? "Goes back to its place in the list."
+                        : "Moves this room out of the list into the row of circles above it.",
+                    systemImage: isPinned ? "pin.slash" : "pin"
+                ) {
+                    roomActionTarget = nil
+                    toggleRoomPin(name)
+                }
+
                 ActionSheetRow(title: "Copy Room Link", subtitle: "A kachat.app link that opens this room.", systemImage: "link") {
                     roomActionTarget = nil
                     UIPasteboard.general.string = KaChatInternalLink.publicChatRoom(channel: name).universalLinkString
@@ -527,7 +677,7 @@ struct PublicChatListView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.height(ActionSheetTileMetrics.sheetHeight(tiles: 5))])
+        .presentationDetents([.height(ActionSheetTileMetrics.sheetHeight(tiles: 6))])
         .presentationDragIndicator(.visible)
     }
 
@@ -695,6 +845,86 @@ struct PublicChatChannelDestination: ViewModifier {
                     EmptyView()
                 }
             }
+        }
+    }
+}
+
+/// One circle in the row above the room list: the avatar, the whole name
+/// under it, a red unread count and, when pinned, a pin. Tap opens; hold opens its half sheet.
+/// Dimmed and inert while the list is in Select mode.
+struct PinnedCircleButton<Avatar: View>: View {
+    let name: String
+    let unreadCount: Int
+    let showsPin: Bool
+    let isSelecting: Bool
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+    @ViewBuilder let avatar: () -> Avatar
+
+    var body: some View {
+        Button {
+            guard !isSelecting else { return }
+            onTap()
+        } label: {
+            VStack(spacing: 6) {
+                avatar()
+                    .frame(width: 60, height: 60)
+                    .clipShape(Circle())
+                    .opacity(isSelecting ? 0.55 : 1)
+                    .overlay(alignment: .topTrailing) {
+                        if !isSelecting && unreadCount > 0 {
+                            ChatsTabUnreadBadge(count: unreadCount)
+                                .offset(x: 6, y: -4)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if showsPin && !isSelecting {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(4)
+                                .background(Circle().fill(Color.accentColor))
+                                .offset(x: -2, y: 2)
+                        }
+                    }
+                // The whole name: a long one carries on underneath (up to three lines) rather than
+                // being cut off. Every name reserves the three lines, so the row has one known
+                // height: sized from the names, the lazy row inside the list measured too short
+                // and the chat list cut the second and third lines off.
+                Text(verbatim: name)
+                    .font(.caption2)
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3, reservesSpace: true)
+                    .frame(width: 68, alignment: .top)
+            }
+        }
+        .buttonStyle(.plain)
+        // A Button label needs simultaneousGesture (see the chat rows).
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                guard !isSelecting else { return }
+                Haptics.impact(.medium)
+                onLongPress()
+            }
+        )
+        .accessibilityLabel(Text(verbatim: name))
+        .accessibilityHint(Text("Hold for options"))
+    }
+}
+
+/// The red unread count on a pinned room's circle.
+struct ChatsTabUnreadBadge: View {
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.caption2.weight(.bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.red))
         }
     }
 }

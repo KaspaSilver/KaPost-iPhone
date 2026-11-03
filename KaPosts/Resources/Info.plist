@@ -23,6 +23,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>KaChatIsRelease</key>
 	<string>$(KAPOSTS_IS_RELEASE)</string>
+	<key>NFCReaderUsageDescription</key>
+	<string>KaPost uses NFC to save and restore an encrypted backup of your seed phrase on your smart card.</string>
+	<!-- KaChat-NFC's applet first, then the card manager, which only tells a card that hasn't been
+	     loaded yet from one that isn't a smart card. iOS only reports a card as an ISO 7816 tag
+	     when it answers one of these. See NFCCard.swift. -->
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>F04B41434841544E464301</string>
+		<string>A000000151000000</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>KaPost uses the camera to scan QR codes and to take photos for your posts and profile.</string>
 	<key>NSFaceIDUsageDescription</key>

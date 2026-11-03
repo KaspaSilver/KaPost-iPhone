@@ -306,6 +306,8 @@ struct KaPostsView: View {
     /// `WalletManager.hasConfirmedZeroChattingBalance`) the pencil button presents the shared
     /// funding card instead of the composer.
     @State private var showComposeFundingSheet = false
+    /// Profile's Request button: a payment request link to copy or share.
+    @State private var showRequestPayment = false
     /// Same interception for the thread view's reply bar - separate flag because that bar
     /// lives inside the `detailTarget` sheet, so its funding card must present as a nested
     /// sheet from in there (a single shared flag bound to two `.sheet` modifiers at different
@@ -4030,9 +4032,20 @@ struct KaPostsView: View {
                                     profileHeaderButtonLabel("Wallet", systemImage: "wallet.bifold")
                                 }
                                 .buttonStyle(.plain)
+                                Button {
+                                    Haptics.impact(.light)
+                                    showRequestPayment = true
+                                } label: {
+                                    profileHeaderButtonLabel("Request", systemImage: "doc.text")
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Request Payment")
                             }
                         }
                         .padding(.top, 8)
+                        .sheet(isPresented: $showRequestPayment) {
+                            CreatePaymentRequestView()
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -6715,6 +6728,7 @@ private struct KaPostTipSheet: View {
             }
         }
         .presentationDetents([.large])
+        .sendKaspaSheetSizing()
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(isSending)
         .onChange(of: feeTier) { _ in
