@@ -594,7 +594,7 @@ struct DeleteAccountSheet: View {
                     }
                 }
 
-                Text("Make sure your seed phrase is backed up, and your passphrase too if you have one. They are the only way to recover this account and its funds.")
+                Text("Make sure your 12 or 24 words are backed up, and your passphrase too if you have one. They are the only way to recover this account and its funds.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -603,13 +603,13 @@ struct DeleteAccountSheet: View {
                 if notBackedUp, let onBackUp {
                     ActionSheetRow(
                         title: "Back Up Account",
-                        subtitle: "Write down your seed phrase before you delete.",
+                        subtitle: "Write down your 12 or 24 words before you delete.",
                         systemImage: "exclamationmark.shield",
                         action: onBackUp
                     )
                 } else if let onViewSeedPhrase {
                     ActionSheetRow(
-                        title: "View Seed Phrase and Passphrase",
+                        title: "View 12 or 24 Words and Passphrase",
                         subtitle: "The passphrase shows too, if this account has one.",
                         systemImage: "key",
                         action: onViewSeedPhrase
@@ -621,7 +621,12 @@ struct DeleteAccountSheet: View {
                     subtitle: confirmSubtitle,
                     systemImage: "trash",
                     tint: .red
-                ) { dismiss(); onConfirm() }
+                ) {
+                    dismiss()
+                    // After the sheet has gone: the Face ID or "Passcode Required" prompt that
+                    // follows is dropped if it is shown on a sheet still closing.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { onConfirm() }
+                }
 
                 ActionSheetRow(
                     title: "Cancel",

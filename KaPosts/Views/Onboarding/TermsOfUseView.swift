@@ -21,7 +21,7 @@ enum KaPostTerms {
         ),
         (
             "Your account and your funds",
-            "Your account is a seed phrase kept on your device. We never have it, so we can't recover a lost one or reverse a transaction. Posting pays a network fee in KAS, and you are responsible for the funds you hold and send."
+            "Your account is 12 or 24 words kept on your device. We never have them, so we can't recover lost ones or reverse a transaction. Posting pays a network fee in KAS, and you are responsible for the funds you hold and send."
         ),
         (
             "No warranty",
@@ -40,9 +40,9 @@ private struct KaPostTermsText: View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(KaPostTerms.sections, id: \.title) { section in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(section.title)
+                    Text(LocalizedStringKey(section.title))
                         .font(.headline)
-                    Text(section.text)
+                    Text(LocalizedStringKey(section.text))
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

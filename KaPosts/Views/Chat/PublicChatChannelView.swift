@@ -506,6 +506,9 @@ struct PublicChatChannelView: View {
                         // history kept being thrown back down.
                         .onChange(of: messages.last?.id) { _ in
                             guard keepInPlaceAfterOlderLoad == nil else { return }
+                            // Someone reading further up stays where they are; your own message
+                            // still brings you down to it.
+                            guard isBottomAnchorVisible || messages.last?.senderAddress == myAddress else { return }
                             scrollToBottom(using: proxy, animated: true)
                         }
                         .onChange(of: pendingJumpToTxId) { id in
@@ -1222,9 +1225,10 @@ struct PublicChatChannelView: View {
         What is wrong with it:
 
         """)
-        guard !report.send() else { return }
-        // Let the half sheet that offered this finish dismissing before the alert goes up.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
+        report.send {
+            // Let the half sheet that offered this finish dismissing before the alert goes up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
+        }
     }
 
     /// The sender half sheet a tapped avatar opens: what the avatar's popup menu used to offer,

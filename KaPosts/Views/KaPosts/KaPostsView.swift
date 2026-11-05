@@ -225,7 +225,9 @@ struct KaPostsView: View {
         /// On-chain delivery state, mirroring chat messages: pending while the K transaction is
         /// submitting, sent once it's on the network, failed -> Retry. Remote-fetched posts are
         /// sent by definition.
-        enum Delivery: Equatable { case pending, sent, failed }
+        /// `unconfirmed`: the network never answered, so the post may have landed. It offers no
+        /// Retry, which could post and pay twice (`SendOutcomeUnknownError`).
+        enum Delivery: Equatable { case pending, sent, failed, unconfirmed }
         var deliveryStatus: Delivery = .sent
         /// The indexer's reply count for this post - feed cells show it before any replies
         /// have actually been fetched (they load lazily on opening the thread).
@@ -301,13 +303,13 @@ struct KaPostsView: View {
     @State private var restoredPollOptions: [String] = []
     /// Poster being tipped via the quick-tip sheet (amount + direct send).
     @State private var tipTarget: TipTarget?
+    /// Posts whose instant tip is going out now (`sendDefaultTip`), by post id.
+    @State private var tipsInFlight: Set<UUID> = []
     /// Zero-balance interception for the new-post entry point: with a CONFIRMED 0 KAS chatting
     /// balance (never on unknown/still-loading - see
     /// `WalletManager.hasConfirmedZeroChattingBalance`) the pencil button presents the shared
     /// funding card instead of the composer.
     @State private var showComposeFundingSheet = false
-    /// Profile's Request button: a payment request link to copy or share.
-    @State private var showRequestPayment = false
     /// Same interception for the thread view's reply bar - separate flag because that bar
     /// lives inside the `detailTarget` sheet, so its funding card must present as a nested
     /// sheet from in there (a single shared flag bound to two `.sheet` modifiers at different
@@ -669,7 +671,7 @@ struct KaPostsView: View {
             if rootMode == .myProfile {
                 myProfileSheet
             } else {
-                AccountBackupFeedCards()
+                AccountBackupBanner()
                 feedTabBar
                 // Following, Feed and Popular side by side: swipe left and right between them,
                 // or tap the tab bar. Each touch locks to one direction, so a vertical scroll
@@ -1046,7 +1048,9 @@ struct KaPostsView: View {
                         }
                         // Thread-root probe: once per commented post, so the "View thread"
                         // affordance below can appear for other people's threads too.
-                        .task(id: post.remoteId ?? "") {
+                        // Only in the feed being read: the pages beside it are drawn too.
+                        .task(id: "\(post.remoteId ?? "")|\(selectedFeed == tab)") {
+                            guard selectedFeed == tab else { return }
                             await probeThreadRoot(post)
                         }
                         // Endless scroll: the row ~5 from the end pulls the next pages in,
@@ -2344,7 +2348,7 @@ struct KaPostsView: View {
                 threadRemainders[localId] = nil
                 mutatePost(id: localId) { $0.deliveryStatus = .sent }
             } catch {
-                mutatePost(id: localId) { $0.deliveryStatus = .failed }
+                mutatePost(id: localId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                 AppLog.log("[KaPosts] Thread submit failed (resumable): %@", error.localizedDescription)
             }
         }
@@ -2520,13 +2524,21 @@ struct KaPostsView: View {
         }
     }
 
+    /// How a post that didn't go through is shown: failed with Retry, or not confirmed with none.
+    static func failureStatus(for error: Error) -> DraftPost.Delivery {
+        error is SendOutcomeUnknownError ? .unconfirmed : .failed
+    }
+
     /// Retries an action tx a few times with settle delays - rapid sequential sends routinely
     /// hit "UTXO already spent / none spendable" until the node indexes the previous change.
+    /// Never after an unknown outcome: the first one may have landed.
     private func submitWithUtxoRetry(_ op: () async throws -> String) async throws -> String {
         var attempt = 0
         while true {
             do {
                 return try await op()
+            } catch let unknown as SendOutcomeUnknownError {
+                throw unknown
             } catch {
                 attempt += 1
                 guard attempt <= 4 else { throw error }
@@ -2557,7 +2569,7 @@ struct KaPostsView: View {
                         $0.deliveryStatus = .sent
                     }
                 } catch {
-                    mutatePost(id: localId) { $0.deliveryStatus = .failed }
+                    mutatePost(id: localId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                     AppLog.log("[KaPosts] Post submit failed: %@", error.localizedDescription)
                 }
             }
@@ -2613,7 +2625,7 @@ struct KaPostsView: View {
                         $0.deliveryStatus = .sent
                     }
                 } catch {
-                    mutatePost(id: localReplyId) { $0.deliveryStatus = .failed }
+                    mutatePost(id: localReplyId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                     AppLog.log("[KaPosts] Reply submit failed: %@", error.localizedDescription)
                 }
             }
@@ -3123,7 +3135,7 @@ struct KaPostsView: View {
                 }
             } catch {
                 if let localQuoteId {
-                    mutatePost(id: localQuoteId) { $0.deliveryStatus = .failed }
+                    mutatePost(id: localQuoteId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                 }
                 AppLog.log("[KaPosts] Quote/repost submit failed: %@", error.localizedDescription)
             }
@@ -3214,7 +3226,7 @@ struct KaPostsView: View {
                     $0.deliveryStatus = .sent
                 }
             } catch {
-                mutatePost(id: post.id) { $0.deliveryStatus = .failed }
+                mutatePost(id: post.id) { $0.deliveryStatus = Self.failureStatus(for: error) }
                 AppLog.log("[KaPosts] Retry failed: %@", error.localizedDescription)
             }
         }
@@ -4027,25 +4039,14 @@ struct KaPostsView: View {
                             // the Wallet tab. Pushed, so the dock stays underneath it.
                             if !myAddress.isEmpty {
                                 NavigationLink {
-                                    ChattingAddressManageView(address: myAddress, title: "Wallet")
+                                    KaPostWalletView()
                                 } label: {
                                     profileHeaderButtonLabel("Wallet", systemImage: "wallet.bifold")
                                 }
                                 .buttonStyle(.plain)
-                                Button {
-                                    Haptics.impact(.light)
-                                    showRequestPayment = true
-                                } label: {
-                                    profileHeaderButtonLabel("Request", systemImage: "doc.text")
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Request Payment")
                             }
                         }
                         .padding(.top, 8)
-                        .sheet(isPresented: $showRequestPayment) {
-                            CreatePaymentRequestView()
-                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -4084,6 +4085,10 @@ struct KaPostsView: View {
             }
             .task {
                 guard let pubkey = try? KaPostsAPIClient.shared.requesterPubkey() else { return }
+                // Coming back to the tab keeps the pages already scrolled in, as on the Feed:
+                // page one is re-pulled only when nothing is loaded or it has gone stale.
+                guard myProfileRemotePosts.isEmpty || !FeedLoadGates.isFresh(loadGates.myProfileLoadedAt) else { return }
+                loadGates.myProfileLoadedAt = Date()
                 isLoadingMyProfilePosts = myProfileRemotePosts.isEmpty
                 async let detailsFetch = try? KaPostsAPIClient.shared.fetchUserDetails(pubkey: pubkey)
                 if let details = await detailsFetch {
@@ -4380,6 +4385,8 @@ struct KaPostsView: View {
     private func tip(_ post: DraftPost) {
         let address = post.posterAddress
         guard address != WalletManager.shared.currentWallet?.publicAddress else { return }
+        // A second tap while this post's instant tip is going out would send a second tip.
+        guard !tipsInFlight.contains(post.id) else { return }
         // A tip names the post it is for, so the post counts it (KAPOSTS_INDEXER.md 5.11).
         let target = post.remoteId.flatMap { id in post.posterPubkey.map { KaPostTip(postId: id, authorPubkey: $0) } }
         let settings = settingsViewModel.settings
@@ -4387,18 +4394,26 @@ struct KaPostsView: View {
         if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
             let currency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
             let fiatText = formatFiatAmount(fiat, currency: currency)
-            guard let price = KaspaPriceService.shared.price(in: currency), price > 0 else {
-                KaspaPriceService.shared.refreshPrice()
+            guard let price = KaspaPriceService.shared.freshPrice(in: currency), price > 0 else {
                 tipTarget = TipTarget(address: address, tip: target,
-                                      failure: "Tip didn't send: there is no KAS price yet to turn \(fiatText) into KAS.")
+                                      failure: "Tip didn't send: there is no recent KAS price to turn \(fiatText) into KAS.")
                 return
             }
             let sompi = UInt64((fiat / price * 100_000_000).rounded())
-            sendDefaultTip(sompi, to: address, tip: target, fiatText: fiatText)
+            guard sompi <= KaPostsSettingsView.instantTipLimitSompi else {
+                tipTarget = TipTarget(address: address, tip: target, failure: KaPostsSettingsView.instantTipLimitNotice)
+                return
+            }
+            sendDefaultTip(sompi, to: address, tip: target, postId: post.id, fiatText: fiatText)
             return
         }
         if let amount = settings.kaPostsDefaultTipSompi, amount > 0 {
-            sendDefaultTip(amount, to: address, tip: target)
+            // Instant tips skip Face ID, so they stay small: a bigger one goes through the swipe.
+            guard amount <= KaPostsSettingsView.instantTipLimitSompi else {
+                tipTarget = TipTarget(address: address, tip: target, failure: KaPostsSettingsView.instantTipLimitNotice)
+                return
+            }
+            sendDefaultTip(amount, to: address, tip: target, postId: post.id)
             return
         }
         tipTarget = TipTarget(address: address, tip: target)
@@ -4409,7 +4424,7 @@ struct KaPostsView: View {
     /// funding source and destination rules as a payment in that person's chat. A failure
     /// falls back to the amount screen so the tip can still be sent by hand. `fiatText` is the
     /// currency amount the KAS was worked out from, for a tip set in a currency.
-    private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?, fiatText: String? = nil) {
+    private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?, postId: UUID, fiatText: String? = nil) {
         let recipient: Contact
         if let existing = ContactsManager.shared.getContact(byAddress: address) {
             recipient = existing
@@ -4426,7 +4441,9 @@ struct KaPostsView: View {
         var kasText = String(format: "%.8f", kas)
         while kasText.hasSuffix("0") { kasText.removeLast() }
         if kasText.hasSuffix(".") { kasText.removeLast() }
+        tipsInFlight.insert(postId)
         Task {
+            defer { tipsInFlight.remove(postId) }
             do {
                 let txId = try await ChatService.shared.sendPayment(to: recipient, amountSompi: amountSompi, extraFeeSompi: 0, tip: tip)
                 Haptics.success()
@@ -4435,6 +4452,10 @@ struct KaPostsView: View {
                 // retry timer owns it from here.
                 let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
                 showActionToast("Tipped \(amountText) to \(name)", txId: txId ?? "")
+            } catch is SendOutcomeUnknownError {
+                // It may have gone through: no amount screen, which would invite a second tip.
+                AppLog.log("[KaPosts] Instant tip outcome unknown")
+                showActionToast(SendOutcomeUnknownError.message, txId: "")
             } catch {
                 AppLog.log("[KaPosts] Instant tip failed: %@", error.localizedDescription)
                 // the amount screen opens with the reason, so the tip can be sent by hand
@@ -4750,7 +4771,7 @@ struct KaPostsView: View {
                         $0.deliveryStatus = .sent
                     }
                 } catch {
-                    mutatePost(id: localId) { $0.deliveryStatus = .failed }
+                    mutatePost(id: localId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                     AppLog.log("[KaPosts] Poll submit failed: %@", error.localizedDescription)
                 }
             }
@@ -5549,9 +5570,10 @@ private struct KaPostCellView: View {
         What is wrong with it:
 
         """)
-        guard !report.send() else { return }
-        // Let the half sheet finish dismissing before the alert goes up.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
+        report.send {
+            // Let the half sheet finish dismissing before the alert goes up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { unsentReport = report }
+        }
     }
 
     /// "1h 12m left" / "8m left" for the Edit row.
@@ -5860,7 +5882,8 @@ private struct KaPostCellView: View {
                 }
                 // A link to KaChat's site: its preview, or the link itself if that can't load.
                 if let link = siteLink {
-                    LinkPreviewCardView(url: link.url, txId: post.remoteId ?? "", fallbackText: link.matchedText)
+                    LinkPreviewCardView(url: link.url, txId: post.remoteId ?? "", fallbackText: link.matchedText,
+                                        loadingHeight: 190)
                         .padding(.top, 4)
                 }
                 translateAffordance
@@ -6077,6 +6100,15 @@ private struct KaPostCellView: View {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(.secondary)
+            case .unconfirmed:
+                HStack(spacing: 4) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .font(.caption)
+                    Text("Not confirmed")
+                        .font(.caption.weight(.bold))
+                }
+                .foregroundColor(.orange)
+                .accessibilityHint(Text("It may have gone through. Check before posting it again."))
             case .failed:
                 Button {
                     Haptics.impact(.light)
@@ -6626,6 +6658,8 @@ private struct KaPostTipSheet: View {
     @State private var showCoinControl = false
     @State private var availableSompi: UInt64?
     @State private var normalFeeSompi: UInt64?
+    /// Change too small to keep, which goes to the fee (`SendFeeEstimate`).
+    @State private var foldedChangeSompi: UInt64 = 0
     @State private var isEstimatingFee = false
     @State private var isEstimatingMax = false
     @State private var isSending = false
@@ -6657,7 +6691,8 @@ private struct KaPostTipSheet: View {
     private enum Step: Int { case from, amount, review, fee }
 
     /// A tip on a post comes from your address only, so From is skipped.
-    private var initialStep: Step { tip != nil ? .amount : .from }
+    /// Tips leave from the chatting address, like every send in KaPost, so there's no From step.
+    private var initialStep: Step { .amount }
 
     private var currentStep: Step { step ?? initialStep }
 
@@ -6690,7 +6725,7 @@ private struct KaPostTipSheet: View {
 
     private var totalFeeSompi: UInt64? {
         guard let normalFeeSompi else { return nil }
-        return normalFeeSompi + extraFeeSompi
+        return SendFeeEstimate(networkFee: normalFeeSompi, foldedChange: foldedChangeSompi).total(extra: extraFeeSompi)
     }
 
     private func trimmedKas(_ sompi: UInt64) -> String {
@@ -6755,9 +6790,10 @@ private struct KaPostTipSheet: View {
         .task(id: source) {
             availableSompi = nil
             guard let fromAddress = source.address else { return }
-            let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([fromAddress])) ?? []
-            guard !Task.isCancelled else { return }
-            availableSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+            // A failed read says nothing about the balance: left unknown, not shown as 0.
+            let utxos = try? await NodePoolService.shared.getUtxosByAddresses([fromAddress])
+            guard !Task.isCancelled, let utxos else { return }
+            availableSompi = KaPostsScheduledStore.filterReserved(utxos).reduce(UInt64(0)) { $0 + $1.amount }
         }
         .task(id: "\(amountSompi ?? 0)#\(manualUtxos?.count ?? -1)#\(memo)#\(source.spendingIndex ?? -1)") {
             guard let amountSompi else {
@@ -6767,10 +6803,12 @@ private struct KaPostTipSheet: View {
             isEstimatingFee = true
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            normalFeeSompi = try? await ChatService.shared.estimatePaymentFee(
+            let estimate = try? await ChatService.shared.estimatePaymentFee(
                 to: estimationContact, amountSompi: amountSompi, note: memo,
                 sourceSpendingIndex: source.spendingIndex, manualUtxos: manualUtxos, tip: tip
             )
+            normalFeeSompi = estimate?.networkFee
+            foldedChangeSompi = estimate?.foldedChange ?? 0
             isEstimatingFee = false
         }
         .sheet(isPresented: $showCoinControl) {
@@ -9248,6 +9286,8 @@ struct KaPostsNotificationsView: View {
     @ObservedObject private var kachatSocialImages = KachatSocialImageResolver.shared
     @ObservedObject private var knsService = KNSService.shared
     @ObservedObject private var moderationStore = KaPostsModerationStore.shared
+    /// When the list was last loaded on appearing (see the `.task` below).
+    @State private var lastLoadedAt: Date?
 
     struct Item: Identifiable {
         enum Kind {
@@ -9370,7 +9410,12 @@ struct KaPostsNotificationsView: View {
                     .accessibilityLabel("Notification Settings")
                 }
             }
-            .task { await load() }
+            .task {
+                // Coming back to the tab keeps what was scrolled in; pull to refresh still reloads.
+                if let at = lastLoadedAt, Date().timeIntervalSince(at) < 120 { return }
+                lastLoadedAt = Date()
+                await load()
+            }
             // The open-conversation rule for KaPosts: while this stream is on screen,
             // AppDelegate.willPresent suppresses kaposts banners (local and push alike).
             .onAppear { KaPostsNotificationService.shared.isNotificationsScreenVisible = true }
@@ -9782,8 +9827,10 @@ extension View {
 
     /// A dock tab's title, fixed above its scrolling content like the Feed's: the status chrome
     /// fills the nav bar's center, and a system large title would move with the scroll view.
+    /// The backup strip sits above the title, as on the Feed.
     func kaPostsFixedTitle(_ title: LocalizedStringKey) -> some View {
         VStack(spacing: 0) {
+            AccountBackupBanner()
             Text(title)
                 .font(.largeTitle.weight(.bold))
                 .frame(maxWidth: .infinity, alignment: .leading)

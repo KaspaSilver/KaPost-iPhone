@@ -1,9 +1,8 @@
 import SwiftUI
-import MessageUI
 
 /// Reporting a post or room message (App Store guideline 1.2): the report goes to support by
-/// email, where a person reads it. A phone with no mail account can't send one, so there the
-/// report is copied and the fallback alert says where to send it.
+/// email, where a person reads it, in whatever mail app is the phone's default. If nothing can
+/// open it, the report is copied and the fallback alert says where to send it.
 struct ContentReport: Identifiable {
     static let supportEmail = "kaspasilver@gmail.com"
 
@@ -21,21 +20,25 @@ struct ContentReport: Identifiable {
         return components.url
     }
 
-    /// Opens the email, or copies the report and returns false, for the caller to show
-    /// `contentReportFallback`.
-    func send() -> Bool {
-        guard MFMailComposeViewController.canSendMail(), let mailURL else {
+    /// Opens the email. If no mail app takes it, copies the report and calls `onUnsent`, for the
+    /// caller to show `contentReportFallback`.
+    func send(onUnsent: @escaping () -> Void) {
+        let body = body
+        guard let mailURL else {
             UIPasteboard.general.string = body
-            return false
+            onUnsent()
+            return
         }
-        UIApplication.shared.open(mailURL)
-        return true
+        UIApplication.shared.open(mailURL) { opened in
+            guard !opened else { return }
+            UIPasteboard.general.string = body
+            onUnsent()
+        }
     }
 }
 
 extension View {
-    /// The alert for a report `ContentReport.send()` couldn't hand to Mail. Open Email is still
-    /// there for another mail app.
+    /// The alert for a report `ContentReport.send` couldn't hand to a mail app.
     func contentReportFallback(_ report: Binding<ContentReport?>) -> some View {
         alert(
             "Report Copied",
@@ -44,13 +47,10 @@ extension View {
                 set: { if !$0 { report.wrappedValue = nil } }
             ),
             presenting: report.wrappedValue
-        ) { unsent in
-            Button("Open Email") {
-                if let url = unsent.mailURL { UIApplication.shared.open(url) }
-            }
+        ) { _ in
             Button("OK", role: .cancel) {}
         } message: { _ in
-            Text("This iPhone has no mail account set up. Paste the report into an email to \(ContentReport.supportEmail).")
+            Text("No mail app could open it. Paste the report into an email to \(ContentReport.supportEmail).")
         }
     }
 }

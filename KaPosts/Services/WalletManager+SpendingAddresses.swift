@@ -838,11 +838,14 @@ extension WalletManager {
     }
 
     func allSpendingAddresses() -> [String] {
-        guard let changeKey = spendingChangeKey() else { return [] }
-        var out = (0...maxSpendingAddressIndex).compactMap { spendingAddress(at: $0, changeKey: changeKey) }
+        // Through the address cache: the seed can't be read while the phone is locked, and a
+        // background wake-up must still know these addresses.
+        let legacy = spendingAddresses(inRange: 0..<(max(0, maxSpendingAddressIndex) + 1))
+        var out = legacy.keys.sorted().compactMap { legacy[$0] }
         let quantumMax = maxQuantumAddressIndex
-        if quantumMax >= 0, let chainKey = quantumChainKey() {
-            out += (0...quantumMax).compactMap { quantumAddress(at: Self.quantumIndexBase + $0, chainKey: chainKey) }
+        if quantumMax >= 0 {
+            let quantum = spendingAddresses(inRange: Self.quantumIndexBase..<(Self.quantumIndexBase + quantumMax + 1))
+            out += quantum.keys.sorted().compactMap { quantum[$0] }
         }
         return out
     }

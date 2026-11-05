@@ -452,53 +452,8 @@ struct ChattingAddressManageView: View {
     }
 
     private func transactionRow(_ tx: KaspaFullTransactionResponse) -> some View {
-        let info = tx.direction(for: address)
-        return HStack(spacing: 12) {
-            Image(systemName: info?.isOutgoing == true ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                .font(.title2)
-                .foregroundColor(info == nil ? .secondary : (info!.isOutgoing ? .red : .green))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(info == nil ? "Transaction" : (info!.isOutgoing ? "Sent" : "Received"))
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(info == nil ? .secondary : (info!.isOutgoing ? .red : .green))
-                Text(tx.transactionId)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let blockTime = tx.blockTime {
-                    Text(Date(timeIntervalSince1970: Double(blockTime) / 1000).formatted(Self.blockTimeFormat))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                if let info {
-                    Text(verbatim: "\(info.isOutgoing ? "-" : "+")\(formatKasExact(info.amountSompi)) \(KaspaUnit.symbol)")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(info.isOutgoing ? .red : .green)
-                }
-                // The network fee this transaction paid (inputs minus outputs).
-                if let fee = tx.feeText() {
-                    Text(fee)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                Image(systemName: "arrow.up.right.square")
-                    .font(.caption)
-                    .foregroundColor(.accentColor)
-            }
-        }
-        .padding(.vertical, 4)
+        AddressTransactionRow(transaction: tx, address: address)
     }
-
-    /// Built once: `Date.formatted(date:time:)` resolves a fresh style per call, and this runs
-    /// for every transaction row on every render of the list.
-    private static let blockTimeFormat = Date.FormatStyle(date: .abbreviated, time: .shortened)
 
     private func formatKasExact(_ sompi: UInt64) -> String {
         String(format: "%.8f", Double(sompi) / 100_000_000.0)
@@ -740,7 +695,6 @@ struct ChattingAddressQRView: View {
     var subtitle: String = "This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name."
 
     @EnvironmentObject private var walletManager: WalletManager
-    @ObservedObject private var backupStatus = AccountBackupStatus.shared
     @State private var qrImage: UIImage?
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
@@ -802,29 +756,9 @@ struct ChattingAddressQRView: View {
             )
             .contentShape(Rectangle())
             .onTapGesture { copyAddress() }
-            // a reminder only: receiving is never blocked
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if backupStatus.isPending(walletManager.currentWallet?.publicAddress) {
-                    Label("This account isn't backed up yet. Use the card at the top of the Feed to back it up.",
-                          systemImage: "exclamationmark.shield.fill")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundColor(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.orange.opacity(0.12))
-                }
-            }
+            // Only the code and the address: the backup strip is on every tab, and the balance is
+            // the Wallet screen's.
             .toast(message: toastMessage)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(balanceSompi.map { "\(formatKaspaExact($0)) \(KaspaUnit.symbol)" } ?? "—")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .monospacedDigit()
-                        .foregroundColor(.primary)
-                }
-            }
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 qrImage = ProfileQRCodeCache.cachedImage(for: address)
@@ -900,9 +834,9 @@ struct WithdrawKaspaView: View {
     /// Someone's payment request (a tapped or pasted link): its address is locked in, its amount
     /// and memo filled in. A request pasted into the recipient field does the same.
     var paymentRequest: PaymentRequest? = nil
-    /// Opened from one address's history (its Send button): the Kaspa leaves from that address
-    /// and the From section offers no other.
-    var lockedSource: SendSource? = nil
+    /// Where the Kaspa leaves from, with no From step to pick another. KaPost only ever sends from
+    /// the chatting address: other addresses are managed in KaChat and KaPay.
+    var lockedSource: SendSource? = .chatting
     var onComplete: (() -> Void)? = nil
 
     /// The request this send pays, if any (`paymentRequest`, or one pasted in).
@@ -938,6 +872,8 @@ struct WithdrawKaspaView: View {
 
     @State private var feeTier: WithdrawFeeTier = .normal
     @State private var normalFeeSompi: UInt64?
+    /// Change too small to keep, which goes to the fee (`SendFeeEstimate`).
+    @State private var foldedChangeSompi: UInt64 = 0
     @State private var isEstimatingFee = false
     @State private var isEstimatingMax = false
     @State private var customExtraFeeSompi: UInt64?
@@ -994,7 +930,7 @@ struct WithdrawKaspaView: View {
 
     private var totalFeeSompi: UInt64? {
         guard let normalFeeSompi else { return nil }
-        return normalFeeSompi + extraFeeSompi
+        return SendFeeEstimate(networkFee: normalFeeSompi, foldedChange: foldedChangeSompi).total(extra: extraFeeSompi)
     }
 
     /// Debounce/cancellation key: only re-estimate when the resolved address or amount
@@ -1102,9 +1038,10 @@ struct WithdrawKaspaView: View {
             .task(id: source) {
                 sourceBalanceSompi = nil
                 guard let address = source.address else { return }
-                let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([address])) ?? []
-                guard !Task.isCancelled else { return }
-                sourceBalanceSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+                // A failed read says nothing about the balance: left unknown, not shown as 0.
+                let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address])
+                guard !Task.isCancelled, let utxos else { return }
+                sourceBalanceSompi = KaPostsScheduledStore.filterReserved(utxos).reduce(UInt64(0)) { $0 + $1.amount }
             }
             .onChange(of: feeTier) { _ in
                 customExtraFeeSompi = nil
@@ -1136,14 +1073,24 @@ struct WithdrawKaspaView: View {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
                 do {
-                    let fee: UInt64
-                    if let index = source.spendingIndex {
+                    let fee: SendFeeEstimate
+                    if let request = activeRequest, request.toChattingAddress,
+                       request.address.lowercased() == effectiveAddress.lowercased() {
+                        // Paid as a chat payment, with its encrypted memo: priced that way.
+                        let contact = contactsManager.getContact(byAddress: effectiveAddress)
+                            ?? Contact(address: effectiveAddress, isAutoAdded: true)
+                        fee = try await chatService.estimatePaymentFee(
+                            to: contact, amountSompi: amountSompi, note: request.memo,
+                            sourceSpendingIndex: source.spendingIndex, manualUtxos: manualUtxos
+                        )
+                    } else if let index = source.spendingIndex {
                         fee = try await chatService.estimateSpendingAddressWithdrawalFee(index: index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
                     } else {
                         fee = try await chatService.estimateWithdrawalFee(toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
                     }
                     guard !Task.isCancelled else { return }
-                    normalFeeSompi = fee
+                    normalFeeSompi = fee.networkFee
+                    foldedChangeSompi = fee.foldedChange
                     feeError = nil
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -1665,10 +1612,13 @@ struct WithdrawKaspaView: View {
                     ?? contactsManager.getContact(byAddress: recipient) {
                     // A chatting address: a chat payment, the memo encrypted to them inside it -
                     // it lands in your chat with them like any payment from the chat.
-                    txId = try await chatService.sendPayment(
+                    // Nil: put off until the coins confirm, and the retry timer sends it. Not a
+                    // failure to try again, which would pay twice.
+                    guard let sent = try await chatService.sendPayment(
                         to: contact, amountSompi: amountSompi, note: request.memo,
                         extraFeeSompi: tipSompi, sourceSpendingIndex: spendingIndex, manualUtxos: manualUtxos
-                    ) ?? ""
+                    ) else { throw SendOutcomeUnknownError(txId: "") }
+                    txId = sent
                 } else if let spendingIndex {
                     txId = try await chatService.sendFromSpendingAddress(index: spendingIndex, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 } else {
@@ -1836,5 +1786,66 @@ struct KaChatProfileEditorSheet: View {
                 KachatSetupGuideView { showSetupGuide = false }
             }
         }
+    }
+}
+
+/// One transaction of an address's history: Sent or Received, the id, when, the amount and the
+/// fee. The chatting address screen and the Wallet screen draw it the same way.
+struct AddressTransactionRow: View {
+    let transaction: KaspaFullTransactionResponse
+    let address: String
+
+    var body: some View {
+        let tx = transaction
+        let info = tx.direction(for: address)
+        return HStack(spacing: 12) {
+            Image(systemName: info?.isOutgoing == true ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                .font(.title2)
+                .foregroundColor(info == nil ? .secondary : (info!.isOutgoing ? .red : .green))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(info == nil ? "Transaction" : (info!.isOutgoing ? "Sent" : "Received"))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(info == nil ? .secondary : (info!.isOutgoing ? .red : .green))
+                Text(tx.transactionId)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let blockTime = tx.blockTime {
+                    Text(Date(timeIntervalSince1970: Double(blockTime) / 1000).formatted(Self.blockTimeFormat))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                if let info {
+                    Text(verbatim: "\(info.isOutgoing ? "-" : "+")\(formatKasExact(info.amountSompi)) \(KaspaUnit.symbol)")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(info.isOutgoing ? .red : .green)
+                }
+                // The network fee this transaction paid (inputs minus outputs).
+                if let fee = tx.feeText() {
+                    Text(fee)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundColor(.accentColor)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// Built once: `Date.formatted(date:time:)` resolves a fresh style per call, and this runs
+    /// for every transaction row on every render of the list.
+    private static let blockTimeFormat = Date.FormatStyle(date: .abbreviated, time: .shortened)
+
+    private func formatKasExact(_ sompi: UInt64) -> String {
+        String(format: "%.8f", Double(sompi) / 100_000_000.0)
     }
 }

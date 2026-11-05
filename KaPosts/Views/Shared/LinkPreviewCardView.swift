@@ -37,6 +37,9 @@ struct LinkPreviewCardView: View {
     /// link's server - when the user explicitly taps it. A URL that already resolved this
     /// session shows its cached result either way, since no new fetch is involved.
     var autoFetch: Bool = true
+    /// Space held while the preview loads, so the card doesn't push the content below it down
+    /// when it lands. Nil draws nothing until then.
+    var loadingHeight: CGFloat? = nil
 
     @State private var preview: LinkPreviewData?
     @State private var hasFinishedLoading: Bool
@@ -48,7 +51,8 @@ struct LinkPreviewCardView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
 
-    init(url: URL, txId: String, fallbackText: String? = nil, onSelect: (() -> Void)? = nil, onDoubleTap: (() -> Void)? = nil, isOutgoing: Bool = false, autoFetch: Bool = true) {
+    init(url: URL, txId: String, fallbackText: String? = nil, onSelect: (() -> Void)? = nil, onDoubleTap: (() -> Void)? = nil, isOutgoing: Bool = false, autoFetch: Bool = true, loadingHeight: CGFloat? = nil) {
+        self.loadingHeight = loadingHeight
         self.url = url
         self.txId = txId
         self.fallbackText = fallbackText
@@ -92,6 +96,11 @@ struct LinkPreviewCardView: View {
                 fallbackBubble(fallbackText)
             } else if !autoFetch && !loadRequested {
                 tapToLoadCard
+            } else if let loadingHeight {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(maxWidth: 260)
+                    .frame(height: loadingHeight)
             } else {
                 Color.clear
                     .frame(width: 0, height: 0)

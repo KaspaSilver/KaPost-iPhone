@@ -21,6 +21,11 @@ struct KaPostsSettingsView: View {
 
     private static let fallbackTipKas = 1.0
 
+    /// Instant tips skip Face ID, so the most one may send: a bigger default tip opens the tip sheet,
+    /// whose swipe asks first.
+    static let instantTipLimitSompi: UInt64 = 10 * 100_000_000
+    static let instantTipLimitNotice = "Instant tips are limited to 10 KAS. Swipe up to send this one."
+
     var body: some View {
         if embedded {
             form
@@ -51,10 +56,17 @@ struct KaPostsSettingsView: View {
                     Toggle("Send a default tip instantly", isOn: $instantTipEnabled)
                         .onChange(of: instantTipEnabled) { enabled in
                             if enabled {
-                                if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty {
-                                    defaultTipText = Self.trimmed(Self.fallbackTipKas)
+                                // Sends without asking from then on, so turning it on asks once.
+                                guard settingsViewModel.settings.kaPostsDefaultTipSompi == nil,
+                                      settingsViewModel.settings.kaPostsDefaultTipFiat == nil else { return }
+                                DeviceAuth.authenticate(reason: AppLocalization.string("Turn on instant tips")) {
+                                    if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                        defaultTipText = Self.trimmed(Self.fallbackTipKas)
+                                    }
+                                    commitDefaultTip()
+                                } onFailure: {
+                                    instantTipEnabled = false
                                 }
-                                commitDefaultTip()
                             } else {
                                 settingsViewModel.settings.kaPostsDefaultTipSompi = nil
                                 settingsViewModel.settings.kaPostsDefaultTipFiat = nil
@@ -130,6 +142,10 @@ struct KaPostsSettingsView: View {
 
     /// What a tip sends: in KAS, or the currency amount with what it comes to in KAS today.
     private var tipFooter: String {
+        tipAmountFooter + " " + AppLocalization.string("Up to 10 KAS goes out without asking; a bigger tip opens the tip screen.")
+    }
+
+    private var tipAmountFooter: String {
         guard tipInFiat else {
             return AppLocalization.string("Tap the unit to set the tip in your currency instead.")
         }

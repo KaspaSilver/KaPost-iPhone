@@ -339,6 +339,17 @@ final class KachatNamesRegistry: ObservableObject {
 
     // MARK: - Reads
 
+    /// An indexer's answer is only a claim. Before a payment trusts it, the chain has to hold the name
+    /// record it describes: the script commits to the name and its owner, and carries the registry's
+    /// covenant id, so an indexer can't point a name at another address. Throws if it doesn't. A
+    /// record read from the chain itself needs no second look.
+    func confirmOnChain(_ n: KachatNames.NameInfo) async throws {
+        guard case .indexer? = source else { return }
+        guard let fields = n.fields else { throw KachatNames.Failure("the indexer's record can't be checked") }
+        let m = try await service.loadManifest()
+        _ = try await service.liveRegistryUtxo(script: m.name.script(fields.encoded), outpoint: n.outpoint)
+    }
+
     func lookup(_ raw: String) async throws -> KachatNames.Lookup {
         try await prepare()
         let name = KachatNames.Codec.normalize(raw)
@@ -854,6 +865,45 @@ final class KachatNamesRegistry: ObservableObject {
         return out
     }
 
+    /// Addresses `cachedIdentity` wants looked up, collected for one batched request. This runs from
+    /// view bodies, once per author drawn, so a screen of posts was a request per author.
+    private var identityBatchQueue: Set<String> = []
+    private var identityBatchTask: Task<Void, Never>?
+
+    private func scheduleIdentityBatch() {
+        guard identityBatchTask == nil else { return }
+        identityBatchTask = Task { [weak self] in
+            // the rest of the screen asks in the same moment
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self else { return }
+            let keys = Array(self.identityBatchQueue)
+            self.identityBatchQueue = []
+            self.identityBatchTask = nil
+            let batch = await self.identitiesBatch(keys)
+            var changed = false
+            for key in keys {
+                let found: KachatNames.Identity?
+                if let batch {
+                    // left out of the answer: no names and no profile
+                    found = batch[key] ?? KachatNames.Identity(address: key, label: nil, names: [], profile: nil)
+                } else {
+                    found = try? await self.identity(address: key)
+                }
+                self.identityLookups.remove(key)
+                guard let found else {
+                    self.identityMisses[key] = Date()
+                    continue
+                }
+                self.identityMisses[key] = nil
+                if self.storeFetchedIdentity(found, for: key) { changed = true }
+            }
+            if changed {
+                ContactsManager.shared.objectWillChange.send()
+                ContactsManager.shared.scheduleSharedNameSync()
+            }
+        }
+    }
+
     func cachedIdentity(for address: String) -> KachatNames.Identity? {
         guard KachatNamesService.profilesEnabled else { return nil }
         let key = address.lowercased()
@@ -871,20 +921,8 @@ final class KachatNamesRegistry: ObservableObject {
         let missedRecently = identityMisses[key].map { Date().timeIntervalSince($0) < 60 } ?? false
         if stale, !missedRecently, !identityLookups.contains(key) {
             identityLookups.insert(key)
-            Task { [weak self] in
-                guard let self else { return }
-                let found = try? await self.identity(address: key)
-                self.identityLookups.remove(key)
-                guard let found else {
-                    self.identityMisses[key] = Date()
-                    return
-                }
-                self.identityMisses[key] = nil
-                if self.storeFetchedIdentity(found, for: key) {
-                    ContactsManager.shared.objectWillChange.send()
-                    ContactsManager.shared.scheduleSharedNameSync()
-                }
-            }
+            identityBatchQueue.insert(key)
+            scheduleIdentityBatch()
         }
         var identity = entry?.identity
         if let own = ownProfile(for: key)?.profile {

@@ -14,7 +14,6 @@ struct KaPostsApp: App {
     @StateObject private var publicChatService = PublicChatService.shared
     /// The blur over the app in the App Switcher and behind system prompts: the balance and the
     /// seed screen would otherwise sit in iOS's snapshot of the app in plain view.
-    @State private var showPrivacyCover = false
     @State private var lastActiveResyncAt: Date?
     @State private var hasCompletedFirstActiveTransition = false
     @Environment(\.scenePhase) private var scenePhase
@@ -46,13 +45,6 @@ struct KaPostsApp: App {
                 .environmentObject(settingsViewModel)
                 .environmentObject(pushManager)
                 .environmentObject(publicChatService)
-                .overlay {
-                    if showPrivacyCover {
-                        PrivacyCoverView()
-                            .transition(.opacity)
-                    }
-                }
-                .animation(.easeOut(duration: 0.15), value: showPrivacyCover)
                 .onAppear {
                     ChatService.shared.settingsViewModel = settingsViewModel
                     applyWindowAppearanceOverride()
@@ -115,9 +107,14 @@ struct KaPostsApp: App {
         }
     }
 
+    @MainActor
     private func handleScenePhaseChange(to newPhase: ScenePhase) {
         // Covered the moment the app stops being the thing in front, uncovered when it is again.
-        showPrivacyCover = newPhase != .active
+        if newPhase == .active {
+            PrivacyCoverWindow.hide()
+        } else {
+            PrivacyCoverWindow.show()
+        }
         switch newPhase {
         case .background:
             KaPostsNotificationService.shared.stop()
@@ -240,6 +237,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     /// iPhone is locked to portrait; iPad may rotate.
+    /// No third-party keyboards anywhere in the app: the passphrase and the card PIN are typed on the
+    /// system keyboard, so a keyboard with Full Access never sees them. They're offered the system's.
+    func application(_ application: UIApplication, shouldAllowExtensionPointIdentifier extensionPointIdentifier: UIApplication.ExtensionPointIdentifier) -> Bool {
+        extensionPointIdentifier != .keyboard
+    }
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
     }
@@ -489,12 +492,37 @@ extension Notification.Name {
     static let openPublicChat = Notification.Name("openBroadcast")
 }
 
+/// Puts `PrivacyCoverView` in a window of its own above the app. An overlay on the root view sat
+/// underneath presented sheets, which is where the 12 or 24 words and private keys are shown.
+@MainActor
+private enum PrivacyCoverWindow {
+    private static var window: UIWindow?
+
+    static func show() {
+        guard window == nil,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let cover = UIWindow(windowScene: scene)
+        cover.windowLevel = .alert + 1
+        // the app's appearance (Settings' choice), which its own windows carry
+        cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
+        cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
+        cover.isHidden = false
+        window = cover
+    }
+
+    static func hide() {
+        window?.isHidden = true
+        window = nil
+    }
+}
+
 /// What the App Switcher and a system prompt see instead of the app's contents: the app's own
 /// logo (the icon's art), shaped like its home-screen icon.
 private struct PrivacyCoverView: View {
     var body: some View {
         ZStack {
-            Rectangle().fill(.ultraThinMaterial)
+            // Solid: large words can still be read through a light blur.
+            Color(.systemBackground)
             Image("KaPostsLogo")
                 .resizable()
                 .scaledToFit()

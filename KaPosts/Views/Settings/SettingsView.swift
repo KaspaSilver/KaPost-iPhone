@@ -10,6 +10,10 @@ struct SettingsView: View {
 
     @State private var showSeedPhrase = false
     @State private var showNFCCardBackup = false
+    /// The backup steps from Back Up Account. Finishing them clears the backup strip.
+    @State private var showAccountBackup = false
+    /// Whether each account has a passphrase, read once (see the `.task`).
+    private static var passphraseByAccount: [String: Bool] = [:]
     @State private var accountHasPassphrase = false
     @State private var showLogoutConfirmation = false
     @State private var showDeleteAccountConfirmation = false
@@ -25,65 +29,39 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                settingsCategoryRow("Customization", icon: "paintbrush.pointed", tint: .accentColor) {
-                    customizationPage
+                // Alphabetical. Delete Account and Log Out stay apart below.
+                settingsCategoryRow("About", icon: "info.circle", tint: .accentColor) {
+                    AccountAboutPage()
                 }
-                settingsCategoryRow("Security", icon: "lock.shield", tint: .accentColor) {
-                    SecuritySettingsPage()
+                settingsCategoryRow("Account Name", icon: "pencil", tint: .accentColor) {
+                    AccountNamePage()
+                }
+                settingsCategoryRow("Back Up Account", icon: "key", tint: .accentColor) {
+                    backUpAccountPage
                 }
                 settingsCategoryRow("Connection", icon: "antenna.radiowaves.left.and.right", tint: .accentColor) {
                     ConnectionHubPage()
                 }
-                settingsCategoryRow("KaPost", icon: "square.text.square", tint: .accentColor) {
-                    KaPostsSettingsView(onClose: {}, embedded: true)
-                }
-                // The same page as the cog on the Notifications tab.
-                settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
-                    NotificationsHubPage()
-                }
-                // Public Chats has no row here: its rooms are chosen with the customize button on
-                // the Public Chats tab itself.
-                settingsCategoryRow("Cache", icon: "internaldrive", tint: .accentColor) {
-                    CacheSettingsPage()
+                settingsCategoryRow("Customization", icon: "paintbrush.pointed", tint: .accentColor) {
+                    customizationPage
                 }
                 settingsCategoryRow("Diagnostics", icon: "stethoscope", tint: .accentColor) {
                     DiagnosticsSettingsPage()
                 }
-                settingsCategoryRow("Terms of Use", icon: "doc.plaintext", tint: .accentColor) {
-                    TermsOfUseView()
+                settingsCategoryRow("KaPost", icon: "square.text.square", tint: .accentColor) {
+                    KaPostsSettingsView(onClose: {}, embedded: true)
                 }
-                settingsCategoryRow("Open Source Licenses", icon: "doc.text", tint: .accentColor) {
-                    OpenSourceLicensesView()
+                // The same page as the cog on the Notifications tab. Public Chats has no row
+                // here: its rooms are chosen with the customize button on its own tab.
+                settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
+                    NotificationsHubPage()
                 }
-                // Direct action, not a sub-page: straight into the seed phrase (behind the
-                // biometric gate when enabled).
-                Button {
-                    unlockSeedPhrase { showSeedPhrase = true }
-                } label: {
-                    Label {
-                        Text("View Seed Phrase")
-                            .foregroundColor(.primary)
-                    } icon: {
-                        Image(systemName: "key")
-                            .foregroundColor(.accentColor)
-                    }
+                settingsCategoryRow("Security", icon: "lock.shield", tint: .accentColor) {
+                    SecuritySettingsPage()
                 }
-                #if canImport(CoreNFC) && !targetEnvironment(macCatalyst)
-                // Without a passphrase, nothing would protect the seed if someone got past the PIN.
-                if NFCCard.isAvailable && accountHasPassphrase {
-                    Button {
-                        unlockSeedPhrase { showNFCCardBackup = true }
-                    } label: {
-                        Label {
-                            Text("Back Up to NFC Card")
-                                .foregroundColor(.primary)
-                        } icon: {
-                            Image(systemName: "wave.3.right")
-                                .foregroundColor(.accentColor)
-                        }
-                    }
+                settingsCategoryRow("Storage", icon: "internaldrive", tint: .accentColor) {
+                    CacheSettingsPage()
                 }
-                #endif
                 Section {
                     Button(role: .destructive) {
                         showDeleteAccountConfirmation = true
@@ -124,9 +102,20 @@ struct SettingsView: View {
             .sheet(isPresented: $showSeedPhrase) {
                 SeedPhraseView()
             }
+            .sheet(isPresented: $showAccountBackup) {
+                AccountBackupView()
+            }
             .task(id: walletManager.currentWallet?.publicAddress) {
+                // Read once per account: a passphrase never changes, and this ran on every return
+                // to Settings, reading the words from the Keychain each time.
+                guard let address = walletManager.currentWallet?.publicAddress else { return }
+                if let known = Self.passphraseByAccount[address] {
+                    accountHasPassphrase = known
+                    return
+                }
                 let passphrase = (try? walletManager.getSeedPhrase())?.passphrase ?? ""
                 accountHasPassphrase = !passphrase.isEmpty
+                Self.passphraseByAccount[address] = accountHasPassphrase
             }
             .sheet(isPresented: $showNFCCardBackup) {
                 #if canImport(CoreNFC) && !targetEnvironment(macCatalyst)
@@ -152,7 +141,9 @@ struct SettingsView: View {
                     notBackedUp: backupStatus.isPending(walletManager.currentWallet?.publicAddress),
                     onBackUp: { AccountBackupView.unlock { showBackupOverDeleteWarning = true } }
                 ) {
-                    Task { await walletManager.deleteCurrentAccount() }
+                    DeviceAuth.authenticate(reason: AppLocalization.string("Confirm deleting this account")) {
+                        Task { await walletManager.deleteCurrentAccount() }
+                    }
                 }
                 .sheet(isPresented: $showSeedPhraseOverDeleteWarning) {
                     SeedPhraseView()
@@ -167,10 +158,61 @@ struct SettingsView: View {
         }
     }
 
+    private var backUpAccountPage: some View {
+        Form {
+            if backupStatus.isPending(walletManager.currentWallet?.publicAddress) {
+                Section {
+                    Button {
+                        AccountBackupView.unlock { showAccountBackup = true }
+                    } label: {
+                        Label {
+                            Text("Complete Your Backup")
+                                .foregroundColor(.primary)
+                        } icon: {
+                            Image(systemName: "exclamationmark.shield.fill")
+                                .foregroundColor(.orange)
+                        }
+                    }
+                }
+            }
+            Section {
+                Button {
+                    unlockSeedPhrase { showSeedPhrase = true }
+                } label: {
+                    Label {
+                        Text("View 12 or 24 Words")
+                            .foregroundColor(.primary)
+                    } icon: {
+                        Image(systemName: "key")
+                            .foregroundColor(.accentColor)
+                    }
+                }
+                #if canImport(CoreNFC) && !targetEnvironment(macCatalyst)
+                // Without a passphrase, nothing would protect the seed if someone got past the PIN.
+                if NFCCard.isAvailable && accountHasPassphrase {
+                    Button {
+                        unlockSeedPhrase { showNFCCardBackup = true }
+                    } label: {
+                        Label {
+                            Text("Back Up to NFC Card")
+                                .foregroundColor(.primary)
+                        } icon: {
+                            Image(systemName: "wave.3.right")
+                                .foregroundColor(.accentColor)
+                        }
+                    }
+                }
+                #endif
+            }
+        }
+        .navigationTitle("Back Up Account")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
     /// The seed phrase, behind the biometric gate when enabled.
     private func unlockSeedPhrase(_ show: @escaping () -> Void) {
         if settingsViewModel.settings.biometricSeedPhraseEnabled {
-            DeviceAuth.authenticate(reason: "Unlock to view your seed phrase", onSuccess: show)
+            DeviceAuth.authenticate(reason: "Unlock to view your 12 or 24 words", onSuccess: show)
         } else {
             show()
         }
@@ -236,6 +278,115 @@ struct SettingsView: View {
 
 // MARK: - Shared category row (SettingsView + AppSettingsView)
 
+/// Settings > About: the account's details, how to reach us, and the terms and policies.
+private struct AccountAboutPage: View {
+    @EnvironmentObject private var walletManager: WalletManager
+
+    @State private var showOpenSourceLicenses = false
+
+    private static let websiteURL = URL(string: "https://home.kachat.app")!
+    private static let privacyPolicyURL = URL(string: "https://home.kachat.app/privacy/")!
+    private static let supportEmailURL = URL(string: "mailto:\(ContentReport.supportEmail)")!
+
+    var body: some View {
+        Form {
+            Section {
+                if let wallet = walletManager.currentWallet {
+                    HStack {
+                        Text("Created")
+                        Spacer()
+                        Text(SharedFormatting.mediumDateShortTime.string(from: wallet.createdAt))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(AppVersion.display)
+                        .foregroundColor(.secondary)
+                }
+                Link(destination: Self.websiteURL) {
+                    HStack {
+                        Text("Website")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text(verbatim: "home.kachat.app")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Link(destination: Self.supportEmailURL) {
+                    HStack {
+                        Text("Support Email")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text(verbatim: ContentReport.supportEmail)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                NavigationLink {
+                    TermsOfUseView()
+                } label: {
+                    Text("Terms of Use")
+                }
+                Link(destination: Self.privacyPolicyURL) {
+                    HStack {
+                        Text("Privacy Policy")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Button {
+                    showOpenSourceLicenses = true
+                } label: {
+                    HStack {
+                        Text("Open Source Licenses")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .navigationTitle("About")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showOpenSourceLicenses) {
+            OpenSourceLicensesView()
+        }
+    }
+}
+
+/// Settings > Account Name: your own label for this account, saved when you leave the page.
+private struct AccountNamePage: View {
+    @EnvironmentObject private var walletManager: WalletManager
+    @State private var name = ""
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Account name", text: $name)
+                    .submitLabel(.done)
+            }
+        }
+        .navigationTitle("Account Name")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { name = walletManager.currentWallet?.alias ?? "" }
+        .onDisappear(perform: save)
+    }
+
+    private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let wallet = walletManager.currentWallet, !trimmed.isEmpty, trimmed != wallet.alias else { return }
+        // The stored wallet record too: the saved-accounts list alone was rebuilt from it at the
+        // next launch, and the old name came back.
+        Task { try? await walletManager.updateAlias(trimmed) }
+    }
+}
+
 /// The standard Settings category row: icon + title behind a NavigationLink. File-scope so the
 /// in-account SettingsView and the accounts-screen AppSettingsView render identical rows.
 fileprivate func settingsCategoryRow<Destination: View>(
@@ -299,8 +450,8 @@ struct SecuritySettingsPage: View {
         Form {
             Section("Security") {
                 biometricToggle(
-                    "Biometrics for Seed Phrase",
-                    reason: "Unlock to change the seed phrase biometric lock",
+                    "Biometrics for 12 or 24 Words",
+                    reason: "Unlock to change the 12 or 24 words biometric lock",
                     isOn: $settingsViewModel.settings.biometricSeedPhraseEnabled
                 )
                 biometricToggle(
@@ -457,7 +608,7 @@ struct DiagnosticsSettingsPage: View {
                                 ProgressView()
                             }
                         }
-                        Text("Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, seed phrases, or decrypted message content are included.")
+                        Text("Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
@@ -1270,11 +1421,11 @@ struct SeedPhraseView: View {
                         .font(.headline)
                         .foregroundColor(.orange)
 
-                    Text("Anyone with your seed phrase can access your account. Never share it with anyone.")
+                    Text("Anyone with your 12 or 24 words can access your account. Never share them with anyone.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
 
-                    Text("Best practice is to write your seed phrase down to back it up, and never store it online.")
+                    Text("Best practice is to write your 12 or 24 words down to back them up, and never store it online.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -1343,9 +1494,9 @@ struct SeedPhraseView: View {
                             Button {
                                 copySensitiveToClipboard(seedPhrase.words.joined(separator: " "))
                                 Haptics.success()
-                                showToast("Seed phrase copied. Clipboard will clear in 30s.")
+                                showToast("Words copied. Clipboard will clear in 30s.")
                             } label: {
-                                Label("Copy Seed Phrase", systemImage: "doc.on.doc")
+                                Label("Copy 12 or 24 Words", systemImage: "doc.on.doc")
                             }
                             Button {
                                 guard let privateKey = walletManager.getPrivateKey() else {
@@ -1374,7 +1525,7 @@ struct SeedPhraseView: View {
                             VStack(spacing: 12) {
                                 Image(systemName: "eye.slash.fill")
                                     .font(.largeTitle)
-                                Text("Tap to reveal seed phrase")
+                                Text("Tap to reveal your 12 or 24 words")
                                     .font(.subheadline)
                             }
                             .frame(maxWidth: .infinity)
@@ -1394,7 +1545,7 @@ struct SeedPhraseView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("Seed Phrase")
+            .navigationTitle("12 or 24 Words")
             .navigationBarTitleDisplayMode(.inline)
             .toast(message: toastMessage, style: toastStyle)
             .toolbar {
@@ -3066,7 +3217,7 @@ struct CacheSettingsPage: View {
                 .disabled(cache.totalBytes <= 0)
             }
         }
-        .navigationTitle("Cache")
+        .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await cache.refreshSizes() }
         .task { await cache.refreshSizes() }

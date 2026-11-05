@@ -3,31 +3,15 @@ import UIKit
 
 // MARK: - Request Payment
 
-/// Makes a payment request link, in steps like a send: where it's paid (a brand-new address, or
-/// one of yours picked from the list), how much (on the app's keypad), then a review with the
-/// memo, Copy Payment Request and Share. Opening it in KaPost or KaChat gives Send Kaspa with all
+/// Makes a payment request link to the chatting address, in steps like a send: how much (on the
+/// app's keypad), then a review with the memo, Copy Payment Request and Share. Opening it in KaPost or KaChat gives Send Kaspa with all
 /// of it filled in (`PaymentRequest`, `KaChatInternalLink.paymentRequest`). Signed by your
 /// address, so whoever pays sees who asked.
 struct CreatePaymentRequestView: View {
-    enum Destination: Hashable {
-        /// A brand-new address, never revealed, used or handed out.
-        case fresh
-        /// One of your addresses, picked from the list: the chatting address or a spending one.
-        case chosen
-    }
-
     @EnvironmentObject private var walletManager: WalletManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var fiatAmountState = KaspaFiatAmountState()
 
-    @State private var destination: Destination = .fresh
-    /// The brand-new address reserved for this request (`reserveFreshSpendingAddresses`) - only
-    /// when it's copied or shared, so opening the screen and cancelling uses none up. Once per
-    /// screen: Copy and Share both reuse it, so no two requests share an address.
-    @State private var freshAddress: String?
-    /// The next brand-new address, shown before it's reserved.
-    @State private var nextFreshAddress: String?
-    @State private var chosenAddress: String?
     @State private var amountInput = ""
     @State private var memo = ""
     @State private var copied = false
@@ -47,30 +31,25 @@ struct CreatePaymentRequestView: View {
         return sompi
     }
 
-    /// Ready to hand out: an amount, and an address (or a fresh one to be made).
+    /// Ready to hand out: an amount, and the chatting address to be paid.
     private var canMake: Bool {
-        amountSompi != nil && (destination == .fresh || chosenAddress != nil)
+        amountSompi != nil && chattingAddress != nil
     }
 
-    /// Like a send, in steps: where to be paid, how much (on the app's keypad), then the review
-    /// with the memo, Copy and Share.
-    private enum Step: Int { case destination, amount, review }
-    @State private var step: Step = .destination
+    /// Like a send, in steps: how much (on the app's keypad), then the review with the memo, Copy
+    /// and Share. It's always paid to the chatting address.
+    private enum Step: Int { case amount, review }
+    /// KaPost is paid to the chatting address only, so a request starts at the amount.
+    @State private var step: Step = .amount
     @State private var stepForward = true
 
-    /// The address the request pays: the fresh one (reserved, else the one it will be), or the pick.
-    private var payeeAddress: String? {
-        switch destination {
-        case .fresh: return freshAddress ?? nextFreshAddress
-        case .chosen: return chosenAddress
-        }
-    }
+    /// The address the request pays.
+    private var payeeAddress: String? { chattingAddress }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 switch step {
-                case .destination: destinationStep.transition(stepTransition)
                 case .amount: amountStep.transition(stepTransition)
                 case .review: reviewStep.transition(stepTransition)
                 }
@@ -78,13 +57,6 @@ struct CreatePaymentRequestView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onChange(of: amountInput) { _ in copied = false }
             .onChange(of: memo) { _ in copied = false }
-            .onChange(of: destination) { _ in copied = false }
-            .onChange(of: chosenAddress) { _ in copied = false }
-            .task {
-                // derived, not reserved: opening the screen and cancelling uses no address up.
-                // Checked on chain, so the preview never shows a slot already used.
-                nextFreshAddress = await WalletManager.shared.verifiedFreshQuantumSlot()?.address
-            }
             .sheet(item: $shareItem) { item in
                 PaymentRequestShareSheet(url: item.url)
             }
@@ -104,56 +76,10 @@ struct CreatePaymentRequestView: View {
         }
     }
 
-    // MARK: Where
-
-    private var destinationStep: some View {
-        SendStepScreen(title: Text("Request Payment"), onCancel: { dismiss() }, canContinue: payeeAddress != nil) {
-            go(to: .amount)
-        } content: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    SendStepQuestion(text: "Where do you want to be paid?")
-                    HStack(spacing: 10) {
-                        SelectablePill(title: "Fresh Address", selected: destination == .fresh) {
-                            destination = .fresh
-                        }
-                        SelectablePill(title: "Choose an Address", selected: destination == .chosen) {
-                            destination = .chosen
-                        }
-                    }
-
-                    switch destination {
-                    case .fresh:
-                        if let address = freshAddress ?? nextFreshAddress {
-                            AddressResolutionCard(address: address)
-                            Text("A brand-new address of yours that has never been used or handed out.")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                        } else {
-                            HStack { Spacer(); ProgressView(); Spacer() }
-                                .padding(.vertical, 18)
-                        }
-                    case .chosen:
-                        // the list right here, no sheet: tap the address that gets paid
-                        Text("Pick which of your addresses gets paid.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        OwnAddressList(selected: chosenAddress) { picked in
-                            chosenAddress = picked.address
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 24)
-            }
-        }
-    }
-
     // MARK: How much
 
     private var amountStep: some View {
-        SendStepScreen(title: Text("Request Payment"), onBack: { go(to: .destination) }, onCancel: { dismiss() },
+        SendStepScreen(title: Text("Request Payment"), onCancel: { dismiss() },
                        continueTitle: "Review", canContinue: amountSompi != nil) {
             go(to: .review)
         } content: {
@@ -281,25 +207,7 @@ struct CreatePaymentRequestView: View {
     /// reserved here, the first time it's needed.
     private func makeRequest() async -> PaymentRequest? {
         guard let sompi = amountSompi else { return nil }
-        let address: String
-        switch destination {
-        case .fresh:
-            if let freshAddress {
-                address = freshAddress
-            } else {
-                guard let reserved = await walletManager.reserveFreshSpendingAddresses(count: 1).first?.address else {
-                    errorMessage = AppLocalization.string("Couldn't make a new address. Please try again.")
-                    return nil
-                }
-                freshAddress = reserved
-                address = reserved
-                // watched from now on, so its payment shows the moment it lands
-                ChatService.shared.checkAndResubscribeIfNeeded()
-            }
-        case .chosen:
-            guard let chosenAddress else { return nil }
-            address = chosenAddress
-        }
+        guard let address = chattingAddress else { return nil }
         let unsigned = PaymentRequest(address: address, amountSompi: sompi, memo: memo,
                                       toChattingAddress: address == chattingAddress)
         // an account whose key isn't on this phone can still ask; the payer is told it's unsigned

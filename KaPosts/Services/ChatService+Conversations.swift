@@ -1620,6 +1620,8 @@ extension ChatService {
             markOutgoingAttemptSubmitting(messageId: activePendingMessageId)
         }
 
+        /// The id this device computed for what it is about to submit (`acceptedTransactionId`).
+        var builtTxId: String?
         do {
             // Connect to Kaspa node
             let rpcManager = NodePoolService.shared
@@ -1789,6 +1791,7 @@ extension ChatService {
                 transaction = confirmedOnlyTransaction
                 spentUtxos = spentMessageUtxos(from: transaction, candidates: confirmedOnlyUtxos)
 
+                builtTxId = KasiaTransactionBuilder.computeTransactionId(transaction)
                 let submitted = try await rpcManager.submitTransaction(transaction, allowOrphan: false)
                 txId = submitted.txId
                 endpoint = submitted.endpoint
@@ -1836,7 +1839,7 @@ extension ChatService {
 
         } catch {
             releaseMessageOutpoints()
-            if let acceptedTxId = acceptedTransactionId(from: error) {
+            if let acceptedTxId = acceptedTransactionId(from: error, expected: builtTxId) {
                 AppLog.log("[ChatService] Message already accepted by consensus for %@ -> promoting pending to %@",
                       String(activePendingTxId.prefix(12)),
                       String(acceptedTxId.prefix(12)))
@@ -2244,10 +2247,18 @@ extension ChatService {
         return (baseDelay + jitterDelay, jitterRatio)
     }
 
-    func acceptedTransactionId(from error: Error) -> String? {
+    /// The id a node's "already accepted" rejection names. Nodes are unauthenticated, so that text is
+    /// only trusted when it names the transaction this device built (`expected`): any node could
+    /// send it with a made-up id and make an unpaid send look paid.
+    func acceptedTransactionId(from error: Error, expected: String?) -> String? {
         let message = error.localizedDescription
-        guard message.lowercased().contains("already accepted by the consensus") else { return nil }
-        return extractLikelyTxId(from: message)
+        guard message.lowercased().contains("already accepted by the consensus"),
+              let named = extractLikelyTxId(from: message) else { return nil }
+        guard let expected, named.lowercased() == expected.lowercased() else {
+            AppLog.log("[ChatService] ignored an \"already accepted\" answer naming another transaction")
+            return nil
+        }
+        return named
     }
 
     func extractLikelyTxId(from text: String) -> String? {
@@ -2523,6 +2534,8 @@ extension ChatService {
         if let reason = KaspaAddress.otherNetworkReason(contact.address) { throw KasiaError.networkError(reason) }
         let destinationAddress = contact.address
 
+        /// The id this device computed for what it is about to submit (`acceptedTransactionId`).
+        var builtTxId: String?
         do {
             let rpcManager = NodePoolService.shared
             let settings = currentSettings
@@ -2611,6 +2624,7 @@ extension ChatService {
 
             // Submit via RPC manager
             AppLog.log("[ChatService] Submitting payment via RPC manager...")
+            builtTxId = KasiaTransactionBuilder.computeTransactionId(tx)
             let (txId, endpoint) = try await rpcManager.submitTransaction(tx, allowOrphan: false)
             AppLog.log("[ChatService] Payment submitted: \(txId) via \(endpoint)")
             if fromChattingAddress, let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: sourceAddress) {
@@ -2647,7 +2661,7 @@ extension ChatService {
             }
             return txId
         } catch {
-            if let acceptedTxId = acceptedTransactionId(from: error) {
+            if let acceptedTxId = acceptedTransactionId(from: error, expected: builtTxId) {
                 AppLog.log("[ChatService] Payment already accepted by consensus for %@ -> promoting pending to %@",
                       String(activePendingTxId.prefix(12)),
                       String(acceptedTxId.prefix(12)))
@@ -2671,6 +2685,16 @@ extension ChatService {
                     sendSpendingPaymentNotice(to: contact, txId: acceptedTxId, amountSompi: amountSompi, memo: note)
                 }
                 return acceptedTxId
+            }
+
+            if error is SendOutcomeUnknownError {
+                // It may have landed: its change may be on the fresh address, and its key on chain.
+                if let freshChangeIndex {
+                    await WalletManager.shared.revealSpendingAddress(at: freshChangeIndex, owner: wallet.publicAddress)
+                }
+                if !fromChattingAddress, let spendingIndex = sourceSpendingIndex, WalletManager.isQuantumIndex(spendingIndex) {
+                    WalletManager.shared.markQuantumAddressSpent(sourceAddress, owner: wallet.publicAddress)
+                }
             }
 
             if isNoConfirmedInputsError(error) {
@@ -2775,7 +2799,7 @@ extension ChatService {
     /// Estimates the total fee (base + optional priority tip) for a withdrawal, without
     /// requiring a gRPC connection (uses the same REST-fallback UTXO fetch as other fee
     /// previews, since this only needs read access for the estimate).
-    func estimateWithdrawalFee(toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0) async throws -> UInt64 {
+    func estimateWithdrawalFee(toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0) async throws -> SendFeeEstimate {
         guard amountSompi > 0 else { throw KasiaError.networkError("Amount is zero") }
         guard let wallet = WalletManager.shared.currentWallet else { throw KasiaError.walletNotFound }
         guard let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: wallet.publicAddress),
@@ -2812,7 +2836,8 @@ extension ChatService {
         }
 
         let utxos = try await fetchUtxosWithFallback(for: wallet.publicAddress)
-        let spendable = utxos.filter { !$0.isCoinbase }
+        // the coins a scheduled post holds are not the builder's to spend (`filterReserved`)
+        let spendable = KaPostsScheduledStore.filterReserved(utxos.filter { !$0.isCoinbase })
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
@@ -2947,7 +2972,20 @@ extension ChatService {
             )
 
             AppLog.log("[ChatService] Submitting spending-address withdrawal via RPC manager...")
-            let (txId, endpoint) = try await rpcManager.submitTransaction(tx, allowOrphan: false)
+            let txId: String
+            let endpoint: String
+            do {
+                (txId, endpoint) = try await rpcManager.submitTransaction(tx, allowOrphan: false)
+            } catch let unknown as SendOutcomeUnknownError {
+                // It may have landed: its change may be on the fresh address, and its key on chain.
+                if WalletManager.isQuantumIndex(index) {
+                    WalletManager.shared.markQuantumAddressSpent(fromAddress, owner: owner)
+                }
+                if let freshChangeIndex {
+                    await WalletManager.shared.revealSpendingAddress(at: freshChangeIndex, owner: owner)
+                }
+                throw unknown
+            }
             AppLog.log("[ChatService] Spending-address withdrawal submitted: \(txId) via \(endpoint)")
             if WalletManager.isQuantumIndex(index) {
                 // the spend put this address's key on chain for good (self-sends included)
@@ -3035,7 +3073,7 @@ extension ChatService {
     /// Estimates the total fee for a spending-address withdrawal. Calls NodePoolService
     /// directly rather than fetchUtxosWithFallback, whose single-address UTXO cache would
     /// return the wrong address's data when estimating for anything but the identity address.
-    func estimateSpendingAddressWithdrawalFee(index: Int, toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, availableUtxos: [UTXO] = [], virtualDaaScore: UInt64? = nil) async throws -> UInt64 {
+    func estimateSpendingAddressWithdrawalFee(index: Int, toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, availableUtxos: [UTXO] = [], virtualDaaScore: UInt64? = nil) async throws -> SendFeeEstimate {
         guard amountSompi > 0 else { throw KasiaError.networkError("Amount is zero") }
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
@@ -3369,7 +3407,7 @@ extension ChatService {
     }
 
     /// The base (Normal) fee; a Fast / Priority / custom extra goes on top (see the Send KAS sheet).
-    func estimatePaymentFee(to contact: Contact, amountSompi: UInt64, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, tip: KaPostTip? = nil) async throws -> UInt64 {
+    func estimatePaymentFee(to contact: Contact, amountSompi: UInt64, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, tip: KaPostTip? = nil) async throws -> SendFeeEstimate {
         guard amountSompi > 0 else { throw KasiaError.networkError("Amount is zero") }
         // Must source from whatever `sendPaymentInternal` will actually spend from - the
         // spending chain with Chats Payment Privacy ON, the chatting address with it OFF (see
@@ -3395,7 +3433,7 @@ extension ChatService {
             throw KasiaError.invalidAddress
         }
 
-        return try KasiaTransactionBuilder.estimatePaymentFee(
+        return try KasiaTransactionBuilder.estimatePaymentFeeEstimate(
             utxos: spendable,
             payload: payload,
             amount: amountSompi,
@@ -3416,7 +3454,7 @@ extension ChatService {
 
         // Use fallback method - doesn't require gRPC connection
         let utxos = try await fetchUtxosWithFallback(for: sourceAddress)
-        let candidates = utxos.filter { !$0.isCoinbase }
+        let candidates = KaPostsScheduledStore.filterReserved(utxos.filter { !$0.isCoinbase })
         let spendable = resolveManualUtxos(manualUtxos, against: candidates) ?? candidates
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
@@ -3541,6 +3579,8 @@ extension ChatService {
             markOutgoingAttemptSubmitting(messageId: activePendingMessageId)
         }
 
+        /// The id this device computed for what it is about to submit (`acceptedTransactionId`).
+        var builtTxId: String?
         do {
             let rpcManager = NodePoolService.shared
             let settings = currentSettings
@@ -3570,6 +3610,7 @@ extension ChatService {
                 utxos: handshakeUtxos
             )
 
+            builtTxId = KasiaTransactionBuilder.computeTransactionId(transaction)
             let (txId, endpoint) = try await rpcManager.submitTransaction(transaction, allowOrphan: false)
             AppLog.log("[ChatService] Handshake submitted: \(txId) via \(endpoint)")
             if let activePendingMessageId {
@@ -3607,7 +3648,7 @@ extension ChatService {
                 senderScriptPubKey: senderScriptPubKey
             )
         } catch {
-            if let acceptedTxId = acceptedTransactionId(from: error) {
+            if let acceptedTxId = acceptedTransactionId(from: error, expected: builtTxId) {
                 AppLog.log("[ChatService] Handshake already accepted by consensus for %@ -> promoting pending to %@",
                       String(activePendingTxId.prefix(12)),
                       String(acceptedTxId.prefix(12)))

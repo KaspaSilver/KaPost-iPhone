@@ -329,6 +329,38 @@ final class PublicChatStore {
         }
     }
 
+    /// Pending rows no send is working on (`keeping` are the ones that are): one whose delivered copy
+    /// is here goes, and the rest are marked failed, so Retry appears instead of Sending forever.
+    /// Returns whether anything changed.
+    func settlePendingMessages(inChannel channel: String, keeping: Set<String>) -> Bool {
+        guard isLoaded else { return false }
+        let normalized = PublicChatChannelName.normalize(channel)
+        let context = viewContext
+        var changed = false
+        context.performAndWait {
+            let request = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
+            request.predicate = NSPredicate(format: "channelName == %@ AND deliveryStatus == %@",
+                                            normalized, PublicChatMessage.DeliveryStatus.pending.rawValue)
+            for row in (try? context.fetch(request)) ?? [] where !keeping.contains(row.id) {
+                let delivered = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
+                delivered.predicate = NSPredicate(
+                    format: "channelName == %@ AND senderAddress == %@ AND content == %@ AND deliveryStatus == %@ AND blockTime >= %lld",
+                    normalized, row.senderAddress, row.content ?? "",
+                    PublicChatMessage.DeliveryStatus.sent.rawValue, row.blockTime - 300_000
+                )
+                delivered.fetchLimit = 1
+                if ((try? context.count(for: delivered)) ?? 0) > 0 {
+                    context.delete(row)
+                } else {
+                    row.deliveryStatus = PublicChatMessage.DeliveryStatus.failed.rawValue
+                }
+                changed = true
+            }
+            if changed { save(context) }
+        }
+        return changed
+    }
+
     func markMessageFailed(pendingId: String) {
         updateMessageStatus(id: pendingId, status: .failed)
     }

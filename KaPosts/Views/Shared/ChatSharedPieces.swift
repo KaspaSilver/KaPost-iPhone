@@ -696,7 +696,8 @@ enum LinkSafePreview {
     }()
 
     static func apply(to text: String) -> String {
-        let key = "\(text.utf8.count)|\(text.prefix(24))" as NSString
+        // The whole text: length plus the first characters let two messages share an entry.
+        let key = text as NSString
         if let cached = cache.object(forKey: key) { return cached as String }
         let result = containsWebLink(text) ? sentALink : text
         cache.setObject(result as NSString, forKey: key)

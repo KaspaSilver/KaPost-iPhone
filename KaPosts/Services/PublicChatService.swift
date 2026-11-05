@@ -183,6 +183,7 @@ final class PublicChatService: ObservableObject {
     func setCurrentWallet(_ walletAddress: String?) {
         let normalized = walletAddress?.lowercased()
         let sameWallet = normalized == self.walletAddress
+        if !sameWallet { settledPendingChannels = [] }
         // A room can already be on screen when the wallet lands: a cold launch from a room's
         // notification routes into it during loadWallet's awaits, before this ran. That room is
         // THIS wallet's and stays open, so its viewing state survives; only a real switch to
@@ -691,6 +692,8 @@ final class PublicChatService: ObservableObject {
         liveViewRefCounts[normalized, default: 0] += 1
         Task { await store.pruneExpiredMessages() }
         loadMessages(for: normalized)
+        // A room with no indexer has no history coming to wait for.
+        if !Self.isIndexerTracked(normalized) { settlePendingSendsFromBeforeThisRun(channel: normalized) }
         markChannelRead(normalized)
         loadReactions(for: normalized)
         loadEdits(for: normalized)
@@ -831,6 +834,8 @@ final class PublicChatService: ObservableObject {
                 if !interrupted {
                     deepBackfilledChannels.insert(channel)
                     deepBackfillResume[channel] = nil
+                    // The whole history is in, so a send that did land has its copy to match.
+                    settlePendingSendsFromBeforeThisRun(channel: channel)
                 }
             }
         } catch {
@@ -903,6 +908,22 @@ final class PublicChatService: ObservableObject {
         }
         if insertedCount > 0 {
             if prune { await store.pruneExpiredMessages() }
+            loadMessages(for: channel)
+        }
+    }
+
+    /// Sends started in this run, by pending id. A row still pending that isn't one of these was left
+    /// by a run that ended mid-send, and nothing is working on it.
+    private var pendingSendsThisRun: Set<String> = []
+    /// Rooms already checked for those rows, once per account per run.
+    private var settledPendingChannels: Set<String> = []
+
+    /// After the room's full history is in (the deep backfill), so a send that did land has its
+    /// delivered copy to match.
+    private func settlePendingSendsFromBeforeThisRun(channel: String) {
+        guard store.isReady, !settledPendingChannels.contains(channel) else { return }
+        settledPendingChannels.insert(channel)
+        if store.settlePendingMessages(inChannel: channel, keeping: pendingSendsThisRun) {
             loadMessages(for: channel)
         }
     }
@@ -1138,6 +1159,7 @@ final class PublicChatService: ObservableObject {
         let content = message.content
         let pendingId = message.id
 
+        pendingSendsThisRun.insert(pendingId)
         store.updateMessageStatus(id: pendingId, status: .pending)
         loadMessages(for: channel)
 
@@ -1220,6 +1242,9 @@ final class PublicChatService: ObservableObject {
                 deliveryStatus: action == "remove" ? nil : "sent"
             )
             loadReactions(for: channel)
+        } catch is SendOutcomeUnknownError {
+            // It may have landed: left as it is, with no Retry that could send it twice.
+            throw SendOutcomeUnknownError(txId: "")
         } catch {
             // The reaction tx failed to send. Flag it failed so the pill shows the red error
             // icon and a Retry appears under the message. A failed "remove" restores the
@@ -1361,6 +1386,7 @@ final class PublicChatService: ObservableObject {
         }
 
         let pendingId = "pending_\(UUID().uuidString)"
+        pendingSendsThisRun.insert(pendingId)
         let pendingBlockTime = Int64(Date().timeIntervalSince1970 * 1000)
         store.insertMessage(
             id: pendingId,
@@ -1408,6 +1434,14 @@ final class PublicChatService: ObservableObject {
         privateKey: Data,
         pendingId: String
     ) async throws {
+        if error is SendOutcomeUnknownError {
+            // It may have landed, so no Retry, which would post and pay twice. It stays pending
+            // until its delivered copy shows up, or the next launch settles it.
+            ChatService.shared.clearNoInputRetryState(for: pendingId)
+            let surfaced = KasiaError.networkError(SendOutcomeUnknownError.message)
+            lastSendError = surfaced
+            throw surfaced
+        }
         if ChatService.shared.isNoConfirmedInputsError(error) {
             let delay = ChatService.shared.nextNoInputRetryDelay(for: pendingId)
             AppLog.log("[PublicChatService] Deferred retry (no confirmed inputs) for %@ in %.0fs",

@@ -9,8 +9,8 @@ import SwiftUI
 /// passphrase. So it opens with the question, on its own, with a way to go and read about it
 /// first:
 ///
-///   1. `question` - "Did you create this seed with a passphrase?" (import) or "Do you want to add
-///      a passphrase to your account?" (create). Yes / No / What is a passphrase?
+///   1. `question` - "Did you create these words with a passphrase?" (import only: creating opens on
+///      the entry screen). Yes / No / What is a passphrase?
 ///   2. `entry` - the field, with the chatting address it produces and that address's balance
 ///      updating underneath as you type. That live address is the point: it is the only direct
 ///      evidence that a passphrase opens a DIFFERENT account rather than protecting the same one,
@@ -47,12 +47,33 @@ struct PassphraseOptionView: View {
 
     @EnvironmentObject private var walletManager: WalletManager
 
-    @State private var step: Step = .question
+    init(
+        mode: Mode,
+        seedWords: [String] = [],
+        family: WalletSourceFamily = .kaspaStandard,
+        chattingAddressIndex: Binding<Int>? = nil,
+        onProceed: @escaping (String) async throws -> Void
+    ) {
+        self.mode = mode
+        self.seedWords = seedWords
+        self.family = family
+        self.chattingAddressIndex = chattingAddressIndex
+        self.onProceed = onProceed
+        // Creating only reaches here through "Advanced: Create with a Passphrase", which has
+        // already answered the question.
+        _step = State(initialValue: mode == .create ? .entry : .question)
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var step: Step
     @State private var passphrase = ""
     @State private var confirmPassphrase = ""
     @State private var reveal = false
     @State private var isBusy = false
     @State private var error: String?
+    /// The import's search for the funded address is running: Import waits, or it would open
+    /// address #0 before the search could pick another.
+    @State private var isScanningAddresses = false
 
     var body: some View {
         Group {
@@ -73,9 +94,7 @@ struct PassphraseOptionView: View {
     // MARK: - 1. The question
 
     private var questionTitle: String {
-        mode == .create
-            ? "Do you want to add a passphrase to your account?"
-            : "Did you create this seed with a passphrase?"
+        "Did you create these words with a passphrase?"
     }
 
     private var questionScreen: some View {
@@ -166,7 +185,7 @@ struct PassphraseOptionView: View {
                     .font(.title3.weight(.bold))
 
                 Text(mode == .create
-                     ? "Write it down somewhere safe. Without it this account cannot be recovered, even with your seed phrase."
+                     ? "Write it down somewhere safe. Without it this account cannot be recovered, even with your 12 or 24 words."
                      : "It has to be exactly what you used before, including capital letters and spaces.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
@@ -179,7 +198,8 @@ struct PassphraseOptionView: View {
                     passphrase: passphrase,
                     family: family,
                     showsFundsHint: mode == .importExisting,
-                    selectedIndex: chattingAddressIndex
+                    selectedIndex: chattingAddressIndex,
+                    isScanning: $isScanningAddresses
                 )
 
                 Button {
@@ -200,7 +220,7 @@ struct PassphraseOptionView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSubmitPassphrase || isBusy)
+                .disabled(!canSubmitPassphrase || isBusy || isScanningAddresses)
             }
             .padding(24)
         }
@@ -212,7 +232,11 @@ struct PassphraseOptionView: View {
                 Button("Back") {
                     passphrase = ""
                     confirmPassphrase = ""
-                    step = .question
+                    if mode == .create {
+                        dismiss()
+                    } else {
+                        step = .question
+                    }
                 }
                 .disabled(isBusy)
             }
@@ -268,19 +292,19 @@ struct PassphraseOptionView: View {
             VStack(alignment: .leading, spacing: 18) {
                 explainerSection(
                     "The short version",
-                    "A passphrase is an extra word or sentence you add on top of your seed phrase. It is optional, and most people do not use one."
+                    "A passphrase is an extra word or sentence you add on top of your 12 or 24 words. It is optional, and most people do not use one."
                 )
                 explainerSection(
                     "It does not lock your account",
-                    "This is the part people get wrong. A passphrase does not put a password on your account. It opens a completely different account. Your seed phrase with no passphrase opens one account. The same seed phrase with the word \"apple\" opens another one. With \"banana\", another one again. Every passphrase is its own separate account, with its own address and its own balance."
+                    "This is the part people get wrong. A passphrase does not put a password on your account. It opens a completely different account. Your 12 or 24 words with no passphrase open one account. The same words with the word \"apple\" opens another one. With \"banana\", another one again. Every passphrase is its own separate account, with its own address and its own balance."
                 )
                 explainerSection(
                     "Why anyone bothers",
-                    "If someone finds your written seed phrase, they get the account it opens on its own. They do not get the one behind your passphrase, because they do not know there is one, and they could not guess it anyway."
+                    "If someone finds your written 12 or 24 words, they get the account those words open on their own. They do not get the one behind your passphrase, because they do not know there is one, and they could not guess it anyway."
                 )
                 explainerSection(
                     "The catch",
-                    "There is no reset and no recovery. If you forget your passphrase, the account it opened is gone for good. Your seed phrase alone will not bring it back, and nobody can help you. Treat it exactly like the seed phrase itself: written down, somewhere safe, before you rely on it."
+                    "There is no reset and no recovery. If you forget your passphrase, the account it opened is gone for good. Your 12 or 24 words alone will not bring it back, and nobody can help you. Treat it exactly like the words themselves: written down, somewhere safe, before you rely on it."
                 )
                 explainerSection(
                     "One more thing to know",
@@ -289,7 +313,7 @@ struct PassphraseOptionView: View {
                 explainerSection(
                     "So do you need one?",
                     mode == .create
-                        ? "If you are not sure, choose No. Your account is still protected by your seed phrase, and you can always create another account with a passphrase later."
+                        ? "If you are not sure, choose No. Your account is still protected by your 12 or 24 words, and you can always create another account with a passphrase later."
                         : "If you never set one up, choose No. A passphrase is something you would have typed in on purpose, so if this is the first you are hearing of it, you do not have one."
                 )
             }
@@ -365,6 +389,8 @@ struct PassphraseAddressPreview: View {
     /// Set when the chatting address isn't known yet: the preview checks the first addresses on
     /// the identity chain, picks the first with funds, and lets the user pick another.
     var selectedIndex: Binding<Int>?
+    /// True while that search runs.
+    var isScanning: Binding<Bool>? = nil
 
     /// The same depth as one page of the chatting address picker.
     private static let searchDepth = 0..<50
@@ -396,7 +422,7 @@ struct PassphraseAddressPreview: View {
                 foundAddressRows
             }
             Text(passphrase.isEmpty
-                 ? "This is the account your seed phrase opens on its own."
+                 ? "This is the account your 12 or 24 words open on their own."
                  : "A different passphrase gives a different address, and a different account.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -407,8 +433,10 @@ struct PassphraseAddressPreview: View {
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .opacity(words.isEmpty ? 0 : 1)
-        .onChange(of: passphrase) { _ in schedulePreview() }
-        .onAppear { schedulePreview() }
+        // The new value, not `passphrase`: this view holds a plain copy, and the closure still
+        // sees the copy from before the change.
+        .onChange(of: passphrase) { schedulePreview(for: $0) }
+        .onAppear { schedulePreview(for: passphrase) }
         .onDisappear { previewTask?.cancel() }
     }
 
@@ -484,15 +512,17 @@ struct PassphraseAddressPreview: View {
         previewBalanceSompi = found.balanceSompi
     }
 
-    private func schedulePreview() {
+    private func schedulePreview(for typed: String) {
         previewTask?.cancel()
         guard !words.isEmpty else { return }
-        let typed = passphrase
+        if selectedIndex != nil { isScanning?.wrappedValue = true }
         previewBalanceSompi = nil
         previewBalanceFailed = false
         foundAddresses = []
         selectedIndex?.wrappedValue = 0
         previewTask = Task { @MainActor in
+            // Only the search still current clears it: a cancelled one was replaced by the next.
+            defer { if !Task.isCancelled { isScanning?.wrappedValue = false } }
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             let address = walletManager.previewChattingAddress(

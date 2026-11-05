@@ -74,6 +74,29 @@ final class KaspaPriceService: ObservableObject {
         return saved.price
     }
 
+    /// `price(in:)`, but only a price fetched in the last `maxAge`: what a tip sends without asking
+    /// can't rest on a price that is days old. For another currency it starts a fetch, so a
+    /// moment later there is one.
+    func freshPrice(in currency: AppCurrency, maxAge: TimeInterval = 10 * 60) -> Double? {
+        let saved = UserDefaults.standard.data(forKey: priceKey(currency))
+            .flatMap { try? JSONDecoder().decode(PersistedPrice.self, from: $0) }
+        if let saved, Date().timeIntervalSince(saved.fetchedAt) <= maxAge {
+            return currency == currentCurrency ? (currentPriceUsd ?? saved.price) : saved.price
+        }
+        if currency == currentCurrency {
+            refreshPrice()
+        } else {
+            Task { [weak self] in
+                guard let self, let result = await self.coinGecko.getCurrentPrice(currency: currency) else { return }
+                let fetched = PersistedPrice(price: result.price, change24h: result.change24hPercent, fetchedAt: Date())
+                if let data = try? JSONEncoder().encode(fetched) {
+                    UserDefaults.standard.set(data, forKey: self.priceKey(currency))
+                }
+            }
+        }
+        return nil
+    }
+
     private struct PersistedPrice: Codable {
         let price: Double
         let change24h: Double?

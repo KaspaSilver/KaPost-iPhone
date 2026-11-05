@@ -229,6 +229,8 @@ final class KaPostsScheduledStore: ObservableObject {
     /// Pulls the indexer's view of this wallet's scheduled posts: submitted / failed outcomes
     /// land here, and a post the server no longer knows (cancelled elsewhere) is dropped.
     func refreshFromServer() async {
+        // Only posts the server holds have anything to learn from it.
+        guard entries.contains(where: { $0.onServer }) else { return }
         guard let remote = try? await KaPostsAPIClient.shared.fetchScheduledPosts() else { return }
         let byId = Dictionary(remote.map { ($0.txId, $0) }, uniquingKeysWith: { a, _ in a })
         var changed = false
