@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "עד 10 KAS נשלחים בלי לשאול; טיפ גדול יותר פותח את מסך הטיפ.";
 "No mail app could open it. Paste the report into an email to %@." = "אף אפליקציית דואר לא הצליחה לפתוח את זה. הדבק את הדיווח באימייל אל %@.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "הטיפ לא נשלח: אין מחיר KAS עדכני כדי להמיר %@ ל-KAS.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "מאחד את המטבעות של הכתובת הזו לאחד, כדי ששליחות הבאות יצטרכו פחות קלטים.";
+"Needs two or more coins on this address to combine." = "צריך שניים או יותר מטבעות בכתובת הזו כדי לאחד.";

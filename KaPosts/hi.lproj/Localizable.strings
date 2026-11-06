@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "10 KAS तक बिना पूछे चला जाता है; बड़ी टिप टिप स्क्रीन खोलती है।";
 "No mail app could open it. Paste the report into an email to %@." = "कोई मेल ऐप इसे नहीं खोल सका। रिपोर्ट को %@ के ईमेल में पेस्ट करें।";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "टिप नहीं भेजी गई: %@ को KAS में बदलने के लिए KAS की हाल की कीमत उपलब्ध नहीं है।";
+"Combines this address's coins into one, so later sends need fewer inputs." = "इस पते के सिक्कों को एक में जोड़ देता है, ताकि आगे के भेजने में कम इनपुट लगें।";
+"Needs two or more coins on this address to combine." = "जोड़ने के लिए इस पते पर दो या ज़्यादा सिक्के चाहिए।";

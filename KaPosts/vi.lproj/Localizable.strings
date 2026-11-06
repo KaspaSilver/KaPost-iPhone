@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "Tối đa 10 KAS được gửi đi mà không hỏi; khoản tip lớn hơn sẽ mở màn hình tip.";
 "No mail app could open it. Paste the report into an email to %@." = "Không có ứng dụng thư nào mở được. Hãy dán báo cáo vào một email gửi tới %@.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Không gửi được tip: không có giá KAS gần đây để quy đổi %@ sang KAS.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "Gộp các đồng của địa chỉ này thành một, để các lần gửi sau cần ít đầu vào hơn.";
+"Needs two or more coins on this address to combine." = "Cần từ hai đồng trở lên trên địa chỉ này để gộp.";

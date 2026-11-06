@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "10 KAS'a kadar sormadan gönderilir; daha büyük bir bahşiş bahşiş ekranını açar.";
 "No mail app could open it. Paste the report into an email to %@." = "Hiçbir e-posta uygulaması bunu açamadı. Raporu %@ adresine bir e-postaya yapıştır.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Bahşiş gönderilmedi: %@ tutarını KAS'a çevirecek güncel bir KAS fiyatı yok.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "Bu adresin coinlerini tek bir coinde birleştirir, böylece sonraki gönderimler daha az girdi gerektirir.";
+"Needs two or more coins on this address to combine." = "Birleştirmek için bu adreste iki veya daha fazla coin gerekir.";

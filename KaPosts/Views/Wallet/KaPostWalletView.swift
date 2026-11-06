@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 /// Profile > Wallet, KaChat's and KaPay's Wallet tab in KaPost: the total up top, split into the
-/// chatting and spending addresses, then Send, Receive and Request, then the chatting address's
-/// history. KaPost only uses the chatting address: Send leaves from it and Receive and Request are
+/// chatting and spending addresses, then Send, Receive and More (Compound UTXOs, Request Payment and
+/// the chatting address's keys), then its history. KaPost only uses the chatting address: Send leaves from it and Receive and Request are
 /// paid to it. Other addresses count in the total and are managed in KaChat and KaPay. Pushed, so
 /// the dock stays under it.
 struct KaPostWalletView: View {
@@ -28,6 +28,13 @@ struct KaPostWalletView: View {
     /// The last fetch gave up partway: a failed read isn't an empty history.
     @State private var historyIncomplete = false
     @State private var transactionActionTarget: KaspaFullTransactionResponse?
+    /// More: Request Payment and the chatting address's keys, as in KaPlay.
+    @State private var showMore = false
+    @State private var showPrivateKey = false
+    @State private var showPublicKey = false
+    @State private var showCompound = false
+    /// How many coins the chatting address holds: Compound UTXOs works once there are two.
+    @State private var chattingUtxoCount = 0
 
     private enum WalletAction: String, Identifiable {
         case send, receive, request
@@ -72,6 +79,29 @@ struct KaPostWalletView: View {
         }
         .sheet(isPresented: $showBackupHygiene) {
             BackupHygieneView()
+        }
+        .sheet(isPresented: $showMore) {
+            moreSheet
+                .presentationDetents([.height(410)])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPrivateKey) {
+            if let address = walletManager.currentWallet?.publicAddress {
+                ChattingAddressPrivateKeyView(address: address)
+            }
+        }
+        .sheet(isPresented: $showPublicKey) {
+            if let address = walletManager.currentWallet?.publicAddress {
+                ChattingAddressPublicKeyView(address: address)
+            }
+        }
+        .sheet(isPresented: $showCompound) {
+            if let wallet = walletManager.currentWallet {
+                WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi,
+                                  isCompoundMode: true) {
+                    scheduleRefresh()
+                }
+            }
         }
         .sheet(item: $transactionActionTarget) { tx in
             TransactionActionsSheet(transaction: tx, onOpenExplorer: { openInExplorer(tx) })
@@ -193,7 +223,7 @@ struct KaPostWalletView: View {
         HStack(alignment: .top, spacing: 12) {
             actionButton(title: "Send", icon: "arrow.up") { action = .send }
             actionButton(title: "Receive", icon: "arrow.down") { action = .receive }
-            actionButton(title: "Request", icon: "doc.text") { action = .request }
+            actionButton(title: "More", icon: "ellipsis") { showMore = true }
         }
     }
 
@@ -216,6 +246,69 @@ struct KaPostWalletView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// The More button's half sheet. A sheet presented straight from one that is closing is dropped,
+    /// so each row opens its screen a turn later.
+    private var moreSheet: some View {
+        VStack(spacing: 0) {
+            Text("Chatting Address")
+                .font(.headline)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
+            VStack(spacing: 12) {
+                // Always listed, so people know it exists; dimmed until there is something to combine.
+                ActionSheetRow(
+                    title: "Compound UTXOs",
+                    subtitle: chattingUtxoCount > 1
+                        ? "Combines this address's coins into one, so later sends need fewer inputs."
+                        : "Needs two or more coins on this address to combine.",
+                    systemImage: "arrow.triangle.merge",
+                    isDisabled: chattingUtxoCount < 2
+                ) {
+                    showMore = false
+                    DispatchQueue.main.async { showCompound = true }
+                }
+                ActionSheetRow(
+                    title: "Request Payment",
+                    subtitle: "A link asking for an exact amount, with what it's for.",
+                    systemImage: "doc.text"
+                ) {
+                    showMore = false
+                    DispatchQueue.main.async { action = .request }
+                }
+                ActionSheetRow(
+                    title: "View Private Key",
+                    subtitle: "The key that spends this address. Never share it.",
+                    systemImage: "key.fill"
+                ) {
+                    showMore = false
+                    DispatchQueue.main.async {
+                        if settingsViewModel.settings.biometricSeedPhraseEnabled {
+                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
+                                showPrivateKey = true
+                            }
+                        } else {
+                            showPrivateKey = true
+                        }
+                    }
+                }
+                ActionSheetRow(
+                    title: "View Public Key",
+                    subtitle: "The public half of this address, for anyone who asks for it.",
+                    systemImage: "number"
+                ) {
+                    showMore = false
+                    DispatchQueue.main.async { showPublicKey = true }
+                }
+            }
+            .padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, 20)
     }
 
     // MARK: - History
@@ -304,7 +397,17 @@ struct KaPostWalletView: View {
         _ = try? await walletManager.refreshBalance(force: force)
         async let spending: Void = loadSpendingTotal()
         async let history: Void = loadHistory()
-        _ = await (spending, history)
+        async let coins: Void = loadChattingUtxoCount()
+        _ = await (spending, history, coins)
+    }
+
+    private func loadChattingUtxoCount() async {
+        guard let address = walletManager.currentWallet?.publicAddress else { return }
+        // A failed read keeps what it last knew; one for another account is dropped.
+        if let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address]),
+           walletManager.currentWallet?.publicAddress == address {
+            chattingUtxoCount = utxos.count
+        }
     }
 
     private func loadSpendingTotal() async {

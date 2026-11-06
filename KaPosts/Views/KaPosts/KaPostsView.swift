@@ -6834,7 +6834,7 @@ private struct KaPostTipSheet: View {
                 VStack(alignment: .leading, spacing: 14) {
                     SendStepQuestion(text: "Where are you sending from?")
                     HStack(spacing: 10) {
-                        SelectablePill(title: "Your Address", selected: !choosingFrom) {
+                        SelectablePill(title: "Chatting Address", selected: !choosingFrom) {
                             choosingFrom = false
                             source = .chatting
                         }
@@ -6854,7 +6854,7 @@ private struct KaPostTipSheet: View {
                     } else if let fromAddress = source.address {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Your Address")
+                                Text("Chatting Address")
                                     .font(.subheadline.weight(.semibold))
                                 Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
                                     .font(.caption.monospaced())
@@ -7073,7 +7073,7 @@ private struct KaPostTipSheet: View {
 
     private var sourceTitle: String {
         switch source {
-        case .chatting: return AppLocalization.string("Your Address")
+        case .chatting: return AppLocalization.string("Chatting Address")
         case .spending(_, _, let label): return label
         }
     }

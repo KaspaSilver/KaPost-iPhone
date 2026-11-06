@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "10 KAS までは確認なしで送られます。それより大きいチップはチップ画面が開きます。";
 "No mail app could open it. Paste the report into an email to %@." = "開けるメールアプリがありませんでした。レポートを %@ 宛てのメールに貼り付けてください。";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "チップを送れませんでした：%@ を KAS に換算できる最近の KAS 価格がありません。";
+"Combines this address's coins into one, so later sends need fewer inputs." = "このアドレスのコインを1つにまとめ、今後の送金で必要な入力を減らします。";
+"Needs two or more coins on this address to combine." = "まとめるには、このアドレスに2つ以上のコインが必要です。";

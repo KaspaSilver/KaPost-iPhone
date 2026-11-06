@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "До 10 KAS уходит без вопросов; чаевые покрупнее открывают экран чаевых.";
 "No mail app could open it. Paste the report into an email to %@." = "Ни одно почтовое приложение не смогло его открыть. Вставьте жалобу в письмо на %@.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Чаевые не отправлены: нет свежего курса KAS, чтобы перевести %@ в KAS.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "Объединяет монеты этого адреса в одну, чтобы следующим отправкам требовалось меньше входов.";
+"Needs two or more coins on this address to combine." = "Чтобы объединить, на этом адресе нужно две монеты или больше.";

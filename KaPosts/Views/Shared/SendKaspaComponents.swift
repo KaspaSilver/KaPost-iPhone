@@ -818,7 +818,7 @@ struct SendFromCompactRow: View {
                 SelectablePill(title: LocalizedStringKey(sourceTitle), selected: true) {}
                     .allowsHitTesting(false)
             } else {
-                SelectablePill(title: "Your Address", selected: source == .chatting) {
+                SelectablePill(title: "Chatting Address", selected: source == .chatting) {
                     source = .chatting
                 }
                 SelectablePill(title: chooseTitle, selected: source != .chatting) {
@@ -849,7 +849,7 @@ struct SendFromCompactRow: View {
 
     private var sourceTitle: String {
         switch source {
-        case .chatting: return AppLocalization.string("Your Address")
+        case .chatting: return AppLocalization.string("Chatting Address")
         case .spending(_, _, let label): return label
         }
     }
@@ -1896,7 +1896,7 @@ struct SendFromSection: View {
                 .textCase(.uppercase)
             if !isLocked {
                 HStack(spacing: 10) {
-                    SelectablePill(title: "Your Address", selected: source == .chatting) {
+                    SelectablePill(title: "Chatting Address", selected: source == .chatting) {
                         source = .chatting
                     }
                     SelectablePill(title: "Choose an Address", selected: source != .chatting) {
@@ -1942,7 +1942,7 @@ struct SendFromSection: View {
 
     private var title: String {
         switch source {
-        case .chatting: return AppLocalization.string("Your Address")
+        case .chatting: return AppLocalization.string("Chatting Address")
         case .spending(_, _, let label): return label
         }
     }
@@ -1998,8 +1998,8 @@ struct OwnAddressList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let chatting = WalletManager.shared.currentWallet {
-                sectionTitle("Your Address")
-                row(title: AppLocalization.string("Your Address"), address: chatting.publicAddress,
+                sectionTitle("Chatting Address")
+                row(title: AppLocalization.string("Chatting Address"), address: chatting.publicAddress,
                     balance: chatting.balanceSompi) { .chatting }
             }
             sectionTitle("Spending Addresses")

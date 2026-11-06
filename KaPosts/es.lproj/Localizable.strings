@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "Hasta 10 KAS se envían sin preguntar; una propina mayor abre la pantalla de propinas.";
 "No mail app could open it. Paste the report into an email to %@." = "Ninguna app de correo pudo abrirlo. Pega la denuncia en un correo a %@.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "No se envió la propina: no hay un precio reciente de KAS para convertir %@ a KAS.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "Une las monedas de esta dirección en una sola, para que los próximos envíos necesiten menos entradas.";
+"Needs two or more coins on this address to combine." = "Necesita dos o más monedas en esta dirección para unirlas.";

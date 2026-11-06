@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "Hingga 10 KAS terkirim tanpa bertanya; tip yang lebih besar membuka layar tip.";
 "No mail app could open it. Paste the report into an email to %@." = "Tidak ada aplikasi email yang bisa membukanya. Tempel laporan ke email untuk %@.";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Tip tidak terkirim: tidak ada harga KAS terbaru untuk mengubah %@ menjadi KAS.";
+"Combines this address's coins into one, so later sends need fewer inputs." = "Menggabungkan koin alamat ini menjadi satu, sehingga pengiriman berikutnya butuh lebih sedikit input.";
+"Needs two or more coins on this address to combine." = "Butuh dua koin atau lebih di alamat ini untuk digabungkan.";

@@ -481,7 +481,7 @@ struct ChattingAddressManageView: View {
 /// derived spending key, since the identity address isn't part of the spending-chain derivation.
 /// Gated by `biometricSeedPhraseEnabled` (not `biometricSpendingKeyEnabled`) since this is the
 /// wallet's primary key, matching the same higher-stakes gate as Settings > View Seed Phrase.
-private struct ChattingAddressPrivateKeyView: View {
+struct ChattingAddressPrivateKeyView: View {
     let address: String
     @Environment(\.dismiss) private var dismiss
 
@@ -603,7 +603,7 @@ private struct ChattingAddressPrivateKeyView: View {
 /// Nothing is derived or unlocked to show this: a Kaspa P2PK address IS its public key in bech32,
 /// so this decodes the address the screen already has. No reveal gate and no clipboard expiry
 /// either - unlike the private key alongside it, this is a value you hand out on purpose.
-private struct ChattingAddressPublicKeyView: View {
+struct ChattingAddressPublicKeyView: View {
     let address: String
     @Environment(\.dismiss) private var dismiss
 
@@ -1225,7 +1225,7 @@ struct WithdrawKaspaView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     SendStepQuestion(text: "Where are you sending from?")
                     HStack(spacing: 10) {
-                        SelectablePill(title: "Your Address", selected: !choosingFrom) {
+                        SelectablePill(title: "Chatting Address", selected: !choosingFrom) {
                             choosingFrom = false
                             source = .chatting
                         }
@@ -1245,7 +1245,7 @@ struct WithdrawKaspaView: View {
                     } else if let address = source.address {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Your Address")
+                                Text("Chatting Address")
                                     .font(.subheadline.weight(.semibold))
                                 Text(verbatim: "\(address.prefix(14))...\(address.suffix(6))")
                                     .font(.caption.monospaced())
@@ -1445,7 +1445,7 @@ struct WithdrawKaspaView: View {
     private var sourceTitle: String {
         if isCompoundMode { return AppLocalization.string("This address") }
         switch source {
-        case .chatting: return AppLocalization.string("Your Address")
+        case .chatting: return AppLocalization.string("Chatting Address")
         case .spending(_, _, let label): return label
         }
     }

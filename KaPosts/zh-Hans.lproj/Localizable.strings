@@ -2477,3 +2477,5 @@
 "Up to 10 KAS goes out without asking; a bigger tip opens the tip screen." = "10 KAS 以内无需确认即可发出；更大的打赏会打开打赏页面。";
 "No mail app could open it. Paste the report into an email to %@." = "没有邮件应用能打开它。请将举报内容粘贴到发给 %@ 的邮件中。";
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "打赏未发送：没有近期的 KAS 价格，无法将 %@ 换算成 KAS。";
+"Combines this address's coins into one, so later sends need fewer inputs." = "将此地址的币合并为一个，以后发送所需的输入更少。";
+"Needs two or more coins on this address to combine." = "此地址需要有两个或更多币才能合并。";
