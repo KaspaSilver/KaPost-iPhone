@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Bahşiş gönderilmedi: %@ tutarını KAS'a çevirecek güncel bir KAS fiyatı yok.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "Bu adresin coinlerini tek bir coinde birleştirir, böylece sonraki gönderimler daha az girdi gerektirir.";
 "Needs two or more coins on this address to combine." = "Birleştirmek için bu adreste iki veya daha fazla coin gerekir.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "Bir işlem %d coin birleştirebilir, bu yüzden en büyük %d birleştirilir. Kalanlar için yeniden birleştirin.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "Maks, tek bir işlemin taşıyabileceği miktardır: en büyük %d coin. Daha Fazla altındaki UTXO Birleştir kalanları birleştirir.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "Sohbet adresinizde yeterli KAS yok. Biraz ekleyip tekrar deneyin.";
+"Finding your address..." = "Adresiniz bulunuyor...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "Yapıştırılan kelimelerden biri geçerli değil. Kopyanızı kontrol edip tekrar deneyin.";

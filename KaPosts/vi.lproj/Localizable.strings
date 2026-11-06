@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Không gửi được tip: không có giá KAS gần đây để quy đổi %@ sang KAS.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "Gộp các đồng của địa chỉ này thành một, để các lần gửi sau cần ít đầu vào hơn.";
 "Needs two or more coins on this address to combine." = "Cần từ hai đồng trở lên trên địa chỉ này để gộp.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "Một giao dịch gộp được %d đồng, nên lần này gộp %d đồng lớn nhất. Gộp lại lần nữa cho phần còn lại.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "Tối đa là lượng một giao dịch mang được: %d đồng lớn nhất. Gộp UTXO, trong Thêm, sẽ gộp phần còn lại.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "Không đủ KAS trên địa chỉ trò chuyện. Hãy thêm và thử lại.";
+"Finding your address..." = "Đang tìm địa chỉ của bạn...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "Một trong các từ đã dán không hợp lệ. Hãy kiểm tra bản sao và thử lại.";

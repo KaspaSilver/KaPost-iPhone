@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "チップを送れませんでした：%@ を KAS に換算できる最近の KAS 価格がありません。";
 "Combines this address's coins into one, so later sends need fewer inputs." = "このアドレスのコインを1つにまとめ、今後の送金で必要な入力を減らします。";
 "Needs two or more coins on this address to combine." = "まとめるには、このアドレスに2つ以上のコインが必要です。";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "1回の取引でまとめられるのは%d枚までなので、大きい順に%d枚をまとめます。残りはもう一度まとめてください。";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "最大は1回の取引で送れる分です：大きい順に%d枚のコイン。残りは「その他」のUTXOをまとめるでまとめられます。";
+"Not enough KAS on your Chatting Address. Add some and try again." = "チャットアドレスのKASが足りません。追加してからもう一度お試しください。";
+"Finding your address..." = "アドレスを探しています...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "貼り付けた単語の1つが有効な単語ではありません。控えを確認してもう一度お試しください。";

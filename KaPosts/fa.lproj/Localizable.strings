@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "انعام ارسال نشد: قیمت اخیری از KAS برای تبدیل %@ به KAS وجود ندارد.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "سکه‌های این نشانی را در یکی ادغام می‌کند تا ارسال‌های بعدی ورودی کمتری لازم داشته باشند.";
 "Needs two or more coins on this address to combine." = "برای ادغام، دو سکه یا بیشتر روی این نشانی لازم است.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "یک تراکنش می‌تواند %d سکه را ادغام کند، پس این بزرگ‌ترین %d را ادغام می‌کند. برای بقیه دوباره ادغام کنید.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "حداکثر همان است که یک تراکنش می‌تواند حمل کند: بزرگ‌ترین %d سکه. ادغام UTXOها، در بیشتر، بقیه را ادغام می‌کند.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "KAS کافی در نشانی گفتگوی شما نیست. مقداری اضافه کنید و دوباره امتحان کنید.";
+"Finding your address..." = "در حال یافتن نشانی شما...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "یکی از واژه‌های چسبانده‌شده معتبر نیست. نسخه خود را بررسی و دوباره امتحان کنید.";

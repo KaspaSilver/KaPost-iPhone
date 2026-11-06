@@ -1530,6 +1530,9 @@ final class PublicChatService: ObservableObject {
         let freshUtxos = try await NodePoolService.shared.getUtxosByAddresses([walletAddress])
         let candidateUtxos = chatService.prepareMessageUtxos(confirmed: freshUtxos)
         guard !candidateUtxos.isEmpty else {
+            // No coin at all on the address (and none in flight): waiting will not help, so say
+            // so instead of "wait for confirmations" - which retried in the background forever.
+            if freshUtxos.isEmpty { throw KasiaError.networkError(Self.notEnoughKasMessage) }
             throw KasiaError.networkError(chatService.noSpendableFundsYetMessage())
         }
 
@@ -1617,12 +1620,19 @@ final class PublicChatService: ObservableObject {
     /// "already spent", ...) means "the network hasn't caught up with your previous send yet" -
     /// meaningless and alarming to a user mid-typing. Map it (after retries are exhausted) to a
     /// plain-language message; anything unrecognized passes through unchanged.
+    /// When the chatting address has no coins at all - not the "wait for confirmations" of a change
+    /// output still being mined, which retries.
+    static var notEnoughKasMessage: String {
+        AppLocalization.string("Not enough KAS on your Chatting Address. Add some and try again.")
+    }
+
     static func friendlySendErrorMessage(for error: Error) -> String {
         let raw = error.localizedDescription
         let lower = raw.lowercased()
         if lower.contains("orphan") || lower.contains("already spent") || lower.contains("double spend") {
             return AppLocalization.string("The network is still confirming your previous send. Please try again in a few seconds.")
         }
+        if lower.contains("insufficient funds") { return notEnoughKasMessage }
         return raw
     }
 

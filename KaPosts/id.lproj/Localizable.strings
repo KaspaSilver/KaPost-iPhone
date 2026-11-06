@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Tip tidak terkirim: tidak ada harga KAS terbaru untuk mengubah %@ menjadi KAS.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "Menggabungkan koin alamat ini menjadi satu, sehingga pengiriman berikutnya butuh lebih sedikit input.";
 "Needs two or more coins on this address to combine." = "Butuh dua koin atau lebih di alamat ini untuk digabungkan.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "Satu transaksi bisa menggabungkan %d koin, jadi ini menggabungkan %d terbesar. Gabungkan lagi untuk sisanya.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "Maks adalah yang bisa dibawa satu transaksi: %d koin terbesarnya. Gabungkan UTXO, di Lainnya, menggabungkan sisanya.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "KAS di alamat chat Anda tidak cukup. Tambahkan dan coba lagi.";
+"Finding your address..." = "Mencari alamat Anda...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "Salah satu kata yang ditempel tidak valid. Periksa salinan Anda dan coba lagi.";

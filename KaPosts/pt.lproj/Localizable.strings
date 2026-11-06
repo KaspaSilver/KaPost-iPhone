@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Gorjeta não enviada: não há um preço recente do KAS para converter %@ em KAS.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "Junta as moedas deste endereço numa só, para que os próximos envios precisem de menos entradas.";
 "Needs two or more coins on this address to combine." = "Precisa de duas ou mais moedas neste endereço para juntar.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "Uma transação pode juntar %d moedas, por isso isto junta as %d maiores. Junte de novo para o resto.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "Máx é o que uma transação consegue levar: as suas %d moedas maiores. Juntar UTXOs, em Mais, junta o resto.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "Não há KAS suficiente no seu endereço de chat. Adicione e tente novamente.";
+"Finding your address..." = "A procurar o seu endereço...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "Uma das palavras coladas não é válida. Verifique a sua cópia e tente novamente.";

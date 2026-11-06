@@ -1347,7 +1347,11 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     private static var barHeight: CGFloat { 64 }
     private static var settle: Animation { .spring(response: 0.45, dampingFraction: 0.86) }
 
-    private var active: Bool { isEnabled && !isBusy }
+    /// Face ID is up for a send. Until it answers the screen is still the form, so without this a
+    /// second swipe (or VoiceOver activation) in that moment asked again and could send twice.
+    @State private var authPending = false
+
+    private var active: Bool { isEnabled && !isBusy && !authPending }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1456,7 +1460,8 @@ struct SwipeUpToSendScrollView<Content: View>: View {
                     }
                 }
                 .onEnded { _ in
-                    guard phase == .form else { return }
+                    // a touch while Face ID is up leaves the waiting send as it is
+                    guard phase == .form, !authPending else { return }
                     if armed && active {
                         authenticateThenSend()
                     } else {
@@ -1480,10 +1485,16 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     /// Kaspa never leaves on the swipe alone: Face ID first, on every screen that swipes up.
     /// Declined, the screen settles back with everything still filled in.
     private func authenticateThenSend() {
+        guard !authPending, phase == .form else { return }
+        authPending = true
         DeviceAuth.authenticate(
             reason: authReason ?? AppLocalization.string("Confirm sending Kaspa"),
-            onSuccess: { startSending() },
+            onSuccess: {
+                startSending()
+                authPending = false
+            },
             onFailure: {
+                authPending = false
                 armed = false
                 withAnimation(Self.settle) { lift = 0 }
             }

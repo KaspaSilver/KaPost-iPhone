@@ -98,6 +98,9 @@ struct ImportWalletView: View {
             error = "Nothing to paste."
             return
         }
+        // Cleared as soon as it is read, whether or not the words are accepted: secret words do
+        // not belong there either way.
+        UIPasteboard.general.string = ""
         let pasted = raw
             .lowercased()
             .split(whereSeparator: { $0.isWhitespace || $0 == "," })
@@ -109,7 +112,10 @@ struct ImportWalletView: View {
         }
         let unknown = pasted.filter { !BIP39.shared.isValidWord($0) }
         guard unknown.isEmpty else {
-            error = "Not a valid word: \(unknown.prefix(3).joined(separator: ", "))."
+            // never repeats what was pasted
+            error = unknown.count == 1
+                ? "One of the pasted words isn't a valid word. Check your copy and try again."
+                : "\(unknown.count) of the pasted words aren't valid words. Check your copy and try again."
             return
         }
         seedWordCount = pasted.count
@@ -117,7 +123,6 @@ struct ImportWalletView: View {
         for (index, word) in pasted.enumerated() { filled[index] = word }
         words = filled
         error = nil
-        UIPasteboard.general.string = ""
         Haptics.success()
     }
 

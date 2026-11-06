@@ -761,7 +761,9 @@ final class NodePoolService: ObservableObject {
         do {
             return try await hedgedSubmit(rpcTransaction, allowOrphan: allowOrphan, answerLost: answerLost)
         } catch {
-            if answerLost.isSet { throw SubmitAnswerLostError(underlying: error) }
+            // A node that rejected the transaction has given a verdict on it: the race isn't lost,
+            // even if another node timed out, and saying "may have gone through" would be wrong.
+            if answerLost.isSet && !answerLost.wasRejected { throw SubmitAnswerLostError(underlying: error) }
             throw error
         }
     }
@@ -789,6 +791,7 @@ final class NodePoolService: ObservableObject {
             }
 
             if txResponse.hasError && !txResponse.error.message.isEmpty {
+                answerLost.markRejected()
                 throw NodeRejectedTransactionError(message: txResponse.error.message)
             }
 
@@ -807,7 +810,11 @@ final class NodePoolService: ObservableObject {
         private let lock = NSLock()
         private var value = false
         var isSet: Bool { lock.withLock { value } }
+        private var rejected = false
+        /// Some node answered with a rejection of the transaction itself.
+        var wasRejected: Bool { lock.withLock { rejected } }
         func set() { lock.withLock { value = true } }
+        func markRejected() { lock.withLock { rejected = true } }
     }
 
     /// A node answered a submit by rejecting the TRANSACTION (bad fee, spent input, orphan,

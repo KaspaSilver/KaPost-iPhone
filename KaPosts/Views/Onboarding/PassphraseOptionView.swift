@@ -15,7 +15,8 @@ import SwiftUI
 ///      updating underneath as you type. That live address is the point: it is the only direct
 ///      evidence that a passphrase opens a DIFFERENT account rather than protecting the same one,
 ///      and a balance is how someone importing can tell they typed the right one.
-///   3. `explainer` - plain-language, back only, so reading about it always returns to the choice.
+///   3. `explainer` - plain-language, back only, so reading about it always returns to the screen
+///      it was opened from (the question, or the entry screen, which links it too).
 ///
 /// The caller (`CreateWalletView` / `ImportWalletView`) performs the actual wallet commit via
 /// `onProceed`, which receives the chosen passphrase ("" when there is none).
@@ -74,6 +75,8 @@ struct PassphraseOptionView: View {
     /// The import's search for the funded address is running: Import waits, or it would open
     /// address #0 before the search could pick another.
     @State private var isScanningAddresses = false
+    /// Where the explainer's Back returns: the question (import) or the entry screen.
+    @State private var explainerReturnStep: Step = .question
 
     var body: some View {
         Group {
@@ -159,6 +162,7 @@ struct PassphraseOptionView: View {
                 .disabled(isBusy)
 
                 Button {
+                    explainerReturnStep = .question
                     step = .explainer
                 } label: {
                     Text("What is a passphrase?")
@@ -208,6 +212,12 @@ struct PassphraseOptionView: View {
                     Group {
                         if isBusy {
                             ProgressView().tint(.white)
+                        } else if isScanningAddresses && !passphrase.isEmpty {
+                            HStack(spacing: 8) {
+                                ProgressView().tint(.white)
+                                Text("Finding your address...")
+                                    .font(.headline)
+                            }
                         } else {
                             Text(mode == .create ? "Continue" : "Import")
                                 .font(.headline)
@@ -221,6 +231,20 @@ struct PassphraseOptionView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSubmitPassphrase || isBusy || isScanningAddresses)
+
+                // Creating opens on this screen, so the explainer is linked here too.
+                Button {
+                    explainerReturnStep = .entry
+                    step = .explainer
+                } label: {
+                    Text("What is a passphrase?")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.accentColor)
+                .disabled(isBusy)
             }
             .padding(24)
         }
@@ -324,7 +348,7 @@ struct PassphraseOptionView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button("Back") { step = .question }
+                Button("Back") { step = explainerReturnStep }
             }
         }
     }

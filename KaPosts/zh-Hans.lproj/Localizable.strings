@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "打赏未发送：没有近期的 KAS 价格，无法将 %@ 换算成 KAS。";
 "Combines this address's coins into one, so later sends need fewer inputs." = "将此地址的币合并为一个，以后发送所需的输入更少。";
 "Needs two or more coins on this address to combine." = "此地址需要有两个或更多币才能合并。";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "一笔交易最多合并 %d 个币，因此这次合并最大的 %d 个。其余的请再次合并。";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "最大值是一笔交易能承载的数量：最大的 %d 个币。在“更多”中合并 UTXO 可合并其余的币。";
+"Not enough KAS on your Chatting Address. Add some and try again." = "你的聊天地址上 KAS 不足。请添加一些后重试。";
+"Finding your address..." = "正在查找你的地址...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "粘贴的单词中有一个无效。请检查你的副本后重试。";

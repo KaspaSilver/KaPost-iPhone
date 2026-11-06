@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "הטיפ לא נשלח: אין מחיר KAS עדכני כדי להמיר %@ ל-KAS.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "מאחד את המטבעות של הכתובת הזו לאחד, כדי ששליחות הבאות יצטרכו פחות קלטים.";
 "Needs two or more coins on this address to combine." = "צריך שניים או יותר מטבעות בכתובת הזו כדי לאחד.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "עסקה אחת יכולה לאחד %d מטבעות, ולכן זה מאחד את %d הגדולים. אחדו שוב בשביל השאר.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "מקסימום הוא מה שעסקה אחת יכולה לשאת: %d המטבעות הגדולים שלה. איחוד UTXO, תחת עוד, מאחד את השאר.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "אין מספיק KAS בכתובת הצ׳אט שלך. הוסיפו קצת ונסו שוב.";
+"Finding your address..." = "מחפשים את הכתובת שלך...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "אחת המילים שהודבקו אינה תקינה. בדקו את העותק ונסו שוב.";

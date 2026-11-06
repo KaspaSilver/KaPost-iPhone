@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "팁을 보내지 못했습니다. %@ 금액을 KAS로 환산할 최근 KAS 시세가 없습니다.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "이 주소의 코인을 하나로 합쳐 이후 송금에 필요한 입력을 줄입니다.";
 "Needs two or more coins on this address to combine." = "합치려면 이 주소에 코인이 두 개 이상 있어야 합니다.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "한 번의 거래로 코인 %d개까지 합칠 수 있어 가장 큰 %d개를 합칩니다. 나머지는 다시 합치세요.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "최대는 한 번의 거래에 담을 수 있는 양입니다: 가장 큰 코인 %d개. 더보기의 UTXO 합치기로 나머지를 합치세요.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "채팅 주소에 KAS가 부족합니다. 추가한 후 다시 시도하세요.";
+"Finding your address..." = "주소를 찾는 중...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "붙여넣은 단어 중 하나가 올바른 단어가 아닙니다. 사본을 확인하고 다시 시도하세요.";

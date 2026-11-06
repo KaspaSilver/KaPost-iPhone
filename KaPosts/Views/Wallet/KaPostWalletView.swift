@@ -285,7 +285,7 @@ struct KaPostWalletView: View {
                 ) {
                     showMore = false
                     DispatchQueue.main.async {
-                        if settingsViewModel.settings.biometricSeedPhraseEnabled {
+                        if settingsViewModel.settings.biometricSpendingKeyEnabled {
                             DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
                                 showPrivateKey = true
                             }

@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "टिप नहीं भेजी गई: %@ को KAS में बदलने के लिए KAS की हाल की कीमत उपलब्ध नहीं है।";
 "Combines this address's coins into one, so later sends need fewer inputs." = "इस पते के सिक्कों को एक में जोड़ देता है, ताकि आगे के भेजने में कम इनपुट लगें।";
 "Needs two or more coins on this address to combine." = "जोड़ने के लिए इस पते पर दो या ज़्यादा सिक्के चाहिए।";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "एक लेन-देन %d सिक्के जोड़ सकता है, इसलिए यह सबसे बड़े %d जोड़ता है। बाकी के लिए फिर से कंपाउंड करें।";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "मैक्स वह है जो एक लेन-देन ले जा सकता है: उसके सबसे बड़े %d सिक्के। और में UTXO कंपाउंड करें बाकी को जोड़ता है।";
+"Not enough KAS on your Chatting Address. Add some and try again." = "आपके चैटिंग पते पर पर्याप्त KAS नहीं है। कुछ जोड़ें और फिर से कोशिश करें।";
+"Finding your address..." = "आपका पता ढूँढा जा रहा है...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "चिपकाए गए शब्दों में से एक मान्य शब्द नहीं है। अपनी कॉपी जाँचें और फिर से कोशिश करें।";

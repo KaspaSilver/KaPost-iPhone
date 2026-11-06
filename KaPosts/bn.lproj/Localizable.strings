@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "টিপ পাঠানো যায়নি: %@ কে KAS-এ রূপান্তর করার মতো সাম্প্রতিক KAS দাম নেই।";
 "Combines this address's coins into one, so later sends need fewer inputs." = "এই ঠিকানার কয়েনগুলো একটিতে মিলিয়ে দেয়, যাতে পরের পাঠানোয় কম ইনপুট লাগে।";
 "Needs two or more coins on this address to combine." = "একত্র করতে এই ঠিকানায় দুই বা তার বেশি কয়েন লাগবে।";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "একটি লেনদেন %d টি কয়েন একত্র করতে পারে, তাই এটি সবচেয়ে বড় %d টি একত্র করে। বাকিগুলোর জন্য আবার কম্পাউন্ড করুন।";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "সর্বোচ্চ হলো একটি লেনদেন যা বহন করতে পারে: সবচেয়ে বড় %d টি কয়েন। আরও-তে থাকা UTXO কম্পাউন্ড বাকিগুলো একত্র করে।";
+"Not enough KAS on your Chatting Address. Add some and try again." = "আপনার চ্যাটিং ঠিকানায় যথেষ্ট KAS নেই। কিছু যোগ করে আবার চেষ্টা করুন।";
+"Finding your address..." = "আপনার ঠিকানা খোঁজা হচ্ছে...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "পেস্ট করা একটি শব্দ বৈধ নয়। আপনার কপি দেখে আবার চেষ্টা করুন।";

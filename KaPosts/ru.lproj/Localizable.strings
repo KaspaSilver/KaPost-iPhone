@@ -2479,3 +2479,9 @@
 "Tip didn't send: there is no recent KAS price to turn %@ into KAS." = "Чаевые не отправлены: нет свежего курса KAS, чтобы перевести %@ в KAS.";
 "Combines this address's coins into one, so later sends need fewer inputs." = "Объединяет монеты этого адреса в одну, чтобы следующим отправкам требовалось меньше входов.";
 "Needs two or more coins on this address to combine." = "Чтобы объединить, на этом адресе нужно две монеты или больше.";
+
+"One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest." = "Одна транзакция может объединить %d монет, поэтому объединяются %d самых крупных. Для остальных объедините ещё раз.";
+"Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest." = "Максимум — это то, что вмещает одна транзакция: её %d самых крупных монет. Объединить UTXO в разделе «Ещё» объединит остальные.";
+"Not enough KAS on your Chatting Address. Add some and try again." = "На вашем адресе для чатов недостаточно KAS. Пополните его и попробуйте снова.";
+"Finding your address..." = "Ищем ваш адрес...";
+"One of the pasted words isn't a valid word. Check your copy and try again." = "Одно из вставленных слов недействительно. Проверьте свою копию и попробуйте снова.";

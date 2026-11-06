@@ -261,7 +261,7 @@ struct ChattingAddressManageView: View {
                     showAddressActions = false
                     // A turn later: presenting straight from a dismissing sheet is dropped.
                     DispatchQueue.main.async {
-                        if settingsViewModel.settings.biometricSeedPhraseEnabled {
+                        if settingsViewModel.settings.biometricSpendingKeyEnabled {
                             DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
                                 showPrivateKeySheet = true
                             }
@@ -479,7 +479,7 @@ struct ChattingAddressManageView: View {
 /// Private-key reveal for the wallet's own chatting/identity address — mirrors
 /// SpendingAddressPrivateKeyView, but reads the wallet's own root private key rather than a
 /// derived spending key, since the identity address isn't part of the spending-chain derivation.
-/// Gated by `biometricSeedPhraseEnabled` (not `biometricSpendingKeyEnabled`) since this is the
+/// Gated by `biometricSpendingKeyEnabled` (Settings' "Biometrics for Address Private Keys"), formerly by `biometricSeedPhraseEnabled` since this is the
 /// wallet's primary key, matching the same higher-stakes gate as Settings > View Seed Phrase.
 struct ChattingAddressPrivateKeyView: View {
     let address: String
@@ -872,8 +872,14 @@ struct WithdrawKaspaView: View {
 
     @State private var feeTier: WithdrawFeeTier = .normal
     @State private var normalFeeSompi: UInt64?
-    /// Change too small to keep, which goes to the fee (`SendFeeEstimate`).
-    @State private var foldedChangeSompi: UInt64 = 0
+    /// The fee this exact send pays at the chosen speed (network fee, extra and any change too
+    /// small to keep), from an estimate made with that extra; nil until it is known.
+    @State private var builtFeeSompi: UInt64?
+    /// The Max on screen is what one transaction can carry, not the whole balance (the address
+    /// holds more coins than one transaction can spend).
+    @State private var maxCapped = false
+    /// The latest Max request: an older one finishing later (a fee tapped twice fast) is dropped.
+    @State private var maxRequest = UUID()
     @State private var isEstimatingFee = false
     @State private var isEstimatingMax = false
     @State private var customExtraFeeSompi: UInt64?
@@ -915,8 +921,11 @@ struct WithdrawKaspaView: View {
         return isValidAddress && !isResolvingKNS
     }
 
+    /// The swipe waits for the amount and the fee it shows to be the ones that will be sent: not
+    /// while Max or the fee is being worked out again, and not when the fee couldn't be.
     private var canSend: Bool {
         hasValidRecipient && amountSompi != nil && !isSending
+            && !isEstimatingMax && !isEstimatingFee && feeError == nil && totalFeeSompi != nil
     }
 
     /// Extra priority tip on top of the base (Normal-tier) fee, for network congestion.
@@ -929,8 +938,8 @@ struct WithdrawKaspaView: View {
     }
 
     private var totalFeeSompi: UInt64? {
-        guard let normalFeeSompi else { return nil }
-        return SendFeeEstimate(networkFee: normalFeeSompi, foldedChange: foldedChangeSompi).total(extra: extraFeeSompi)
+        guard normalFeeSompi != nil else { return nil }
+        return builtFeeSompi
     }
 
     /// Debounce/cancellation key: only re-estimate when the resolved address or amount
@@ -938,7 +947,10 @@ struct WithdrawKaspaView: View {
     /// multiplier of the already-fetched base fee, no extra network round-trip needed).
     private var feeEstimationKey: String {
         let manualKey = manualUtxos?.map { "\($0.outpoint.transactionId):\($0.outpoint.index)" }.sorted().joined(separator: ",") ?? ""
-        return "\(hasValidRecipient ? effectiveAddress : "")|\(amountSompi ?? 0)|\(manualKey)|\(source.spendingIndex ?? -1)"
+        // The speed and a custom fee are in it: a bigger extra can make the send take another coin,
+        // or no longer leave change worth keeping, so the fee shown is worked out with the extra
+        // actually paid rather than added on top of the Normal estimate.
+        return "\(hasValidRecipient ? effectiveAddress : "")|\(amountSompi ?? 0)|\(manualKey)|\(source.spendingIndex ?? -1)|\(feeTier.rawValue)|\(customExtraFeeSompi.map { String($0) } ?? "")"
     }
 
     /// The three steps of a send: who it goes to, how much (on the app's own keypad, so no
@@ -1066,35 +1078,60 @@ struct WithdrawKaspaView: View {
             .task(id: feeEstimationKey) {
                 guard hasValidRecipient, let amountSompi else {
                     normalFeeSompi = nil
+                    builtFeeSompi = nil
                     feeError = nil
+                    isEstimatingFee = false
                     return
                 }
                 isEstimatingFee = true
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
-                do {
-                    let fee: SendFeeEstimate
-                    if let request = activeRequest, request.toChattingAddress,
-                       request.address.lowercased() == effectiveAddress.lowercased() {
-                        // Paid as a chat payment, with its encrypted memo: priced that way.
-                        let contact = contactsManager.getContact(byAddress: effectiveAddress)
-                            ?? Contact(address: effectiveAddress, isAutoAdded: true)
-                        fee = try await chatService.estimatePaymentFee(
-                            to: contact, amountSompi: amountSompi, note: request.memo,
-                            sourceSpendingIndex: source.spendingIndex, manualUtxos: manualUtxos
-                        )
-                    } else if let index = source.spendingIndex {
-                        fee = try await chatService.estimateSpendingAddressWithdrawalFee(index: index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
-                    } else {
-                        fee = try await chatService.estimateWithdrawalFee(toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
+                let index = source.spendingIndex
+                let recipient = effectiveAddress
+                let coins = manualUtxos
+                // Paid as a chat payment, with its encrypted memo, when the request is to a chatting
+                // address: priced that way.
+                let chatPayment: (contact: Contact, memo: String)? = {
+                    guard let request = activeRequest, request.toChattingAddress,
+                          request.address.lowercased() == recipient.lowercased() else { return nil }
+                    let contact = contactsManager.getContact(byAddress: recipient)
+                        ?? Contact(address: recipient, isAutoAdded: true)
+                    return (contact, request.memo)
+                }()
+                func estimate(extra: UInt64) async throws -> SendFeeEstimate {
+                    if let index {
+                        return try await chatService.estimateSpendingAddressWithdrawalFee(index: index, toAddress: recipient, amountSompi: amountSompi, manualUtxos: coins, extraFeeSompi: extra)
                     }
-                    guard !Task.isCancelled else { return }
-                    normalFeeSompi = fee.networkFee
-                    foldedChangeSompi = fee.foldedChange
+                    return try await chatService.estimateWithdrawalFee(toAddress: recipient, amountSompi: amountSompi, manualUtxos: coins, extraFeeSompi: extra)
+                }
+                do {
+                    if let chatPayment {
+                        let base = try await chatService.estimatePaymentFee(
+                            to: chatPayment.contact, amountSompi: amountSompi, note: chatPayment.memo,
+                            sourceSpendingIndex: index, manualUtxos: coins
+                        )
+                        guard !Task.isCancelled else { return }
+                        let extra = customExtraFeeSompi ?? base.networkFee * (feeTier.multiplier - 1)
+                        normalFeeSompi = base.networkFee
+                        builtFeeSompi = base.total(extra: extra)
+                    } else {
+                        // The Normal fee is the base the speeds multiply (and the editor's minimum).
+                        let base = try await estimate(extra: 0)
+                        guard !Task.isCancelled else { return }
+                        let extra = customExtraFeeSompi ?? base.networkFee * (feeTier.multiplier - 1)
+                        // With the extra in, the estimate builds the same shape the send will: its
+                        // network fee already holds the extra, and change too small to keep goes on top.
+                        var paid = base
+                        if extra > 0 { paid = try await estimate(extra: extra) }
+                        guard !Task.isCancelled else { return }
+                        normalFeeSompi = base.networkFee
+                        builtFeeSompi = paid.networkFee + paid.foldedChange
+                    }
                     feeError = nil
                 } catch {
                     guard !Task.isCancelled else { return }
                     normalFeeSompi = nil
+                    builtFeeSompi = nil
                     feeError = UserFacingError.message(for: error)
                 }
                 isEstimatingFee = false
@@ -1194,6 +1231,7 @@ struct WithdrawKaspaView: View {
                         onMax: setMaxAmount,
                         onKeyTyped: {
                             usedMax = false
+                            maxCapped = false
                             errorMessage = nil
                         }
                     )
@@ -1206,6 +1244,7 @@ struct WithdrawKaspaView: View {
     private var amountFootnote: String? {
         if let errorMessage { return errorMessage }
         if exceedsBalance { return AppLocalization.string("This is more than the address you're sending from holds.") }
+        if usedMax && maxCapped { return maxCappedNote }
         guard let sourceBalanceSompi else { return nil }
         return KaspaUnit.label(String(format: AppLocalization.string("Available: %@ KAS"), locale: AppLocalization.locale, trimmedKas(sourceBalanceSompi)))
     }
@@ -1377,6 +1416,11 @@ struct WithdrawKaspaView: View {
                     Text(message)
                         .font(.footnote)
                         .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                } else if usedMax && maxCapped {
+                    Text(maxCappedNote)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }
             }
@@ -1558,25 +1602,44 @@ struct WithdrawKaspaView: View {
         let recipient = effectiveAddress
         let tipSompi = extraFeeSompi
         let spendingIndex = isCompoundMode ? nil : source.spendingIndex
+        let request = UUID()
+        maxRequest = request
         Task {
             do {
-                let maxSompi: UInt64
+                let result: (amountSompi: UInt64, cappedAtInputLimit: Bool)
                 if let index = spendingIndex {
-                    maxSompi = try await chatService.estimateMaxSpendingAddressAmount(index: index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    result = try await chatService.estimateMaxSpendingAddressAmount(index: index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 } else {
-                    maxSompi = try await chatService.estimateMaxWithdrawalAmount(toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    result = try await chatService.estimateMaxWithdrawalAmount(toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 }
                 await MainActor.run {
-                    amountInput = fiatAmountState.setMaxKas(Double(maxSompi) / 100_000_000.0, priceInCurrency: portfolioViewModel.currentPriceUsd)
+                    // a newer Max (another speed tapped meanwhile) decides the amount
+                    guard maxRequest == request else { return }
+                    amountInput = fiatAmountState.setMaxKas(Double(result.amountSompi) / 100_000_000.0, priceInCurrency: portfolioViewModel.currentPriceUsd)
+                    maxCapped = result.cappedAtInputLimit
                     isEstimatingMax = false
                 }
             } catch {
                 await MainActor.run {
+                    guard maxRequest == request else { return }
                     errorMessage = UserFacingError.message(for: error)
+                    maxCapped = false
                     isEstimatingMax = false
                 }
             }
         }
+    }
+
+    /// Why Max isn't the whole balance: one transaction spends at most
+    /// `maxInputsPerTransaction` coins, and this address holds more.
+    private var maxCappedNote: String {
+        let limit = KasiaTransactionBuilder.maxInputsPerTransaction
+        if isCompoundMode {
+            return String(format: AppLocalization.string("One transaction can combine %d coins, so this combines the largest %d. Compound again for the rest."),
+                          locale: AppLocalization.locale, limit, limit)
+        }
+        return String(format: AppLocalization.string("Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest."),
+                      locale: AppLocalization.locale, limit)
     }
 
     private func startEditingFee() {
