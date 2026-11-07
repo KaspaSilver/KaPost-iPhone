@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "مفيش KAS كفاية في عنوان الدردشة. ضيف شوية وجرب تاني.";
 "Finding your address..." = "بندور على عنوانك...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "كلمة من الكلمات اللي لزقتها مش صحيحة. راجع نسختك وجرب تاني.";
+
+/* Audit 2 */
+"Waiting" = "مستني";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "مستنيين عملاتك تتأكد. هتتبعت لوحدها كمان شوية، فما تبعتهاش تاني.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "البوست ده لسه مش على الشبكة، فمينفعش ترد عليه. جرّب تاني بعد ما يتنشر.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "امسح لقطة الشاشة دي";
+"Skip the Search: Import on Address #0" = "تخطّى البحث: استورد على العنوان #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "البحث عن رصيد في عناوين الحساب التانية مخلصش، فالاستيراد هيستخدم العنوان #0.";
+"Search Again" = "دوّر تاني";
+"Re-enter PIN" = "اكتب الـ PIN تاني";
+"The PINs don't match." = "الـ PIN مش متطابق.";
+"Mining reward, not spendable here" = "مكافأة تعدين، مينفعش تتصرف هنا";
+"Not confirmed yet" = "لسه متأكدتش";
+"Just spent by a post or send" = "اتصرفت دلوقتي في بوست أو تحويل";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "رسوم الشبكة بقت %@ KAS، أكتر من اللي ظهر في المراجعة. مفيش حاجة اتبعتت: شوف الرسوم الجديدة واسحب تاني.";
+"This account's keys are on this phone again, so nothing was removed." = "مفاتيح الحساب ده رجعت على الموبايل ده، فمفيش حاجة اتشالت.";
+"Sending" = "بيتبعت";
+"Failed · Tap to retry" = "فشل · دوس عشان تحاول تاني";
+"Needs attention" = "محتاج انتباه";
+"Failed to send" = "ما اتبعتش";

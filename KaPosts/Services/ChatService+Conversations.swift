@@ -1755,6 +1755,7 @@ extension ChatService {
             let txId: String
             let endpoint: String
             do {
+                builtTxId = KasiaTransactionBuilder.computeTransactionId(transaction)
                 let submitted = try await rpcManager.submitTransaction(
                     transaction,
                     allowOrphan: usesUnconfirmedInputs
@@ -2172,6 +2173,17 @@ extension ChatService {
         }
     }
 
+    /// Holds back coins by outpoint key ("txid:index"): what `NodePoolService` does with every
+    /// transaction it submits, so no send path can leave its coins for the next one to pick.
+    func reserveOutpointKeys(_ keys: [String]) {
+        let expiration = Date().addingTimeInterval(pendingMessageUtxoTTL)
+        for key in keys {
+            reservedMessageOutpoints[key] = expiration
+            pendingMessageUtxos.removeValue(forKey: key)
+        }
+        invalidateUtxoCache()
+    }
+
     func reserveMessageOutpoints(_ utxos: [UTXO]) {
         let expiration = Date().addingTimeInterval(pendingMessageUtxoTTL)
         for utxo in utxos {
@@ -2227,6 +2239,8 @@ extension ChatService {
     }
 
     func shouldRetrySendError(_ error: Error) -> Bool {
+        // It may have landed: a second try on other coins could post and pay twice.
+        if error is SendOutcomeUnknownError { return false }
         let message = error.localizedDescription.lowercased()
         return message.contains("orphan") || message.contains("already spent")
     }
@@ -2536,6 +2550,8 @@ extension ChatService {
 
         /// The id this device computed for what it is about to submit (`acceptedTransactionId`).
         var builtTxId: String?
+        /// The built transaction and the coins it chose from, for an unknown outcome's bookkeeping.
+        var builtPayment: (tx: KaspaRpcTransaction, candidates: [UTXO])?
         do {
             let rpcManager = NodePoolService.shared
             let settings = currentSettings
@@ -2545,7 +2561,9 @@ extension ChatService {
             }
 
             let utxos = try await rpcManager.getUtxosByAddresses([sourceAddress])
-            let confirmed = utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }
+            // Not the coins a post, room message or send still in flight spent: the node lists
+            // them until that spend is in a block.
+            let confirmed = unreservedUtxos(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase })
             // Coin control: only the chosen coins (still unspent) - the builder picks from these.
             // If every chosen coin is gone, refuse: falling back to all coins would spend ones
             // the person deliberately left out (previews may fall back; the send may not).
@@ -2625,6 +2643,7 @@ extension ChatService {
             // Submit via RPC manager
             AppLog.log("[ChatService] Submitting payment via RPC manager...")
             builtTxId = KasiaTransactionBuilder.computeTransactionId(tx)
+            builtPayment = (tx, spendable)
             let (txId, endpoint) = try await rpcManager.submitTransaction(tx, allowOrphan: false)
             AppLog.log("[ChatService] Payment submitted: \(txId) via \(endpoint)")
             if fromChattingAddress, let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: sourceAddress) {
@@ -2688,7 +2707,11 @@ extension ChatService {
             }
 
             if error is SendOutcomeUnknownError {
-                // It may have landed: its change may be on the fresh address, and its key on chain.
+                // It may have landed: its coins stay out of the next send, post and room message,
+                // its change may be on the fresh address, and its key on chain.
+                if fromChattingAddress, let builtPayment {
+                    recordPlainSend(builtPayment.tx, spent: builtPayment.candidates, txId: nil, changeScriptPubKey: nil)
+                }
                 if let freshChangeIndex {
                     await WalletManager.shared.revealSpendingAddress(at: freshChangeIndex, owner: wallet.publicAddress)
                 }
@@ -2733,7 +2756,9 @@ extension ChatService {
     /// this carries no KaChat protocol payload and has no chat/conversation bookkeeping
     /// (pending message, delivery status, etc.) since the recipient isn't necessarily a
     /// contact. Returns the submitted transaction id.
-    func sendWithdrawal(toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0) async throws -> String {
+    /// `expectedFeeSompi`: the fee the Review showed. A send built at the swipe that would pay more
+    /// (its coins changed since the Review) throws `SendFeeChangedError` and sends nothing.
+    func sendWithdrawal(toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, expectedFeeSompi: UInt64? = nil) async throws -> String {
         guard amountSompi > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
         }
@@ -2759,7 +2784,7 @@ extension ChatService {
 
             let utxos = try await rpcManager.getUtxosByAddresses([wallet.publicAddress])
             self.updateWalletBalanceIfNeeded(address: wallet.publicAddress, utxos: utxos)
-            let spendable = self.unreservedUtxos(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase })
+            let spendable = self.withdrawalSpendable(utxos)
             guard !spendable.isEmpty else {
                 throw KasiaError.networkError("No spendable UTXOs available")
             }
@@ -2788,6 +2813,7 @@ extension ChatService {
                 manualUtxos: resolvedManualUtxos,
                 extraFeeSompi: extraFeeSompi
             )
+            try self.checkFeeAgainstReview(tx, spending: spendable, expectedFeeSompi: expectedFeeSompi)
 
             AppLog.log("[ChatService] Submitting withdrawal via RPC manager...")
             let txId: String
@@ -2824,7 +2850,7 @@ extension ChatService {
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
-        let resolvedManualUtxos = resolveManualUtxos(manualUtxos, against: spendable)
+        let resolvedManualUtxos = try resolveReviewSelection(manualUtxos, against: spendable)
 
         return try KasiaTransactionBuilder.estimatePlainTransferFee(
             utxos: spendable,
@@ -2843,7 +2869,10 @@ extension ChatService {
     /// `cappedAtInputLimit`: the address holds more coins than one transaction can spend, so this is
     /// the most its largest `maxInputsPerTransaction` coins can send (what the send itself picks,
     /// largest first) - not the whole balance, which no single transaction could carry.
-    func estimateMaxWithdrawalAmount(toAddress: String, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
+    /// `feeMultiplier`: the speed tier (Fast 2, Priority 5). Its extra is worked out from the base
+    /// fee of the send this Max builds, as the Review does (`maxSendAmount`); `extraFeeSompi` is a
+    /// fixed extra on top (a custom fee).
+    func estimateMaxWithdrawalAmount(toAddress: String, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64 = 1) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
         guard let wallet = WalletManager.shared.currentWallet else { throw KasiaError.walletNotFound }
         guard let recipientScriptPubKey = KaspaAddress.scriptPublicKey(from: toAddress),
               let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: wallet.publicAddress) else {
@@ -2854,25 +2883,71 @@ extension ChatService {
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
-        let resolvedManualUtxos = resolveManualUtxos(manualUtxos, against: spendable)
+        let resolvedManualUtxos = try resolveReviewSelection(manualUtxos, against: spendable)
         let chunk = resolvedManualUtxos == nil ? Self.oneTransactionChunk(spendable) : nil
         let maxSet = resolvedManualUtxos ?? chunk ?? spendable
 
         let totalBalance = try maxSet.totalAmount()
 
-        let fee = KasiaTransactionBuilder.estimateSendAllFee(
-            utxos: maxSet,
-            payload: Data(),
-            recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: senderScriptPubKey,
-            extraFeeSompi: extraFeeSompi
+        let amount = try Self.maxSendAmount(
+            total: totalBalance,
+            extraFeeSompi: extraFeeSompi,
+            feeMultiplier: feeMultiplier,
+            sendAllFee: { extra in
+                KasiaTransactionBuilder.estimateSendAllFee(
+                    utxos: maxSet,
+                    payload: Data(),
+                    recipientScriptPubKey: recipientScriptPubKey,
+                    senderScriptPubKey: senderScriptPubKey,
+                    extraFeeSompi: extra
+                )
+            },
+            baseFee: { sompi in
+                // the Review's Normal fee for this amount (`estimateWithdrawalFee` with no extra)
+                (try? KasiaTransactionBuilder.estimatePlainTransferFee(
+                    utxos: spendable,
+                    amount: sompi,
+                    recipientScriptPubKey: recipientScriptPubKey,
+                    senderScriptPubKey: senderScriptPubKey,
+                    manualUtxos: resolvedManualUtxos
+                ))?.networkFee
+            }
         )
 
-        guard totalBalance > fee else {
-            throw KasiaError.networkError("Balance too low to cover fee")
-        }
+        return (amount, chunk != nil)
+    }
 
-        return (totalBalance - fee, chunk != nil)
+    /// Max at a speed tier. The Review prices a send's tier extra as a share of that same send's
+    /// base (Normal) fee, so Max does too: worked out at one extra, then again at the extra the
+    /// resulting amount's base fee gives, until the two agree. A tier extra taken from another
+    /// amount's base fee (a typed amount, other coins) was too small for Max's own inputs, and
+    /// the Review then could not price the Max at all ("Insufficient funds").
+    static func maxSendAmount(
+        total: UInt64,
+        extraFeeSompi: UInt64,
+        feeMultiplier: UInt64,
+        sendAllFee: (UInt64) -> UInt64,
+        baseFee: (UInt64) -> UInt64?
+    ) throws -> UInt64 {
+        func amount(extra: UInt64) throws -> UInt64 {
+            let fee = sendAllFee(extra)
+            guard total > fee else {
+                throw KasiaError.networkError("Balance too low to cover fee")
+            }
+            return total - fee
+        }
+        var extra = extraFeeSompi
+        var result = try amount(extra: extra)
+        guard feeMultiplier > 1 else { return result }
+        // two rounds settle it; the cap only guards against a shape that flips back and forth
+        for _ in 0..<4 {
+            guard let base = baseFee(result) else { break }
+            let next = extraFeeSompi + base * (feeMultiplier - 1)
+            if next == extra { break }
+            extra = next
+            result = try amount(extra: extra)
+        }
+        return result
     }
 
     /// The largest `maxInputsPerTransaction` coins, when there are more than one transaction can
@@ -2891,7 +2966,46 @@ extension ChatService {
     private func withdrawalSpendableUtxos(for address: String) async throws -> [UTXO] {
         let utxos = try await NodePoolService.shared.getUtxosByAddresses([address])
         updateWalletBalanceIfNeeded(address: address, utxos: utxos)
-        return KaPostsScheduledStore.filterReserved(unreservedUtxos(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }))
+        return withdrawalSpendable(utxos)
+    }
+
+    /// What a plain send from the chatting address may spend out of `utxos`: confirmed, not mining
+    /// rewards, not held by a scheduled post, and not just spent by this app (`unreservedUtxos`).
+    /// The Wallet's Compound, the send's Available and Coin Control count the same coins the send does.
+    func withdrawalSpendable(_ utxos: [UTXO]) -> [UTXO] {
+        KaPostsScheduledStore.filterReserved(unreservedUtxos(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }))
+    }
+
+    /// Coin control for a Review's fee or Max: the picked coins that are still spendable, nil for
+    /// automatic. When none of the picked coins are left it throws the send's own error, rather
+    /// than estimating automatic selection for a send that would then refuse to go.
+    private func resolveReviewSelection(_ manualUtxos: [UTXO]?, against spendable: [UTXO]) throws -> [UTXO]? {
+        guard let manualUtxos, !manualUtxos.isEmpty else { return nil }
+        guard let resolved = resolveManualUtxos(manualUtxos, against: spendable) else {
+            throw KasiaError.networkError("Selected UTXOs are no longer available - please reselect")
+        }
+        return resolved
+    }
+
+    /// Within this of the Review's fee a rebuilt send still goes out.
+    static let reviewFeeMarginSompi: UInt64 = 1_000
+
+    /// A send is built again at the swipe, from the coins of that moment. If they changed since
+    /// the Review (a post or room message spent one, a coin arrived) it can pick other coins and
+    /// pay more, change too small to keep included: then nothing is sent and the Review shows the
+    /// new fee.
+    func checkFeeAgainstReview(_ tx: KaspaRpcTransaction, spending candidates: [UTXO], expectedFeeSompi: UInt64?) throws {
+        guard let expectedFeeSompi else { return }
+        let inputs = spentMessageUtxos(from: tx, candidates: candidates)
+        guard inputs.count == tx.inputs.count else { return }
+        let inTotal = inputs.reduce(UInt64(0)) { $0 + $1.amount }
+        let outTotal = tx.outputs.reduce(UInt64(0)) { $0 + $1.value }
+        guard inTotal >= outTotal else { return }
+        let fee = inTotal - outTotal
+        if fee > expectedFeeSompi + Self.reviewFeeMarginSompi {
+            AppLog.log("[ChatService] send would pay \(fee) sompi, the Review showed \(expectedFeeSompi): not sent")
+            throw SendFeeChangedError(feeSompi: fee)
+        }
     }
 
     /// Leaves out coins a transaction from this app has just spent (`reservedMessageOutpoints`):
@@ -2935,7 +3049,7 @@ extension ChatService {
     /// you spend from and hand out next has never been used before. This path used to leave
     /// the primary sitting on the address it had just spent from. The old primary keeps
     /// whatever it still holds, listed in Manage Addresses like any other revealed slot.
-    func sendFromSpendingAddress(index: Int, toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0) async throws -> String {
+    func sendFromSpendingAddress(index: Int, toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, expectedFeeSompi: UInt64? = nil) async throws -> String {
         // the account this send belongs to: what it writes after the network answers goes here,
         // even if another account is active by then (IOS-109)
         let owner = WalletManager.shared.currentWallet?.publicAddress
@@ -3034,6 +3148,7 @@ extension ChatService {
                 virtualDaaScore: vds,
                 senderRedeemScript: senderRedeemScript
             )
+            try self.checkFeeAgainstReview(tx, spending: spendable, expectedFeeSompi: expectedFeeSompi)
 
             AppLog.log("[ChatService] Submitting spending-address withdrawal via RPC manager...")
             let txId: String
@@ -3153,7 +3268,7 @@ extension ChatService {
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
-        let resolvedManualUtxos = resolveManualUtxos(manualUtxos, against: spendable)
+        let resolvedManualUtxos = try resolveReviewSelection(manualUtxos, against: spendable)
 
         return try KasiaTransactionBuilder.estimatePlainTransferFee(
             utxos: spendable,
@@ -3173,7 +3288,8 @@ extension ChatService {
     /// resolvable), "max" means max spendable from just the selected UTXOs, not the whole
     /// address - same semantics `KasiaTransactionBuilder.estimateSendAllFee` already applies.
     /// `cappedAtInputLimit` as in `estimateMaxWithdrawalAmount`.
-    func estimateMaxSpendingAddressAmount(index: Int, toAddress: String, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, availableUtxos: [UTXO] = [], virtualDaaScore: UInt64? = nil) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
+    /// `feeMultiplier` as in `estimateMaxWithdrawalAmount`.
+    func estimateMaxSpendingAddressAmount(index: Int, toAddress: String, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64 = 1, availableUtxos: [UTXO] = [], virtualDaaScore: UInt64? = nil) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
         }
@@ -3188,29 +3304,45 @@ extension ChatService {
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
-        let resolvedManualUtxos = resolveManualUtxos(manualUtxos, against: spendable)
+        let resolvedManualUtxos = try resolveReviewSelection(manualUtxos, against: spendable)
         // more coins than one transaction can spend: Max is what its largest coins can send
         let chunk = resolvedManualUtxos == nil ? Self.oneTransactionChunk(spendable) : nil
         let maxSet = resolvedManualUtxos ?? chunk ?? spendable
 
         let totalBalance = try maxSet.totalAmount()
+        let signatureScriptSize = WalletManager.isQuantumIndex(index)
+            ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
 
-        let fee = KasiaTransactionBuilder.estimateSendAllFee(
-            utxos: maxSet,
-            payload: Data(),
-            recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: senderScriptPubKey,
+        let amount = try Self.maxSendAmount(
+            total: totalBalance,
             extraFeeSompi: extraFeeSompi,
-            virtualDaaScore: vds,
-            signatureScriptSize: WalletManager.isQuantumIndex(index)
-                ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
+            feeMultiplier: feeMultiplier,
+            sendAllFee: { extra in
+                KasiaTransactionBuilder.estimateSendAllFee(
+                    utxos: maxSet,
+                    payload: Data(),
+                    recipientScriptPubKey: recipientScriptPubKey,
+                    senderScriptPubKey: senderScriptPubKey,
+                    extraFeeSompi: extra,
+                    virtualDaaScore: vds,
+                    signatureScriptSize: signatureScriptSize
+                )
+            },
+            baseFee: { sompi in
+                // the Review's Normal fee for this amount (`estimateSpendingAddressWithdrawalFee`)
+                (try? KasiaTransactionBuilder.estimatePlainTransferFee(
+                    utxos: spendable,
+                    amount: sompi,
+                    recipientScriptPubKey: recipientScriptPubKey,
+                    senderScriptPubKey: senderScriptPubKey,
+                    manualUtxos: resolvedManualUtxos,
+                    virtualDaaScore: vds,
+                    signatureScriptSize: signatureScriptSize
+                ))?.networkFee
+            }
         )
 
-        guard totalBalance > fee else {
-            throw KasiaError.networkError("Balance too low to cover fee")
-        }
-
-        return (totalBalance - fee, chunk != nil)
+        return (amount, chunk != nil)
     }
 
     /// Re-resolves a coin-control selection by outpoint against a freshly-fetched spendable
@@ -3474,7 +3606,7 @@ extension ChatService {
     }
 
     /// The base (Normal) fee; a Fast / Priority / custom extra goes on top (see the Send KAS sheet).
-    func estimatePaymentFee(to contact: Contact, amountSompi: UInt64, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, tip: KaPostTip? = nil) async throws -> SendFeeEstimate {
+    func estimatePaymentFee(to contact: Contact, amountSompi: UInt64, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, tip: KaPostTip? = nil) async throws -> SendFeeEstimate {
         guard amountSompi > 0 else { throw KasiaError.networkError("Amount is zero") }
         // Must source from whatever `sendPaymentInternal` will actually spend from - the
         // spending chain with Chats Payment Privacy ON, the chatting address with it OFF (see
@@ -3487,9 +3619,10 @@ extension ChatService {
         }
 
         let payload = try estimationPayload(note: note, amount: amountSompi, recipientPublicKey: recipientPublicKey, tip: tip)
-        // Use fallback method - doesn't require gRPC connection
+        // Use fallback method - doesn't require gRPC connection. The coins the send may spend:
+        // none a scheduled post holds or a send in flight already spent.
         let utxos = try await fetchUtxosWithFallback(for: sourceAddress)
-        let candidates = utxos.filter { !$0.isCoinbase }
+        let candidates = unreservedUtxos(KaPostsScheduledStore.filterReserved(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }))
         let spendable = resolveManualUtxos(manualUtxos, against: candidates) ?? candidates
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
@@ -3506,13 +3639,14 @@ extension ChatService {
             amount: amountSompi,
             recipientScriptPubKey: recipientScriptPubKey,
             senderScriptPubKey: senderScriptPubKey,
+            extraFeeSompi: extraFeeSompi,
             signatureScriptSize: sourceSpendingIndex.map(WalletManager.isQuantumIndex) == true
                 ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
         )
     }
 
     /// Calculate maximum sendable amount (balance - fee for send-all transaction with no change output)
-    func estimateMaxPaymentAmount(to contact: Contact, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, tip: KaPostTip? = nil) async throws -> UInt64 {
+    func estimateMaxPaymentAmount(to contact: Contact, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, tip: KaPostTip? = nil) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
         // Same toggle-aware sourcing as `estimatePaymentFee` above - see its doc comment.
         let sourceAddress = try paymentFundingSourceAddress(spendingIndex: sourceSpendingIndex)
         guard let recipientPublicKey = KaspaAddress.publicKey(from: contact.address) else {
@@ -3521,8 +3655,11 @@ extension ChatService {
 
         // Use fallback method - doesn't require gRPC connection
         let utxos = try await fetchUtxosWithFallback(for: sourceAddress)
-        let candidates = KaPostsScheduledStore.filterReserved(utxos.filter { !$0.isCoinbase })
-        let spendable = resolveManualUtxos(manualUtxos, against: candidates) ?? candidates
+        let candidates = unreservedUtxos(KaPostsScheduledStore.filterReserved(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }))
+        let resolvedManualUtxos = resolveManualUtxos(manualUtxos, against: candidates)
+        // One transaction spends at most `maxInputsPerTransaction` coins: Max is what they carry.
+        let chunk = resolvedManualUtxos == nil ? Self.oneTransactionChunk(candidates) : nil
+        let spendable = resolvedManualUtxos ?? chunk ?? candidates
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
@@ -3553,7 +3690,7 @@ extension ChatService {
             throw KasiaError.networkError("Balance too low to cover fee")
         }
 
-        return totalBalance - totalFee
+        return (totalBalance - totalFee, chunk != nil)
     }
 
     func sendHandshake(to contact: Contact, isResponse: Bool, pendingTxId: String? = nil) async throws {
@@ -3658,7 +3795,8 @@ extension ChatService {
 
             let utxos = try await rpcManager.getUtxosByAddresses([wallet.publicAddress])
             updateWalletBalanceIfNeeded(address: wallet.publicAddress, utxos: utxos)
-            let spendable = utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }
+            // not coins a send still in flight, or a scheduled post, holds
+            let spendable = KaPostsScheduledStore.filterReserved(unreservedUtxos(utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }))
             guard !spendable.isEmpty else {
                 throw KasiaError.networkError("No UTXOs available. Your account may be empty.")
             }
@@ -4449,8 +4587,10 @@ extension ChatService {
                 try await rpcManager.connect(network: settings.networkType)
             }
 
-            let utxos = try await rpcManager.getUtxosByAddresses([wallet.publicAddress])
-            updateWalletBalanceIfNeeded(address: wallet.publicAddress, utxos: utxos)
+            let fetched = try await rpcManager.getUtxosByAddresses([wallet.publicAddress])
+            updateWalletBalanceIfNeeded(address: wallet.publicAddress, utxos: fetched)
+            // not coins a send still in flight, or a scheduled post, holds
+            let utxos = KaPostsScheduledStore.filterReserved(unreservedUtxos(fetched))
             guard !utxos.isEmpty else { return }
 
             var remaining = utxos
@@ -4875,4 +5015,14 @@ private struct KaspaAddressTransactionsCountResponse: Decodable {
 struct KaPostTip: Equatable {
     let postId: String
     let authorPubkey: String
+}
+
+/// A send built at the swipe would pay more than its Review showed: its coins changed in between
+/// (`ChatService.checkFeeAgainstReview`). Nothing was sent; the Review works its fee out again.
+struct SendFeeChangedError: LocalizedError {
+    let feeSompi: UInt64
+    var errorDescription: String? {
+        String(format: AppLocalization.string("The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again."),
+               locale: AppLocalization.locale, KaspaUnit.plain(feeSompi))
+    }
 }

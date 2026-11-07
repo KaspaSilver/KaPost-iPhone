@@ -183,7 +183,14 @@ final class PublicChatService: ObservableObject {
     func setCurrentWallet(_ walletAddress: String?) {
         let normalized = walletAddress?.lowercased()
         let sameWallet = normalized == self.walletAddress
-        if !sameWallet { settledPendingChannels = [] }
+        if !sameWallet {
+            // What was fetched and backfilled was the other wallet's store: this one's rooms
+            // start from nothing.
+            settledPendingChannels = []
+            deepBackfilledChannels = []
+            deepBackfillResume = [:]
+            indexerFetchedChannels = []
+        }
         // A room can already be on screen when the wallet lands: a cold launch from a room's
         // notification routes into it during loadWallet's awaits, before this ran. That room is
         // THIS wallet's and stays open, so its viewing state survives; only a real switch to
@@ -1434,10 +1441,13 @@ final class PublicChatService: ObservableObject {
         privateKey: Data,
         pendingId: String
     ) async throws {
-        if error is SendOutcomeUnknownError {
-            // It may have landed, so no Retry, which would post and pay twice. It stays pending
-            // until its delivered copy shows up, or the next launch settles it.
+        if let unknown = error as? SendOutcomeUnknownError {
+            // It may have landed, so no Retry, which would post and pay twice. "Not confirmed"
+            // until its delivered copy shows up.
             ChatService.shared.clearNoInputRetryState(for: pendingId)
+            pendingSendsThisRun.remove(pendingId)
+            store.markMessageUnconfirmed(pendingId: pendingId, txId: unknown.txId)
+            loadMessages(for: channel)
             let surfaced = KasiaError.networkError(SendOutcomeUnknownError.message)
             lastSendError = surfaced
             throw surfaced
@@ -1530,9 +1540,11 @@ final class PublicChatService: ObservableObject {
         let freshUtxos = try await NodePoolService.shared.getUtxosByAddresses([walletAddress])
         let candidateUtxos = chatService.prepareMessageUtxos(confirmed: freshUtxos)
         guard !candidateUtxos.isEmpty else {
-            // No coin at all on the address (and none in flight): waiting will not help, so say
-            // so instead of "wait for confirmations" - which retried in the background forever.
-            if freshUtxos.isEmpty { throw KasiaError.networkError(Self.notEnoughKasMessage) }
+            // No coin that waiting frees up (one being mined, or spent by a send in flight): a
+            // coin a scheduled post holds, or a mining reward, won't be free in seconds. Say so
+            // instead of "wait for confirmations" - which retried in the background forever.
+            let freedByWaiting = KaPostsScheduledStore.filterReserved(freshUtxos.filter { !$0.isCoinbase })
+            if freedByWaiting.isEmpty { throw KasiaError.networkError(Self.notEnoughKasMessage) }
             throw KasiaError.networkError(chatService.noSpendableFundsYetMessage())
         }
 
@@ -1610,6 +1622,11 @@ final class PublicChatService: ObservableObject {
             store.resolvePendingMessage(pendingId: pendingId, realId: txId, blockTime: blockTime)
             loadMessages(for: channel)
             return txId
+        } catch let unknown as SendOutcomeUnknownError {
+            // It may land, so its coins stay held: a send right after can't spend them again.
+            chatService.reserveMessageOutpoints(spentUtxos)
+            chatService.consumePendingUtxos(spentUtxos)
+            throw unknown
         } catch {
             chatService.releaseMessageOutpoints()
             throw error

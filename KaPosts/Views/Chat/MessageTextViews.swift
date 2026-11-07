@@ -1674,8 +1674,15 @@ private struct AudioShareSheet: UIViewControllerRepresentable {
         } else {
             fileExtension = "m4a"
         }
+        // The name comes from the message, so from its sender: only its last part, with no
+        // separators, can name the file (a "../" name would write outside the temp folder).
+        let baseName = URL(fileURLWithPath: fileName).lastPathComponent
+            .components(separatedBy: CharacterSet(charactersIn: "/:\\"))
+            .joined(separator: "_")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = baseName.isEmpty || baseName == "." || baseName == ".." ? "voice" : baseName
         let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(fileName.hasSuffix(".\(fileExtension)") ? fileName : "\(fileName).\(fileExtension)")
+            .appendingPathComponent(safeName.hasSuffix(".\(fileExtension)") ? safeName : "\(safeName).\(fileExtension)")
 
         try? data.write(to: tempURL)
 

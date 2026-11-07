@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "На вашем адресе для чатов недостаточно KAS. Пополните его и попробуйте снова.";
 "Finding your address..." = "Ищем ваш адрес...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Одно из вставленных слов недействительно. Проверьте свою копию и попробуйте снова.";
+
+/* Audit 2 */
+"Waiting" = "Ожидание";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Ждём подтверждения ваших монет. Отправка произойдёт сама через мгновение, поэтому не отправляйте повторно.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Этот пост ещё не в сети, поэтому на него нельзя ответить. Попробуйте снова, когда он будет опубликован.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "Удалите этот скриншот";
+"Skip the Search: Import on Address #0" = "Пропустить поиск: импортировать на адрес #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "Поиск средств на других адресах этого аккаунта не завершился, поэтому импорт использует адрес #0.";
+"Search Again" = "Искать снова";
+"Re-enter PIN" = "Введите PIN ещё раз";
+"The PINs don't match." = "PIN-коды не совпадают.";
+"Mining reward, not spendable here" = "Награда за майнинг, здесь не тратится";
+"Not confirmed yet" = "Ещё не подтверждено";
+"Just spent by a post or send" = "Только что потрачено постом или отправкой";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "Комиссия сети теперь %@ KAS — больше, чем было в обзоре. Ничего не отправлено: проверьте новую комиссию и смахните снова.";
+"This account's keys are on this phone again, so nothing was removed." = "Ключи этого аккаунта снова на этом телефоне, поэтому ничего не удалено.";
+"Sending" = "Отправка";
+"Failed · Tap to retry" = "Ошибка · Нажмите, чтобы повторить";
+"Needs attention" = "Требует внимания";
+"Failed to send" = "Не удалось отправить";

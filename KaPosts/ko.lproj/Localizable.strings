@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "채팅 주소에 KAS가 부족합니다. 추가한 후 다시 시도하세요.";
 "Finding your address..." = "주소를 찾는 중...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "붙여넣은 단어 중 하나가 올바른 단어가 아닙니다. 사본을 확인하고 다시 시도하세요.";
+
+/* Audit 2 */
+"Waiting" = "대기 중";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "코인이 확인되기를 기다리는 중입니다. 잠시 후 자동으로 전송되니 다시 보내지 마세요.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "이 게시물은 아직 네트워크에 없어 답글을 달 수 없습니다. 게시된 후 다시 시도하세요.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "그 스크린샷 삭제";
+"Skip the Search: Import on Address #0" = "검색 건너뛰기: 주소 #0으로 가져오기";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "이 계정의 다른 주소에서 잔액 검색이 끝나지 않아 가져오기는 주소 #0을 사용합니다.";
+"Search Again" = "다시 검색";
+"Re-enter PIN" = "PIN 다시 입력";
+"The PINs don't match." = "PIN이 일치하지 않습니다.";
+"Mining reward, not spendable here" = "채굴 보상이라 여기서 사용할 수 없음";
+"Not confirmed yet" = "아직 확인되지 않음";
+"Just spent by a post or send" = "방금 게시물이나 전송에 사용됨";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "네트워크 수수료가 이제 %@ KAS로, 검토 화면보다 높습니다. 아무것도 전송되지 않았습니다. 새 수수료를 확인하고 다시 스와이프하세요.";
+"This account's keys are on this phone again, so nothing was removed." = "이 계정의 키가 이 휴대폰에 다시 있어 아무것도 삭제되지 않았습니다.";
+"Sending" = "보내는 중";
+"Failed · Tap to retry" = "실패 · 탭하여 다시 시도";
+"Needs attention" = "확인 필요";
+"Failed to send" = "전송 실패";

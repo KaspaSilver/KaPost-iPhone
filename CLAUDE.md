@@ -90,8 +90,32 @@ coin-control screens stay in the code but nothing opens them.
 
 Nothing that may have landed is offered again. A post, reply or thread whose send got no answer shows
 "Not confirmed" (`DraftPost.Delivery.unconfirmed`) with no Retry, and `submitWithUtxoRetry` never retries
-it; a room message stays pending, and a reaction is left as it is. An instant tip with an unknown outcome
-shows a toast instead of the tip sheet. A node's "already accepted" answer counts only when it names the id
+it; a room message takes the transaction's id and shows "Not confirmed" (`DeliveryStatus.unconfirmed`), which
+its delivered copy turns into Sent, and a reaction is left as it is. An instant tip with an unknown outcome
+shows a toast instead of the tip sheet. A payment put off until its coins confirm (`sendPayment` returning
+nil) says "Waiting" (`SendDeferredError`), is not counted as a tip, and offers no Try Again. A node rejection
+blocks the lost-answer check only when it is about the transaction itself (`isVerdictOnTransaction`):
+"already in the mempool", orphan and spent-input answers may come from the copy whose answer was lost.
+
+Coins: posts, likes, room messages, tips, Send and .kachat combining all draw from one ledger in
+`ChatService` (`prepareMessageUtxos`, `unreservedUtxos`, `recordPlainSend`). What a send spent stays
+reserved until it is in a block, also when its outcome is unknown, so the next action never picks it again.
+`NodePoolService.submitTransaction` and `submitRpcTransaction(_:expectedTxId:)` reserve every submitted
+transaction's inputs themselves (`ChatService.reserveOutpointKeys`), so KNS, .kachat and any new path are
+covered too.
+Fee estimates price the speed's extra in the shape the send builds, and Max stops at one transaction's
+`maxInputsPerTransaction` coins (the tip sheet too). A failed fee estimate shows Try Again. Available,
+Compound and Coin Control count only what a send may spend (`withdrawalSpendable`); Max at Fast or Priority
+prices the extra on its own coins (`maxSendAmount`); a send rebuilt at the swipe that would pay more than the
+Review showed stops with `SendFeeChangedError`. After a rejection, only a mempool or the built-in REST server
+can call a send landed.
+
+Accounts: every removal path clears both networks' stores and the spending-address data
+(`removeSpendingData`); the Secure Enclave key goes only when no saved account or Keychain snapshot remains.
+A failed key write puts the previous slot back. A record with no keys first tries its own snapshot before
+the recovery screen, and import or Log Out clears a stale recovery. The passphrase search holds Import for
+at most 12 s, with Skip and Search Again. The NFC PIN is typed twice. The Passcode Required alert has its own
+window. A node's "already accepted" answer counts only when it names the id
 this device computed (`acceptedTransactionId(from:expected:)`). Instant default tips skip Face ID, so they
 are capped at 10 KAS (`KaPostsSettingsView.instantTipLimitSompi`; a bigger one opens the tip sheet),
 turning them on asks first, a fiat tip needs a price under ten minutes old (`KaspaPriceService.freshPrice`),
@@ -105,8 +129,11 @@ the locally computed id. The words and passphrase are readable only while the ph
 that runs in the background may need them (`allSpendingAddresses` reads the address cache). Keys left by an
 earlier install are listed as saved accounts rather than opening. Third-party keyboards are refused, and the
 privacy cover is its own window above sheets. A room message still pending from an earlier run is settled
-once per room after its history loads (`settlePendingMessages`). People read "12 or 24 words", never "seed
-phrase".
+once per room after its history loads (`settlePendingMessages`), as "Not confirmed" when its copy isn't
+there. Held 5-second actions belong to the account they were made as (`KaPostsActionScheduler` drops them on
+a switch), a thread chain stops if the account changes, and Reply is off on a post not on chain yet. People read "12 or 24 words", never "seed
+phrase". `AppLog.log` shortens any Kaspa address to its last 8 characters, so logs
+(and URLs in them) name no account.
 
 ## Moderation (App Store guideline 1.2)
 

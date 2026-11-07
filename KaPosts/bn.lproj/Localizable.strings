@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "আপনার চ্যাটিং ঠিকানায় যথেষ্ট KAS নেই। কিছু যোগ করে আবার চেষ্টা করুন।";
 "Finding your address..." = "আপনার ঠিকানা খোঁজা হচ্ছে...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "পেস্ট করা একটি শব্দ বৈধ নয়। আপনার কপি দেখে আবার চেষ্টা করুন।";
+
+/* Audit 2 */
+"Waiting" = "অপেক্ষমাণ";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "আপনার কয়েন নিশ্চিত হওয়ার অপেক্ষায়। কিছুক্ষণের মধ্যে এটি নিজে থেকেই যাবে, তাই আবার পাঠাবেন না।";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "এই পোস্টটি এখনও নেটওয়ার্কে নেই, তাই এর উত্তর দেওয়া যাবে না। পোস্ট হয়ে গেলে আবার চেষ্টা করুন।";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "ওই স্ক্রিনশট মুছুন";
+"Skip the Search: Import on Address #0" = "খোঁজা বাদ দিন: ঠিকানা #0-এ ইমপোর্ট করুন";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "এই অ্যাকাউন্টের অন্য ঠিকানাগুলোতে ফান্ড খোঁজা শেষ হয়নি, তাই ইমপোর্ট ঠিকানা #0 ব্যবহার করবে।";
+"Search Again" = "আবার খুঁজুন";
+"Re-enter PIN" = "PIN আবার দিন";
+"The PINs don't match." = "PIN মিলছে না।";
+"Mining reward, not spendable here" = "মাইনিং পুরস্কার, এখানে খরচ করা যাবে না";
+"Not confirmed yet" = "এখনও নিশ্চিত হয়নি";
+"Just spent by a post or send" = "এইমাত্র একটি পোস্ট বা পাঠানোয় খরচ হয়েছে";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "নেটওয়ার্ক ফি এখন %@ KAS, রিভিউতে যা দেখানো হয়েছিল তার চেয়ে বেশি। কিছুই পাঠানো হয়নি: নতুন ফি দেখে আবার সোয়াইপ করুন।";
+"This account's keys are on this phone again, so nothing was removed." = "এই অ্যাকাউন্টের কী আবার এই ফোনে আছে, তাই কিছুই সরানো হয়নি।";
+"Sending" = "পাঠানো হচ্ছে";
+"Failed · Tap to retry" = "ব্যর্থ · আবার চেষ্টা করতে ট্যাপ করুন";
+"Needs attention" = "মনোযোগ প্রয়োজন";
+"Failed to send" = "পাঠানো যায়নি";

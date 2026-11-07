@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "チャットアドレスのKASが足りません。追加してからもう一度お試しください。";
 "Finding your address..." = "アドレスを探しています...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "貼り付けた単語の1つが有効な単語ではありません。控えを確認してもう一度お試しください。";
+
+/* Audit 2 */
+"Waiting" = "待機中";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "コインの承認を待っています。まもなく自動で送信されるので、もう一度送信しないでください。";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "この投稿はまだネットワーク上にないため、返信できません。投稿が完了してからもう一度お試しください。";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "そのスクリーンショットを削除";
+"Skip the Search: Import on Address #0" = "検索をスキップ：アドレス#0にインポート";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "このアカウントの他のアドレスにある資金の検索が完了しなかったため、インポートはアドレス#0を使います。";
+"Search Again" = "もう一度検索";
+"Re-enter PIN" = "PINをもう一度入力";
+"The PINs don't match." = "PINが一致しません。";
+"Mining reward, not spendable here" = "マイニング報酬のため、ここでは使えません";
+"Not confirmed yet" = "未承認";
+"Just spent by a post or send" = "投稿または送金で使われたばかり";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "ネットワーク手数料が %@ KAS になり、確認画面の表示より高くなりました。何も送信されていません。新しい手数料を確認して、もう一度スワイプしてください。";
+"This account's keys are on this phone again, so nothing was removed." = "このアカウントの鍵がこのiPhoneに戻ったため、何も削除されませんでした。";
+"Sending" = "送信中";
+"Failed · Tap to retry" = "失敗 · タップして再試行";
+"Needs attention" = "要確認";
+"Failed to send" = "送信に失敗しました";

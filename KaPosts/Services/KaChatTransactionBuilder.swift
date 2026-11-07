@@ -758,9 +758,11 @@ struct KasiaTransactionBuilder {
         if selection.keepsChange(withRecipientAmount: amount) {
             outputs.append(KaspaRpcTransactionOutput(value: selection.change, scriptPublicKey: KaspaScriptPublicKey(version: 0, script: senderScriptPubKey)))
         }
+        // The selector spends a 3-sompi buffer on top of the minimum fee (`selectUtxosForPayment`);
+        // it is part of what the send pays, so it is part of the fee shown.
         return SendFeeEstimate(
             networkFee: estimateFee(payload: Data(), inputCount: selection.utxos.count, outputs: outputs,
-                                    signatureScriptSize: signatureScriptSize) + extraFeeSompi,
+                                    signatureScriptSize: signatureScriptSize) + 3 + extraFeeSompi,
             foldedChange: selection.keepsChange(withRecipientAmount: amount) ? 0 : selection.change
         )
     }
@@ -770,14 +772,17 @@ struct KasiaTransactionBuilder {
         try estimatePaymentFeeEstimate(utxos: utxos, payload: payload, amount: amount, recipientScriptPubKey: recipientScriptPubKey, senderScriptPubKey: senderScriptPubKey, signatureScriptSize: signatureScriptSize).networkFee
     }
 
-    /// What a payment costs, with the change too small to keep that goes to the fee.
-    static func estimatePaymentFeeEstimate(utxos: [UTXO], payload: Data, amount: UInt64, recipientScriptPubKey: Data, senderScriptPubKey: Data, signatureScriptSize: Int = 66) throws -> SendFeeEstimate {
+    /// What a payment costs, with the change too small to keep that goes to the fee. With an
+    /// `extraFeeSompi`, the shape the send builds with that extra in, and the extra counted in
+    /// the network fee.
+    static func estimatePaymentFeeEstimate(utxos: [UTXO], payload: Data, amount: UInt64, recipientScriptPubKey: Data, senderScriptPubKey: Data, extraFeeSompi: UInt64 = 0, signatureScriptSize: Int = 66) throws -> SendFeeEstimate {
         let selection = try selectUtxosForPayment(
             utxos: utxos,
             amount: amount,
             payload: payload,
             recipientScriptPubKey: recipientScriptPubKey,
             senderScriptPubKey: senderScriptPubKey,
+            extraFeeSompi: extraFeeSompi,
             signatureScriptSize: signatureScriptSize
         )
 
@@ -794,9 +799,10 @@ struct KasiaTransactionBuilder {
             ))
         }
 
+        // with the selector's 3-sompi buffer, which the send pays too (see `estimatePlainTransferFee`)
         return SendFeeEstimate(
             networkFee: estimateFee(payload: payload, inputCount: selection.utxos.count, outputs: outputs,
-                                    signatureScriptSize: signatureScriptSize),
+                                    signatureScriptSize: signatureScriptSize) + 3 + extraFeeSompi,
             foldedChange: selection.keepsChange(withRecipientAmount: amount) ? 0 : selection.change
         )
     }

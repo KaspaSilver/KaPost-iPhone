@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "KAS di alamat chat Anda tidak cukup. Tambahkan dan coba lagi.";
 "Finding your address..." = "Mencari alamat Anda...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Salah satu kata yang ditempel tidak valid. Periksa salinan Anda dan coba lagi.";
+
+/* Audit 2 */
+"Waiting" = "Menunggu";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Menunggu koin Anda dikonfirmasi. Ini akan terkirim sendiri sebentar lagi, jadi jangan kirim lagi.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Postingan ini belum ada di jaringan, jadi belum bisa dibalas. Coba lagi setelah terposting.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "Hapus Tangkapan Layar Itu";
+"Skip the Search: Import on Address #0" = "Lewati pencarian: impor ke alamat #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "Pencarian dana di alamat lain akun ini belum selesai, jadi Impor memakai alamat #0.";
+"Search Again" = "Cari lagi";
+"Re-enter PIN" = "Masukkan ulang PIN";
+"The PINs don't match." = "PIN tidak cocok.";
+"Mining reward, not spendable here" = "Hadiah penambangan, tidak bisa dibelanjakan di sini";
+"Not confirmed yet" = "Belum dikonfirmasi";
+"Just spent by a post or send" = "Baru saja dipakai oleh postingan atau pengiriman";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "Biaya jaringan sekarang %@ KAS, lebih tinggi dari yang ditampilkan di Tinjauan. Tidak ada yang terkirim: periksa biaya baru lalu geser lagi.";
+"This account's keys are on this phone again, so nothing was removed." = "Kunci akun ini sudah ada lagi di ponsel ini, jadi tidak ada yang dihapus.";
+"Sending" = "Mengirim";
+"Failed · Tap to retry" = "Gagal · Ketuk untuk mencoba lagi";
+"Needs attention" = "Perlu perhatian";
+"Failed to send" = "Gagal mengirim";

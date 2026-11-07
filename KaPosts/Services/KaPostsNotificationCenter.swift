@@ -40,8 +40,13 @@ final class KaPostsNotificationCenter: ObservableObject {
     func recordArrivals(_ count: Int) {
         guard count > 0 else { return }
         unseenCount += count
+        lastArrivalAt = Date()
         persist()
     }
+
+    /// When activity last arrived (this run): the notifications screen reloads when it is newer
+    /// than its own last load.
+    private(set) var lastArrivalAt: Date?
 
     /// The user has opened the KaPosts notifications screen; nothing is unseen any more.
     func markAllSeen() {

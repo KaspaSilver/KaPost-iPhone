@@ -417,10 +417,9 @@ struct PaymentRequestSheetPresenter: ViewModifier {
 /// Without KaPay installed, the App Store opens to get it. KaChat follows the same rule.
 enum KaPayHandoff {
     static let scheme = "kapay"
-    /// Where a request goes when KaPay isn't installed. KaPay isn't listed yet, so this is an App
-    /// Store search for it; swap in its page (`https://apps.apple.com/app/id<KaPay's id>`) once
-    /// it is.
-    static let appStoreURL = URL(string: "https://apps.apple.com/search?term=KaPay")!
+    /// Where a request goes when KaPay isn't installed: the KaChat apps' install page, which
+    /// links each app.
+    static let appStoreURL = URL(string: "https://home.kachat.app/install/")!
 
     @MainActor
     static func pay(_ request: PaymentRequest, inApp: @escaping () -> Void) {

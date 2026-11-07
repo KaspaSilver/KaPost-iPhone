@@ -136,10 +136,10 @@ struct KaPlayBotChallenge: Equatable {
     }
 }
 
-/// A challenge opens in KaPlay. Without KaPlay installed, the App Store opens to get it.
+/// A challenge opens in KaPlay. Without KaPlay installed, the KaChat apps' install page opens.
 enum KaPlayHandoff {
-    /// KaPlay isn't listed yet, so this is an App Store search for it; swap in its page once it is.
-    static let appStoreURL = URL(string: "https://apps.apple.com/search?term=KaPlay")!
+    /// The KaChat apps' install page, which links each app.
+    static let appStoreURL = URL(string: "https://home.kachat.app/install/")!
 
     @MainActor
     static func open(_ challenge: KaPlayBotChallenge) {

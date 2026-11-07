@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "Não há KAS suficiente no seu endereço de chat. Adicione e tente novamente.";
 "Finding your address..." = "A procurar o seu endereço...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Uma das palavras coladas não é válida. Verifique a sua cópia e tente novamente.";
+
+/* Audit 2 */
+"Waiting" = "Aguardando";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Aguardando a confirmação das suas moedas. O envio será feito sozinho em instantes, então não envie de novo.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Esta publicação ainda não está na rede, então não é possível responder. Tente novamente depois que ela for publicada.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "Apague essa captura de tela";
+"Skip the Search: Import on Address #0" = "Pular a busca: importar no endereço #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "A busca por fundos nos outros endereços desta conta não terminou, então Importar usa o endereço #0.";
+"Search Again" = "Buscar novamente";
+"Re-enter PIN" = "Digite o PIN novamente";
+"The PINs don't match." = "Os PINs não coincidem.";
+"Mining reward, not spendable here" = "Recompensa de mineração, não pode ser gasta aqui";
+"Not confirmed yet" = "Ainda não confirmado";
+"Just spent by a post or send" = "Acabou de ser gasto por uma publicação ou envio";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "A taxa de rede agora é de %@ KAS, mais do que a revisão mostrava. Nada foi enviado: confira a nova taxa e deslize de novo.";
+"This account's keys are on this phone again, so nothing was removed." = "As chaves desta conta estão neste telefone de novo, então nada foi removido.";
+"Sending" = "Enviando";
+"Failed · Tap to retry" = "Falhou · Toque para tentar de novo";
+"Needs attention" = "Requer atenção";
+"Failed to send" = "Falha ao enviar";

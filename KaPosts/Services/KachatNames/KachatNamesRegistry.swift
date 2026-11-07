@@ -880,6 +880,22 @@ final class KachatNamesRegistry: ObservableObject {
             self.identityBatchQueue = []
             self.identityBatchTask = nil
             let batch = await self.identitiesBatch(keys)
+            // No batch answer (an older registry, a blip): one lookup each, four at a time
+            // rather than one after another down a whole screen of authors.
+            var single: [String: KachatNames.Identity] = [:]
+            if batch == nil {
+                for start in stride(from: 0, to: keys.count, by: 4) {
+                    let slice = keys[start..<min(start + 4, keys.count)]
+                    await withTaskGroup(of: (String, KachatNames.Identity?).self) { group in
+                        for key in slice {
+                            group.addTask { [weak self] in (key, try? await self?.identity(address: key)) }
+                        }
+                        for await (key, identity) in group {
+                            if let identity { single[key] = identity }
+                        }
+                    }
+                }
+            }
             var changed = false
             for key in keys {
                 let found: KachatNames.Identity?
@@ -887,7 +903,7 @@ final class KachatNamesRegistry: ObservableObject {
                     // left out of the answer: no names and no profile
                     found = batch[key] ?? KachatNames.Identity(address: key, label: nil, names: [], profile: nil)
                 } else {
-                    found = try? await self.identity(address: key)
+                    found = single[key]
                 }
                 self.identityLookups.remove(key)
                 guard let found else {

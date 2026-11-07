@@ -21,6 +21,9 @@ struct PublicChatMessage: Identifiable, Equatable {
         case sent
         case pending
         case failed
+        /// The send's outcome is unknown: it may have landed, so no Retry, which could post and
+        /// pay twice. Its delivered copy turns it into `.sent`.
+        case unconfirmed
     }
 
     let id: String
@@ -263,7 +266,14 @@ final class PublicChatStore {
                     let request = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
                     request.predicate = NSPredicate(format: "id == %@", message.id)
                     request.fetchLimit = 1
-                    guard (try? context.fetch(request))?.first == nil else { continue }
+                    if let existing = (try? context.fetch(request))?.first {
+                        if existing.deliveryStatus == PublicChatMessage.DeliveryStatus.unconfirmed.rawValue {
+                            existing.deliveryStatus = PublicChatMessage.DeliveryStatus.sent.rawValue
+                            existing.blockTime = message.blockTime
+                            inserted.insert(message.id)
+                        }
+                        continue
+                    }
                     let row = CDPublicChatMessage(context: context)
                     row.id = message.id
                     row.channelName = normalized
@@ -329,9 +339,33 @@ final class PublicChatStore {
         }
     }
 
-    /// Pending rows no send is working on (`keeping` are the ones that are): one whose delivered copy
-    /// is here goes, and the rest are marked failed, so Retry appears instead of Sending forever.
-    /// Returns whether anything changed.
+    /// A send whose outcome is unknown: the row takes the transaction's id, so its delivered copy
+    /// settles it (`insertMessages`), and shows "Not confirmed" with no Retry.
+    func markMessageUnconfirmed(pendingId: String, txId: String) {
+        guard isLoaded else { return }
+        let context = viewContext
+        context.performAndWait {
+            let request = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
+            request.predicate = NSPredicate(format: "id == %@", pendingId)
+            request.fetchLimit = 1
+            guard let row = (try? context.fetch(request))?.first else { return }
+            let delivered = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
+            delivered.predicate = NSPredicate(format: "id == %@", txId)
+            delivered.fetchLimit = 1
+            if ((try? context.count(for: delivered)) ?? 0) > 0 {
+                context.delete(row)
+            } else {
+                row.id = txId
+                row.deliveryStatus = PublicChatMessage.DeliveryStatus.unconfirmed.rawValue
+            }
+            save(context)
+        }
+    }
+
+    /// Pending rows no send is working on (`keeping` are the ones that are), and unconfirmed rows
+    /// from earlier runs whose id never became a transaction's: one whose delivered copy is here
+    /// goes. The rest may have landed while the app was closed, so they show "Not confirmed"
+    /// rather than a Retry that could pay twice. Returns whether anything changed.
     func settlePendingMessages(inChannel channel: String, keeping: Set<String>) -> Bool {
         guard isLoaded else { return false }
         let normalized = PublicChatChannelName.normalize(channel)
@@ -339,8 +373,11 @@ final class PublicChatStore {
         var changed = false
         context.performAndWait {
             let request = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
-            request.predicate = NSPredicate(format: "channelName == %@ AND deliveryStatus == %@",
-                                            normalized, PublicChatMessage.DeliveryStatus.pending.rawValue)
+            request.predicate = NSPredicate(
+                format: "channelName == %@ AND (deliveryStatus == %@ OR (deliveryStatus == %@ AND id BEGINSWITH %@))",
+                normalized, PublicChatMessage.DeliveryStatus.pending.rawValue,
+                PublicChatMessage.DeliveryStatus.unconfirmed.rawValue, "pending_"
+            )
             for row in (try? context.fetch(request)) ?? [] where !keeping.contains(row.id) {
                 let delivered = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
                 delivered.predicate = NSPredicate(
@@ -351,10 +388,11 @@ final class PublicChatStore {
                 delivered.fetchLimit = 1
                 if ((try? context.count(for: delivered)) ?? 0) > 0 {
                     context.delete(row)
-                } else {
-                    row.deliveryStatus = PublicChatMessage.DeliveryStatus.failed.rawValue
+                    changed = true
+                } else if row.deliveryStatus != PublicChatMessage.DeliveryStatus.unconfirmed.rawValue {
+                    row.deliveryStatus = PublicChatMessage.DeliveryStatus.unconfirmed.rawValue
+                    changed = true
                 }
-                changed = true
             }
             if changed { save(context) }
         }

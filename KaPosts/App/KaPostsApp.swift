@@ -496,23 +496,26 @@ extension Notification.Name {
 /// underneath presented sheets, which is where the 12 or 24 words and private keys are shown.
 @MainActor
 private enum PrivacyCoverWindow {
-    private static var window: UIWindow?
+    /// One per scene: on iPad each window of the app is its own scene, and a cover over only the
+    /// first left the others showing in the App Switcher.
+    private static var windows: [ObjectIdentifier: UIWindow] = [:]
 
     static func show() {
-        guard window == nil,
-              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
-        let cover = UIWindow(windowScene: scene)
-        cover.windowLevel = .alert + 1
-        // the app's appearance (Settings' choice), which its own windows carry
-        cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
-        cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
-        cover.isHidden = false
-        window = cover
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        where windows[ObjectIdentifier(scene)] == nil {
+            let cover = UIWindow(windowScene: scene)
+            cover.windowLevel = .alert + 1
+            // the app's appearance (Settings' choice), which its own windows carry
+            cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
+            cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
+            cover.isHidden = false
+            windows[ObjectIdentifier(scene)] = cover
+        }
     }
 
     static func hide() {
-        window?.isHidden = true
-        window = nil
+        windows.values.forEach { $0.isHidden = true }
+        windows = [:]
     }
 }
 

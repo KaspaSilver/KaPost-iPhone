@@ -3275,6 +3275,15 @@ struct SendOutcomeUnknownError: LocalizedError {
     var errorDescription: String? { Self.message }
 }
 
+/// A payment put off until the coins it spends confirm: the retry timer sends it on its own, so
+/// it is neither sent yet nor a failure to try again, which would pay twice.
+struct SendDeferredError: LocalizedError {
+    static var message: String {
+        AppLocalization.string("Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again.")
+    }
+    var errorDescription: String? { Self.message }
+}
+
 enum UserFacingError {
     static func message(for error: Error) -> String {
         if error is CancellationError { return "Cancelled." }

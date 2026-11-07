@@ -837,7 +837,8 @@ struct SendFromCompactRow: View {
             // A failed read says nothing about the balance: left unknown, not shown as 0.
             let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address])
             guard !Task.isCancelled, let utxos else { return }
-            availableSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+            // what a send can spend: not coins just spent, held or not yet usable
+            availableSompi = ChatService.shared.withdrawalSpendable(utxos).reduce(UInt64(0)) { $0 + $1.amount }
         }
     }
 
@@ -1571,8 +1572,10 @@ private struct SendProgressScreen: View {
     /// Sent or failed: the DAG steps back and the outcome takes over.
     private var finished: Bool { done || failure != nil }
 
-    /// It may have gone through, so there's nothing to try again.
-    private var outcomeUnknown: Bool { failure == SendOutcomeUnknownError.message }
+    /// It may have gone through, or it is waiting to go on its own: nothing to try again.
+    private var outcomeUnknown: Bool { failure == SendOutcomeUnknownError.message || isDeferred }
+    /// Put off until its coins confirm (`SendDeferredError`).
+    private var isDeferred: Bool { failure == SendDeferredError.message }
 
     private var explorerURL: URL? {
         sent.flatMap { AppSettings.load().kaspaExplorer.txURL(for: $0.txId) }
@@ -1599,7 +1602,7 @@ private struct SendProgressScreen: View {
                         .foregroundStyle(.black, Color.accentColor)
                         .transition(.scale(scale: 0.4).combined(with: .opacity))
                 } else if outcomeUnknown {
-                    Image(systemName: "questionmark.circle.fill")
+                    Image(systemName: isDeferred ? "clock.fill" : "questionmark.circle.fill")
                         .font(.scaled(size: 72, weight: .semibold))
                         .foregroundStyle(.black, Color.orange)
                         .transition(.scale(scale: 0.4).combined(with: .opacity))
@@ -1612,7 +1615,7 @@ private struct SendProgressScreen: View {
             }
 
             VStack(spacing: 6) {
-                Text(done ? labels.done : outcomeUnknown ? "Not confirmed" : failure != nil ? "Failed"
+                Text(done ? labels.done : isDeferred ? "Waiting" : outcomeUnknown ? "Not confirmed" : failure != nil ? "Failed"
                      : (isSending ? labels.working : (armed ? labels.release : "Keep Swiping")))
                     .font(.largeTitle.weight(.bold))
                 if let amount = sent?.amountSompi ?? amountSompi {
@@ -1947,7 +1950,8 @@ struct SendFromSection: View {
             // A failed read says nothing about the balance: left unknown, not shown as 0.
             let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address])
             guard !Task.isCancelled, let utxos else { return }
-            availableSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+            // what a send can spend: not coins just spent, held or not yet usable
+            availableSompi = ChatService.shared.withdrawalSpendable(utxos).reduce(UInt64(0)) { $0 + $1.amount }
         }
     }
 

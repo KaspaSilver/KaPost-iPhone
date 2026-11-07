@@ -872,6 +872,9 @@ struct KaPostsView: View {
             // are decorated per requesterPubkey), so drop the lot and start over. The epoch
             // bumps make any in-flight page drop its result instead of appending.
             PostTranslationService.shared.reset()
+            // Held 5-second actions were the old account's: dropped, with their Undo toast.
+            scheduler.cancelAll()
+            undoToast = nil
             loadGates.reset()
             pendingNewPosts = []
             chainResolvedPosts = []
@@ -1532,7 +1535,9 @@ struct KaPostsView: View {
     /// need several server pages - `KaPostsPaginator.collect` follows the server's cursor until
     /// it has enough VISIBLE rows, or the feed is exhausted, or it hits its request cap.
     private func loadFeedPage(reset: Bool, maxRequests: Int = KaPostsPaginator.maxRequestsPerTrigger) async {
-        guard !feedPage.isLoading else { return }
+        // A refresh starts over even while a page is loading: switching feeds mid-load must load
+        // the new feed, and the old load's answer is dropped by its epoch.
+        guard reset || !feedPage.isLoading else { return }
         guard reset || (feedPage.hasMore && feedPage.errorMessage == nil && !feedPage.stalled) else { return }
         let source = feedSource(for: selectedFeed)
         if reset {
@@ -2317,6 +2322,9 @@ struct KaPostsView: View {
     private func continueThread(localId: UUID) {
         guard threadRemainders[localId] != nil else { return }
         mutatePost(id: localId) { $0.deliveryStatus = .pending }
+        // The account that wrote the thread: after a switch, the rest would be signed by another.
+        let owner = WalletManager.shared.currentWallet?.publicAddress
+        func stillOwner() -> Bool { WalletManager.shared.currentWallet?.publicAddress == owner }
         Task {
             do {
                 let myPubkey = try? KaPostsAPIClient.shared.requesterPubkey()
@@ -2335,6 +2343,10 @@ struct KaPostsView: View {
                       let parentTxId = remainder.parentTxId {
                     // Let the previous tx's change land in the node's UTXO index (~1s blocks).
                     try await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard stillOwner() else {
+                        AppLog.log("[KaPosts] Thread stopped: the account changed mid-chain")
+                        return
+                    }
                     let segmentMentions = await mentionedPubkeys(in: segment)
                     let txId = try await submitWithUtxoRetry {
                         try await KaPostsAPIClient.shared.submitReply(
@@ -2460,7 +2472,12 @@ struct KaPostsView: View {
         }
         threadProbeClaims.inFlight += 1
         defer { threadProbeClaims.inFlight -= 1 }
-        guard let page = try? await KaPostsAPIClient.shared.fetchReplies(postId: remoteId, limit: 10, before: nil) else { return }
+        guard let page = try? await KaPostsAPIClient.shared.fetchReplies(postId: remoteId, limit: 10, before: nil) else {
+            // Cancelled (the row scrolled away) or failed: no answer, so the claim, which
+            // persists, mustn't stop the next appearance from asking.
+            threadProbeClaims.unclaim(remoteId)
+            return
+        }
         if page.posts.contains(where: { reply in
             KaPostsAPIClient.kaspaAddress(fromPubkey: reply.userPublicKey) == post.posterAddress
         }) {
@@ -2586,10 +2603,16 @@ struct KaPostsView: View {
     private func scheduleReply(to post: DraftPost, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // A post still sending, failed or not confirmed has nothing on chain to reply to: a
+        // comment kept on this phone only, shown as sent, would never reach anyone.
+        guard let parentRemoteId = post.remoteId else {
+            actionError = AppLocalization.string("This post isn't on the network yet, so it can't be replied to. Try again once it has posted.")
+            return
+        }
         let myAddress = WalletManager.shared.currentWallet?.publicAddress ?? ""
         var reply = DraftPost(text: trimmed, timestamp: Date(), posterAddress: myAddress)
         reply.posterPubkey = try? KaPostsAPIClient.shared.requesterPubkey()
-        reply.deliveryStatus = post.remoteId != nil ? .pending : .sent
+        reply.deliveryStatus = .pending
         let localReplyId = reply.id
         sessionReplyIds.insert(localReplyId)
         // Newest first, like the indexer orders replies - so the comment appears right under
@@ -2605,9 +2628,6 @@ struct KaPostsView: View {
         if let openThreadId, openThreadId != post.id, !expandedCommentIds.contains(post.id) {
             expandReplies(for: post)
         }
-        // A parent that is not on chain yet has nothing to reply TO on the network; the comment
-        // still shows locally, exactly as it did before.
-        guard let parentRemoteId = post.remoteId else { return }
         let parentAuthor = post.posterPubkey
         let key = "comment:\(localReplyId)"
         showUndoToast(key: key, postId: localReplyId, label: "Posting comment", draftText: trimmed)
@@ -3326,6 +3346,12 @@ struct KaPostsView: View {
         showActionToast("Post not found - it may be older than the current feed", txId: txId)
     }
 
+    /// Your profile's pages are recent, and from after your last post, delete or edit.
+    private var isMyProfileFresh: Bool {
+        guard FeedLoadGates.isFresh(loadGates.myProfileLoadedAt), let loadedAt = loadGates.myProfileLoadedAt else { return false }
+        return (KaPostsAPIClient.ownActivityAt ?? .distantPast) < loadedAt
+    }
+
     /// Own posts+replies from page one, unless they were loaded that way within the last
     /// `FeedLoadGates.staleAfter` - `findPost` has already searched a fresh set, and resetting
     /// would discard whatever the profile screen has scrolled in. Returns whether it fetched.
@@ -3333,7 +3359,7 @@ struct KaPostsView: View {
     private func reloadMyProfileIfStale() async -> Bool {
         guard let pubkey = try? KaPostsAPIClient.shared.requesterPubkey() else { return false }
         let hasContent = !myProfileRemotePosts.isEmpty || !myProfileRemoteReplies.isEmpty
-        guard !hasContent || !FeedLoadGates.isFresh(loadGates.myProfileLoadedAt) else { return false }
+        guard !hasContent || !isMyProfileFresh else { return false }
         await loadMyProfilePosts(pubkey: pubkey, reset: true)
         await loadMyProfileReplies(pubkey: pubkey, reset: true)
         return true
@@ -4087,7 +4113,7 @@ struct KaPostsView: View {
                 guard let pubkey = try? KaPostsAPIClient.shared.requesterPubkey() else { return }
                 // Coming back to the tab keeps the pages already scrolled in, as on the Feed:
                 // page one is re-pulled only when nothing is loaded or it has gone stale.
-                guard myProfileRemotePosts.isEmpty || !FeedLoadGates.isFresh(loadGates.myProfileLoadedAt) else { return }
+                guard myProfileRemotePosts.isEmpty || !isMyProfileFresh else { return }
                 loadGates.myProfileLoadedAt = Date()
                 isLoadingMyProfilePosts = myProfileRemotePosts.isEmpty
                 async let detailsFetch = try? KaPostsAPIClient.shared.fetchUserDetails(pubkey: pubkey)
@@ -4446,12 +4472,16 @@ struct KaPostsView: View {
             defer { tipsInFlight.remove(postId) }
             do {
                 let txId = try await ChatService.shared.sendPayment(to: recipient, amountSompi: amountSompi, extraFeeSompi: 0, tip: tip)
+                guard let txId else {
+                    // Put off until the coins confirm: the retry timer sends it. Not sent yet, so
+                    // not counted, and no amount screen, which would invite a second tip.
+                    showActionToast(SendDeferredError.message, txId: "")
+                    return
+                }
                 Haptics.success()
                 countTip(tip)
-                // A deferred send (no confirmed inputs yet) has no transaction to show; the
-                // retry timer owns it from here.
                 let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
-                showActionToast("Tipped \(amountText) to \(name)", txId: txId ?? "")
+                showActionToast("Tipped \(amountText) to \(name)", txId: txId)
             } catch is SendOutcomeUnknownError {
                 // It may have gone through: no amount screen, which would invite a second tip.
                 AppLog.log("[KaPosts] Instant tip outcome unknown")
@@ -5959,6 +5989,9 @@ private struct KaPostCellView: View {
                     tint: .secondary,
                     action: onComment
                 )
+                // Not on chain yet (sending, failed, not confirmed): nothing to reply to.
+                .disabled(post.remoteId == nil)
+                .opacity(post.remoteId == nil ? 0.4 : 1)
             }
             likeButton
             if scheduler.deadlines["dislike:\(post.id)"] != nil {
@@ -6658,8 +6691,17 @@ private struct KaPostTipSheet: View {
     @State private var showCoinControl = false
     @State private var availableSompi: UInt64?
     @State private var normalFeeSompi: UInt64?
-    /// Change too small to keep, which goes to the fee (`SendFeeEstimate`).
-    @State private var foldedChangeSompi: UInt64 = 0
+    /// The fee the tip pays, worked out with the speed's extra in the shape the send builds
+    /// (change too small to keep included).
+    @State private var builtFeeSompi: UInt64?
+    /// Why the fee couldn't be worked out: the swipe stays off until it can.
+    @State private var feeError: String?
+    /// Bumped by Try Again under a failed fee estimate.
+    @State private var feeRetry = 0
+    /// Max stopped at the coins one transaction can spend.
+    @State private var maxCapped = false
+    /// The latest Max request: an older one finishing late doesn't set the amount.
+    @State private var maxRequest: UUID?
     @State private var isEstimatingFee = false
     @State private var isEstimatingMax = false
     @State private var isSending = false
@@ -6702,7 +6744,8 @@ private struct KaPostTipSheet: View {
     }
 
     private var canSend: Bool {
-        amountSompi != nil && !isSending
+        amountSompi != nil && !isSending && !exceedsBalance
+            && !isEstimatingMax && !isEstimatingFee && feeError == nil && totalFeeSompi != nil
     }
 
     /// The amount is more than the From address holds.
@@ -6718,15 +6761,12 @@ private struct KaPostTipSheet: View {
 
     /// Extra priority tip on top of the base (Normal-tier) fee - custom overrides the tier.
     private var extraFeeSompi: UInt64 {
-        guard let normalFeeSompi else { return 0 }
         if let customExtraFeeSompi { return customExtraFeeSompi }
+        guard let normalFeeSompi else { return 0 }
         return normalFeeSompi * (feeTier.multiplier - 1)
     }
 
-    private var totalFeeSompi: UInt64? {
-        guard let normalFeeSompi else { return nil }
-        return SendFeeEstimate(networkFee: normalFeeSompi, foldedChange: foldedChangeSompi).total(extra: extraFeeSompi)
-    }
+    private var totalFeeSompi: UInt64? { builtFeeSompi }
 
     private func trimmedKas(_ sompi: UInt64) -> String {
         var text = String(format: "%.8f", Double(sompi) / 100_000_000.0)
@@ -6793,22 +6833,47 @@ private struct KaPostTipSheet: View {
             // A failed read says nothing about the balance: left unknown, not shown as 0.
             let utxos = try? await NodePoolService.shared.getUtxosByAddresses([fromAddress])
             guard !Task.isCancelled, let utxos else { return }
-            availableSompi = KaPostsScheduledStore.filterReserved(utxos).reduce(UInt64(0)) { $0 + $1.amount }
+            // what the tip can spend: not coins just spent, held or not yet usable
+            availableSompi = ChatService.shared.withdrawalSpendable(utxos).reduce(UInt64(0)) { $0 + $1.amount }
         }
-        .task(id: "\(amountSompi ?? 0)#\(manualUtxos?.count ?? -1)#\(memo)#\(source.spendingIndex ?? -1)") {
+        // The speed and a custom fee are in the key: a bigger extra can take another coin, or no
+        // longer leave change worth keeping, so the fee is priced with the extra actually paid.
+        .task(id: feeEstimationKey) {
+            // The last base fee is kept when there's none to show: it prices Max's speed extra.
             guard let amountSompi else {
-                normalFeeSompi = nil
+                builtFeeSompi = nil
+                feeError = nil
+                isEstimatingFee = false
                 return
             }
             isEstimatingFee = true
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            let estimate = try? await ChatService.shared.estimatePaymentFee(
-                to: estimationContact, amountSompi: amountSompi, note: memo,
-                sourceSpendingIndex: source.spendingIndex, manualUtxos: manualUtxos, tip: tip
-            )
-            normalFeeSompi = estimate?.networkFee
-            foldedChangeSompi = estimate?.foldedChange ?? 0
+            let contact = estimationContact
+            let note = memo
+            let index = source.spendingIndex
+            let coins = manualUtxos
+            func estimate(extra: UInt64) async throws -> SendFeeEstimate {
+                try await ChatService.shared.estimatePaymentFee(
+                    to: contact, amountSompi: amountSompi, note: note,
+                    sourceSpendingIndex: index, manualUtxos: coins, extraFeeSompi: extra, tip: tip
+                )
+            }
+            do {
+                let base = try await estimate(extra: 0)
+                guard !Task.isCancelled else { return }
+                let extra = customExtraFeeSompi ?? base.networkFee * (feeTier.multiplier - 1)
+                var paid = base
+                if extra > 0 { paid = try await estimate(extra: extra) }
+                guard !Task.isCancelled else { return }
+                normalFeeSompi = base.networkFee
+                builtFeeSompi = paid.networkFee + paid.foldedChange
+                feeError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                builtFeeSompi = nil
+                feeError = UserFacingError.message(for: error)
+            }
             isEstimatingFee = false
         }
         .sheet(isPresented: $showCoinControl) {
@@ -6912,10 +6977,23 @@ private struct KaPostTipSheet: View {
         }
     }
 
+    private var feeEstimationKey: String {
+        let manualKey = manualUtxos?.map { "\($0.outpoint.transactionId):\($0.outpoint.index)" }.sorted().joined(separator: ",") ?? ""
+        return "\(amountSompi ?? 0)#\(manualKey)#\(memo)#\(source.spendingIndex ?? -1)#\(feeTier.rawValue)#\(customExtraFeeSompi.map { String($0) } ?? "")#\(feeRetry)"
+    }
+
+    /// Why Max isn't the whole balance: one transaction spends at most
+    /// `maxInputsPerTransaction` coins, and this address holds more.
+    private var maxCappedNote: String {
+        String(format: AppLocalization.string("Max is what one transaction can carry: its largest %d coins. Compound UTXOs, under More, combines the rest."),
+               locale: AppLocalization.locale, KasiaTransactionBuilder.maxInputsPerTransaction)
+    }
+
     /// Under the typed amount: what's wrong with it, else what's available.
     private var amountFootnote: String? {
         if let errorMessage { return errorMessage }
         if exceedsBalance { return AppLocalization.string("This is more than the address you're sending from holds.") }
+        if usedMax && maxCapped { return maxCappedNote }
         guard let availableSompi else { return nil }
         return KaspaUnit.label(String(format: AppLocalization.string("Available: %@ KAS"), locale: AppLocalization.locale, trimmedKas(availableSompi)))
     }
@@ -7015,11 +7093,16 @@ private struct KaPostTipSheet: View {
                     onEditFee: openFeeEditor
                 )
 
-                if let errorMessage {
-                    Text(errorMessage)
+                if let message = errorMessage ?? feeError {
+                    Text(message)
                         .font(.footnote)
                         .foregroundColor(.red)
                         .multilineTextAlignment(.center)
+                    // Without a fee the swipe stays off: a dropped connection mustn't strand it.
+                    if errorMessage == nil, !isEstimatingFee {
+                        Button("Try Again") { feeRetry += 1 }
+                            .font(.footnote.weight(.semibold))
+                    }
                 } else if isDust {
                     // Said before the swipe, since a swipe can't stop to ask.
                     KaspaUnit.text("Sending less than 0.1 KAS may fail due to the network dust protection limit.")
@@ -7123,20 +7206,33 @@ private struct KaPostTipSheet: View {
         usedMax = true
         isEstimatingMax = true
         errorMessage = nil
+        let request = UUID()
+        maxRequest = request
         Task {
-            let max = try? await ChatService.shared.estimateMaxPaymentAmount(
-                to: estimationContact, note: memo, sourceSpendingIndex: source.spendingIndex,
-                manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi, tip: tip
-            )
-            await MainActor.run {
-                isEstimatingMax = false
-                guard let max, max > 0 else { return }
-                // Max = balance minus the send-all fee; Available keeps showing the source's
-                // full spendable balance, matching the Send Kaspa screen's semantics.
-                amountInput = fiatAmountState.setMaxKas(
-                    Double(max) / 100_000_000.0,
-                    priceInCurrency: portfolioViewModel.currentPriceUsd
+            do {
+                let max = try await ChatService.shared.estimateMaxPaymentAmount(
+                    to: estimationContact, note: memo, sourceSpendingIndex: source.spendingIndex,
+                    manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi, tip: tip
                 )
+                await MainActor.run {
+                    // a newer Max (another speed tapped meanwhile) decides the amount
+                    guard maxRequest == request else { return }
+                    isEstimatingMax = false
+                    maxCapped = max.cappedAtInputLimit
+                    // Max = balance minus the send-all fee; Available keeps showing the source's
+                    // full spendable balance, matching the Send Kaspa screen's semantics.
+                    amountInput = fiatAmountState.setMaxKas(
+                        Double(max.amountSompi) / 100_000_000.0,
+                        priceInCurrency: portfolioViewModel.currentPriceUsd
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard maxRequest == request else { return }
+                    isEstimatingMax = false
+                    maxCapped = false
+                    errorMessage = UserFacingError.message(for: error)
+                }
             }
         }
     }
@@ -7184,14 +7280,15 @@ private struct KaPostTipSheet: View {
                     sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: tip
                 )
                 await MainActor.run {
-                    Haptics.success()
-                    onTipped?()
                     guard let txId else {
-                        // Deferred rather than public chat (no confirmed inputs yet) - there is no
-                        // transaction to show, and the retry timer owns it from here.
-                        dismiss()
+                        // Put off until the coins confirm: the retry timer sends it. The screen
+                        // says so, with Done and no Try Again, which would tip twice.
+                        isSending = false
+                        errorMessage = SendDeferredError.message
                         return
                     }
+                    Haptics.success()
+                    onTipped?()
                     isSending = false
                     sentTransaction = SentTransaction(
                         txId: txId,
@@ -8191,14 +8288,25 @@ final class KaPostsActionScheduler: ObservableObject {
             action()
             return
         }
+        // The account the action was made as: if another is active when it fires, it is
+        // dropped rather than signed by the wrong one.
+        let owner = WalletManager.shared.currentWallet?.publicAddress
         deadlines[key] = Date().addingTimeInterval(Self.undoDelay)
         tasks[key] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.undoDelay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.deadlines[key] = nil
             self?.tasks[key] = nil
+            guard WalletManager.shared.currentWallet?.publicAddress == owner else { return }
             action()
         }
+    }
+
+    /// Account switch: every held action belonged to the account being left.
+    func cancelAll() {
+        tasks.values.forEach { $0.cancel() }
+        tasks = [:]
+        deadlines = [:]
     }
 
     func cancel(key: String) {
@@ -9411,10 +9519,11 @@ struct KaPostsNotificationsView: View {
                 }
             }
             .task {
-                // Coming back to the tab keeps what was scrolled in; pull to refresh still reloads.
-                if let at = lastLoadedAt, Date().timeIntervalSince(at) < 120 { return }
-                lastLoadedAt = Date()
-                await load()
+                // Coming back to the tab keeps what was scrolled in, unless something arrived since;
+                // pull to refresh still reloads. Stamped only once a load worked.
+                if let at = lastLoadedAt, Date().timeIntervalSince(at) < 120,
+                   (KaPostsNotificationCenter.shared.lastArrivalAt ?? .distantPast) < at { return }
+                if await load() { lastLoadedAt = Date() }
             }
             // The open-conversation rule for KaPosts: while this stream is on screen,
             // AppDelegate.willPresent suppresses kaposts banners (local and push alike).
@@ -9529,8 +9638,11 @@ struct KaPostsNotificationsView: View {
     }
 
     /// Pull-to-refresh / first load: back to page one with the end-reached state cleared.
-    private func load() async {
+    /// Whether it loaded.
+    @discardableResult
+    private func load() async -> Bool {
         await loadPage(reset: true)
+        return !page.isLoading && page.errorMessage == nil
     }
 
     private func loadMore() async {

@@ -1832,3 +1832,30 @@
 "Dislikes" = "Dislikes";
 "Reposts" = "Reposts";
 "Quotes" = "Quotes";
+
+/* Audit 2 */
+"Waiting" = "Waiting";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "This post isn't on the network yet, so it can't be replied to. Try again once it has posted.";
+
+/* KaPlay and KaPay round 2 */
+"Skip the Search: Import on Address #0" = "Skip the Search: Import on Address #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "The search for funds on this account's other addresses didn't finish, so Import uses address #0.";
+"Search Again" = "Search Again";
+"Re-enter PIN" = "Re-enter PIN";
+"The PINs don't match." = "The PINs don't match.";
+"Delete That Screenshot" = "Delete That Screenshot";
+"A screenshot of your 12 or 24 words can end up online. Delete it from your photos and write the words on paper instead." = "A screenshot of your 12 or 24 words can end up online. Delete it from your photos and write the words on paper instead.";
+"Mining reward, not spendable here" = "Mining reward, not spendable here";
+"Not confirmed yet" = "Not confirmed yet";
+"Just spent by a move or send" = "Just spent by a move or send";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again.";
+"This account's keys are on this phone again, so nothing was removed." = "This account's keys are on this phone again, so nothing was removed.";
+"Unable to sign in to this account." = "Unable to sign in to this account.";
+"Just spent by a post or send" = "Just spent by a post or send";
+"Sending" = "Sending";
+"Failed · Tap to retry" = "Failed · Tap to retry";
+"Needs attention" = "Needs attention";
+"Failed to send" = "Failed to send";
+"Failed" = "Failed";
+"Not confirmed" = "Not confirmed";

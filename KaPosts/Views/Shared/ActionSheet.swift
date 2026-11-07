@@ -1011,6 +1011,8 @@ struct MessageTimeLine<Status: View>: View {
 struct DeliveryStatusLabel: View {
     enum Status {
         case pending, sent, failed, warning
+        /// May have gone through: no Retry.
+        case unconfirmed
     }
 
     let status: Status
@@ -1024,14 +1026,15 @@ struct DeliveryStatusLabel: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Failed to send. Tap to retry.")
         } else {
-            content.accessibilityLabel(accessibilityText)
+            content.accessibilityLabel(Text(LocalizedStringKey(accessibilityText)))
         }
     }
 
     private var content: some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-            Text(text)
+            // A key, not a String: `Text(String)` is shown as it is, never translated.
+            Text(LocalizedStringKey(text))
         }
         .font(.caption2)
         .foregroundColor(color)
@@ -1043,6 +1046,7 @@ struct DeliveryStatusLabel: View {
         case .pending: return "clock"
         case .failed: return "exclamationmark.circle.fill"
         case .warning: return "exclamationmark.circle.fill"
+        case .unconfirmed: return "questionmark.circle"
         }
     }
 
@@ -1052,6 +1056,7 @@ struct DeliveryStatusLabel: View {
         case .pending: return "Sending"
         case .failed: return retry == nil ? "Failed" : "Failed · Tap to retry"
         case .warning: return "Needs attention"
+        case .unconfirmed: return "Not confirmed"
         }
     }
 
@@ -1061,6 +1066,7 @@ struct DeliveryStatusLabel: View {
         case .pending: return .secondary
         case .failed: return .red
         case .warning: return .orange
+        case .unconfirmed: return .orange
         }
     }
 
@@ -1070,6 +1076,7 @@ struct DeliveryStatusLabel: View {
         case .pending: return "Sending"
         case .failed: return "Failed to send"
         case .warning: return "Needs attention"
+        case .unconfirmed: return "Not confirmed"
         }
     }
 }

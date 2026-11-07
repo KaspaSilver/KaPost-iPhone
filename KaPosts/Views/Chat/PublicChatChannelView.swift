@@ -444,9 +444,15 @@ struct PublicChatChannelView: View {
                                         guard !isLoadingOlder else { return }
                                         isLoadingOlder = true
                                         keepInPlaceAfterOlderLoad = messages.first?.id
+                                        let countBefore = messages.count
                                         Task {
                                             await publicChatService.loadOlderMessages(forChannel: channelName)
                                             isLoadingOlder = false
+                                            // Nothing older came: no count change will clear the
+                                            // anchor, which would keep new messages from scrolling.
+                                            if publicChatService.messages(forChannel: channelName).count == countBefore {
+                                                keepInPlaceAfterOlderLoad = nil
+                                            }
                                         }
                                     } label: {
                                         HStack(spacing: 6) {
@@ -497,6 +503,10 @@ struct PublicChatChannelView: View {
                             if let anchor = keepInPlaceAfterOlderLoad {
                                 keepInPlaceAfterOlderLoad = nil
                                 proxy.scrollTo(anchor, anchor: .top)
+                            } else if isBottomAnchorVisible {
+                                // History paging in above a freshly opened room: someone at the
+                                // bottom stays there instead of being left in the history.
+                                scrollToBottom(using: proxy, animated: false)
                             }
                         }
                         // To the bottom only when the NEWEST message changed. This was on the
@@ -1943,6 +1953,7 @@ private struct PublicChatMessageRow: View, Equatable {
         case .failed: status = .failed
         case .pending: status = .pending
         case .sent: status = .sent
+        case .unconfirmed: status = .unconfirmed
         }
         return DeliveryStatusLabel(status: status, retry: message.deliveryStatus == .failed ? onRetry : nil)
     }

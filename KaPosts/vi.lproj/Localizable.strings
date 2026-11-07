@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "Không đủ KAS trên địa chỉ trò chuyện. Hãy thêm và thử lại.";
 "Finding your address..." = "Đang tìm địa chỉ của bạn...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Một trong các từ đã dán không hợp lệ. Hãy kiểm tra bản sao và thử lại.";
+
+/* Audit 2 */
+"Waiting" = "Đang chờ";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Đang chờ xác nhận coin của bạn. Giao dịch sẽ tự gửi trong giây lát, vì vậy đừng gửi lại.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Bài đăng này chưa có trên mạng nên chưa thể trả lời. Hãy thử lại khi bài đã được đăng.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "Xóa ảnh chụp màn hình đó";
+"Skip the Search: Import on Address #0" = "Bỏ qua tìm kiếm: nhập vào địa chỉ #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "Việc tìm số dư trên các địa chỉ khác của tài khoản này chưa xong, nên Nhập sẽ dùng địa chỉ #0.";
+"Search Again" = "Tìm lại";
+"Re-enter PIN" = "Nhập lại mã PIN";
+"The PINs don't match." = "Mã PIN không khớp.";
+"Mining reward, not spendable here" = "Phần thưởng đào, không thể chi ở đây";
+"Not confirmed yet" = "Chưa được xác nhận";
+"Just spent by a post or send" = "Vừa được chi bởi một bài đăng hoặc giao dịch gửi";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "Phí mạng hiện là %@ KAS, cao hơn mức trong phần xem lại. Chưa gửi gì: hãy kiểm tra phí mới và vuốt lại.";
+"This account's keys are on this phone again, so nothing was removed." = "Khóa của tài khoản này đã có lại trên điện thoại, nên không có gì bị xóa.";
+"Sending" = "Đang gửi";
+"Failed · Tap to retry" = "Thất bại · Chạm để thử lại";
+"Needs attention" = "Cần chú ý";
+"Failed to send" = "Gửi thất bại";

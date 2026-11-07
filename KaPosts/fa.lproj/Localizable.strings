@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "KAS کافی در نشانی گفتگوی شما نیست. مقداری اضافه کنید و دوباره امتحان کنید.";
 "Finding your address..." = "در حال یافتن نشانی شما...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "یکی از واژه‌های چسبانده‌شده معتبر نیست. نسخه خود را بررسی و دوباره امتحان کنید.";
+
+/* Audit 2 */
+"Waiting" = "در انتظار";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "در انتظار تأیید سکه‌های شما. تا لحظاتی دیگر خودش ارسال می‌شود، پس دوباره ارسالش نکنید.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "این پست هنوز روی شبکه نیست، پس نمی‌توان به آن پاسخ داد. پس از انتشار دوباره امتحان کنید.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "آن عکس صفحه را پاک کنید";
+"Skip the Search: Import on Address #0" = "رد شدن از جستجو: وارد کردن روی آدرس #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "جستجوی موجودی در آدرس‌های دیگر این حساب تمام نشد، پس وارد کردن از آدرس #0 استفاده می‌کند.";
+"Search Again" = "جستجوی دوباره";
+"Re-enter PIN" = "PIN را دوباره وارد کنید";
+"The PINs don't match." = "PINها یکسان نیستند.";
+"Mining reward, not spendable here" = "پاداش استخراج، اینجا قابل خرج نیست";
+"Not confirmed yet" = "هنوز تأیید نشده";
+"Just spent by a post or send" = "همین الان در یک پست یا ارسال خرج شد";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "کارمزد شبکه اکنون %@ KAS است، بیشتر از آنچه بازبینی نشان داد. چیزی ارسال نشد: کارمزد جدید را بررسی کنید و دوباره بکشید.";
+"This account's keys are on this phone again, so nothing was removed." = "کلیدهای این حساب دوباره روی این گوشی است، پس چیزی حذف نشد.";
+"Sending" = "در حال ارسال";
+"Failed · Tap to retry" = "ناموفق · برای تلاش دوباره ضربه بزنید";
+"Needs attention" = "نیاز به توجه";
+"Failed to send" = "ارسال ناموفق بود";

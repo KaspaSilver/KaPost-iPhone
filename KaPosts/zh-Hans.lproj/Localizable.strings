@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "你的聊天地址上 KAS 不足。请添加一些后重试。";
 "Finding your address..." = "正在查找你的地址...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "粘贴的单词中有一个无效。请检查你的副本后重试。";
+
+/* Audit 2 */
+"Waiting" = "等待中";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "正在等待你的币确认。稍后会自动发送，请不要再次发送。";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "此帖子尚未上链，因此无法回复。请在发布完成后重试。";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "删除那张截图";
+"Skip the Search: Import on Address #0" = "跳过搜索：导入到地址 #0";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "此账户其他地址上的余额搜索未完成，因此导入使用地址 #0。";
+"Search Again" = "重新搜索";
+"Re-enter PIN" = "再次输入 PIN";
+"The PINs don't match." = "两次 PIN 不一致。";
+"Mining reward, not spendable here" = "挖矿奖励，此处无法使用";
+"Not confirmed yet" = "尚未确认";
+"Just spent by a post or send" = "刚被一条帖子或一笔发送使用";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "网络费用现在为 %@ KAS，高于确认页显示的金额。未发送任何内容：请查看新费用后再次滑动。";
+"This account's keys are on this phone again, so nothing was removed." = "此账户的密钥已回到这台手机，因此没有删除任何内容。";
+"Sending" = "正在发送";
+"Failed · Tap to retry" = "失败 · 轻点重试";
+"Needs attention" = "需要注意";
+"Failed to send" = "发送失败";

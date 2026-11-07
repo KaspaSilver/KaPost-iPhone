@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "Sohbet adresinizde yeterli KAS yok. Biraz ekleyip tekrar deneyin.";
 "Finding your address..." = "Adresiniz bulunuyor...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Yapıştırılan kelimelerden biri geçerli değil. Kopyanızı kontrol edip tekrar deneyin.";
+
+/* Audit 2 */
+"Waiting" = "Bekliyor";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Coinlerinizin onaylanması bekleniyor. Birazdan kendiliğinden gönderilecek, bu yüzden tekrar göndermeyin.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Bu gönderi henüz ağda değil, bu yüzden yanıtlanamaz. Yayınlandıktan sonra tekrar deneyin.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "O Ekran Görüntüsünü Sil";
+"Skip the Search: Import on Address #0" = "Aramayı atla: #0 adresine içe aktar";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "Bu hesabın diğer adreslerinde bakiye araması tamamlanmadı, bu yüzden İçe Aktar #0 adresini kullanır.";
+"Search Again" = "Tekrar ara";
+"Re-enter PIN" = "PIN'i yeniden girin";
+"The PINs don't match." = "PIN'ler eşleşmiyor.";
+"Mining reward, not spendable here" = "Madencilik ödülü, burada harcanamaz";
+"Not confirmed yet" = "Henüz onaylanmadı";
+"Just spent by a post or send" = "Az önce bir gönderi veya transferle harcandı";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "Ağ ücreti artık %@ KAS, özette gösterilenden fazla. Hiçbir şey gönderilmedi: yeni ücreti kontrol edip tekrar kaydırın.";
+"This account's keys are on this phone again, so nothing was removed." = "Bu hesabın anahtarları yeniden bu telefonda, bu yüzden hiçbir şey kaldırılmadı.";
+"Sending" = "Gönderiliyor";
+"Failed · Tap to retry" = "Başarısız · Tekrar denemek için dokunun";
+"Needs attention" = "İlgi gerekiyor";
+"Failed to send" = "Gönderilemedi";

@@ -33,8 +33,24 @@ struct KaPostWalletView: View {
     @State private var showPrivateKey = false
     @State private var showPublicKey = false
     @State private var showCompound = false
+    /// The More row picked: opened once More has finished closing (`presentMoreChoice`). Opening a
+    /// sheet while another is still going away is dropped by iOS.
+    @State private var moreChoice: MoreChoice?
+
+    private enum MoreChoice { case compound, request, privateKey, publicKey }
     /// How many coins the chatting address holds: Compound UTXOs works once there are two.
     @State private var chattingUtxoCount = 0
+
+    /// What the screen last showed for an account, so coming back to it (a fresh view each push)
+    /// shows it at once, and asks the network again only once it's 30 s old.
+    private struct Snapshot {
+        var spendingTotalSompi: UInt64?
+        var transactions: [KaspaFullTransactionResponse]
+        var historyIncomplete: Bool
+        var chattingUtxoCount: Int
+        var loadedAt: Date
+    }
+    @MainActor private static var snapshots: [String: Snapshot] = [:]
 
     private enum WalletAction: String, Identifiable {
         case send, receive, request
@@ -80,7 +96,7 @@ struct KaPostWalletView: View {
         .sheet(isPresented: $showBackupHygiene) {
             BackupHygieneView()
         }
-        .sheet(isPresented: $showMore) {
+        .sheet(isPresented: $showMore, onDismiss: presentMoreChoice) {
             moreSheet
                 .presentationDetents([.height(410)])
                 .presentationDragIndicator(.visible)
@@ -109,6 +125,14 @@ struct KaPostWalletView: View {
         .onAppear {
             // The network part at most every 30 s: going in and out of this screen would start
             // these requests each time. Arriving funds still refresh at once, below.
+            if appearRefreshedAt == nil, let address = walletManager.currentWallet?.publicAddress,
+               let snapshot = Self.snapshots[address] {
+                spendingTotalSompi = snapshot.spendingTotalSompi
+                transactions = snapshot.transactions
+                historyIncomplete = snapshot.historyIncomplete
+                chattingUtxoCount = snapshot.chattingUtxoCount
+                appearRefreshedAt = snapshot.loadedAt
+            }
             if let at = appearRefreshedAt, Date().timeIntervalSince(at) < 30 { return }
             appearRefreshedAt = Date()
             Task { await refresh(force: false) }
@@ -267,40 +291,32 @@ struct KaPostWalletView: View {
                     systemImage: "arrow.triangle.merge",
                     isDisabled: chattingUtxoCount < 2
                 ) {
+                    moreChoice = .compound
                     showMore = false
-                    DispatchQueue.main.async { showCompound = true }
                 }
                 ActionSheetRow(
                     title: "Request Payment",
                     subtitle: "A link asking for an exact amount, with what it's for.",
                     systemImage: "doc.text"
                 ) {
+                    moreChoice = .request
                     showMore = false
-                    DispatchQueue.main.async { action = .request }
                 }
                 ActionSheetRow(
                     title: "View Private Key",
                     subtitle: "The key that spends this address. Never share it.",
                     systemImage: "key.fill"
                 ) {
+                    moreChoice = .privateKey
                     showMore = false
-                    DispatchQueue.main.async {
-                        if settingsViewModel.settings.biometricSpendingKeyEnabled {
-                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
-                                showPrivateKey = true
-                            }
-                        } else {
-                            showPrivateKey = true
-                        }
-                    }
                 }
                 ActionSheetRow(
                     title: "View Public Key",
                     subtitle: "The public half of this address, for anyone who asks for it.",
                     systemImage: "number"
                 ) {
+                    moreChoice = .publicKey
                     showMore = false
-                    DispatchQueue.main.async { showPublicKey = true }
                 }
             }
             .padding(.horizontal, 20)
@@ -309,6 +325,24 @@ struct KaPostWalletView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.bottom, 20)
+    }
+
+    private func presentMoreChoice() {
+        guard let choice = moreChoice else { return }
+        moreChoice = nil
+        switch choice {
+        case .compound: showCompound = true
+        case .request: action = .request
+        case .publicKey: showPublicKey = true
+        case .privateKey:
+            if settingsViewModel.settings.biometricSpendingKeyEnabled {
+                DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
+                    showPrivateKey = true
+                }
+            } else {
+                showPrivateKey = true
+            }
+        }
     }
 
     // MARK: - History
@@ -399,6 +433,10 @@ struct KaPostWalletView: View {
         async let history: Void = loadHistory()
         async let coins: Void = loadChattingUtxoCount()
         _ = await (spending, history, coins)
+        guard let address = walletManager.currentWallet?.publicAddress, !historyIncomplete || !transactions.isEmpty else { return }
+        Self.snapshots[address] = Snapshot(spendingTotalSompi: spendingTotalSompi, transactions: transactions,
+                                           historyIncomplete: historyIncomplete, chattingUtxoCount: chattingUtxoCount,
+                                           loadedAt: Date())
     }
 
     private func loadChattingUtxoCount() async {
@@ -406,7 +444,8 @@ struct KaPostWalletView: View {
         // A failed read keeps what it last knew; one for another account is dropped.
         if let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address]),
            walletManager.currentWallet?.publicAddress == address {
-            chattingUtxoCount = utxos.count
+            // the coins Compound can combine: the ones a send may spend
+            chattingUtxoCount = chatService.withdrawalSpendable(utxos).count
         }
     }
 

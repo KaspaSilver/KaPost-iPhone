@@ -2434,3 +2434,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "Nicht genug KAS auf deiner Chat-Adresse. Füge welche hinzu und versuche es erneut.";
 "Finding your address..." = "Deine Adresse wird gesucht...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "Eines der eingefügten Wörter ist ungültig. Prüfe deine Abschrift und versuche es erneut.";
+
+/* Audit 2 */
+"Waiting" = "Wartet";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "Warte auf die Bestätigung deiner Coins. Es wird gleich von selbst gesendet, also sende es nicht noch einmal.";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "Dieser Beitrag ist noch nicht im Netzwerk, daher kann nicht darauf geantwortet werden. Versuche es erneut, sobald er gepostet ist.";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "Lösche diesen Screenshot";
+"Skip the Search: Import on Address #0" = "Suche überspringen: auf Adresse #0 importieren";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "Die Suche nach Guthaben auf den anderen Adressen dieses Kontos wurde nicht abgeschlossen, daher importiert Import auf Adresse #0.";
+"Search Again" = "Erneut suchen";
+"Re-enter PIN" = "PIN erneut eingeben";
+"The PINs don't match." = "Die PINs stimmen nicht überein.";
+"Mining reward, not spendable here" = "Mining-Belohnung, hier nicht ausgebbar";
+"Not confirmed yet" = "Noch nicht bestätigt";
+"Just spent by a post or send" = "Gerade von einem Beitrag oder einer Sendung ausgegeben";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "Die Netzwerkgebühr beträgt jetzt %@ KAS, mehr als die Übersicht zeigte. Es wurde nichts gesendet: Prüfe die neue Gebühr und wische erneut.";
+"This account's keys are on this phone again, so nothing was removed." = "Die Schlüssel dieses Kontos sind wieder auf diesem Telefon, daher wurde nichts entfernt.";
+"Sending" = "Wird gesendet";
+"Failed · Tap to retry" = "Fehlgeschlagen · Tippen zum Wiederholen";
+"Needs attention" = "Prüfung nötig";
+"Failed to send" = "Senden fehlgeschlagen";

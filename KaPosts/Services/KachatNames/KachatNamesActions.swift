@@ -659,21 +659,36 @@ final class KachatNamesActions: ObservableObject {
     @discardableResult
     func combineCoins(_ s: Signer) async throws -> String {
         let utxos = try await NodePoolService.shared.getUtxosByAddresses([s.address])
-        let plain = KaPostsScheduledStore.filterReserved(utxos)
-            .filter { $0.covenantId == nil }
+        // Not a coin a send still in flight spent, nor a mining reward that may not be mature.
+        let plain = Array(ChatService.shared.unreservedUtxos(KaPostsScheduledStore.filterReserved(utxos))
+            .filter { $0.covenantId == nil && $0.blockDaaScore > 0 && !$0.isCoinbase }
             .sorted { $0.amount > $1.amount }
-            .prefix(KasiaTransactionBuilder.maxInputsPerTransaction)
+            .prefix(KasiaTransactionBuilder.maxInputsPerTransaction))
         let total = plain.reduce(UInt64(0)) { $0 + $1.amount }
-        let feeRoom: UInt64 = 5_000_000 // 0.05 KAS: the fee, with what's left coming back as change
-        guard plain.count > 1, total > feeRoom * 2 else {
+        guard plain.count > 1, let script = KaspaAddress.scriptPublicKey(from: s.address) else {
             throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your chatting address for this."))
         }
+        // All of it, less the fee: a fixed fee allowance left change too small to keep, which
+        // the builder gave to the network.
         let daa = await NodePoolService.shared.currentVirtualDaaScore()
-        let tx = try KasiaTransactionBuilder.buildPlainTransferTx(
-            from: s.address, to: s.address, amount: total - feeRoom,
-            senderPrivateKey: s.privateKey, utxos: Array(plain), virtualDaaScore: daa
+        let fee = KasiaTransactionBuilder.estimateSendAllFee(
+            utxos: plain, payload: Data(), recipientScriptPubKey: script, senderScriptPubKey: script, virtualDaaScore: daa
         )
-        let (txId, _) = try await NodePoolService.shared.submitTransaction(tx)
+        guard total > fee * 2 else {
+            throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your chatting address for this."))
+        }
+        let tx = try KasiaTransactionBuilder.buildPlainTransferTx(
+            from: s.address, to: s.address, amount: total - fee,
+            senderPrivateKey: s.privateKey, utxos: plain, virtualDaaScore: daa
+        )
+        let txId: String
+        do {
+            (txId, _) = try await NodePoolService.shared.submitTransaction(tx)
+        } catch let unknown as SendOutcomeUnknownError {
+            ChatService.shared.recordPlainSend(tx, spent: plain, txId: nil, changeScriptPubKey: nil)
+            throw unknown
+        }
+        ChatService.shared.recordPlainSend(tx, spent: plain, txId: nil, changeScriptPubKey: nil)
         // a move between your own coins, not a payment to show in the chats
         ChatService.shared.registerSuppressedPaymentTxIds([txId], reason: "kachat-names")
         AppLog.log("[KachatNames] combined %d coins into one: %@", plain.count, txId)

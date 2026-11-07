@@ -17,8 +17,21 @@ enum AppLog {
         category: "app"
     )
 
+    /// A Kaspa address, with or without its prefix (in a URL, or `kaspa_` as a key name).
+    private static let addressPattern = try? NSRegularExpression(
+        pattern: "(kaspa|kaspatest|kaspadev|kaspasim)[:_]([a-z0-9]{8,})(?=[a-z0-9]{8})([a-z0-9]{8})",
+        options: .caseInsensitive
+    )
+
     static func log(_ format: String, _ args: CVarArg...) {
-        let message = String(format: format, arguments: args)
+        // Addresses only by their last 8 characters: an exported log names nobody's account.
+        // Here, so no call site (or URL with an address in it) can skip it.
+        var message = String(format: format, arguments: args)
+        if let addressPattern {
+            message = addressPattern.stringByReplacingMatches(
+                in: message, range: NSRange(message.startIndex..., in: message), withTemplate: "…$3"
+            )
+        }
         // The whole message is marked public (not per-argument private, os_log's default) since
         // this mirrors NSLog's own behavior - everything logged here was already visible in
         // Console before, and none of these call sites log secrets (keys/seed phrases/decrypted

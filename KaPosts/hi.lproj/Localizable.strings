@@ -2485,3 +2485,25 @@
 "Not enough KAS on your Chatting Address. Add some and try again." = "आपके चैटिंग पते पर पर्याप्त KAS नहीं है। कुछ जोड़ें और फिर से कोशिश करें।";
 "Finding your address..." = "आपका पता ढूँढा जा रहा है...";
 "One of the pasted words isn't a valid word. Check your copy and try again." = "चिपकाए गए शब्दों में से एक मान्य शब्द नहीं है। अपनी कॉपी जाँचें और फिर से कोशिश करें।";
+
+/* Audit 2 */
+"Waiting" = "प्रतीक्षा में";
+"Waiting for your coins to confirm. It sends on its own in a moment, so don't send it again." = "आपके कॉइन की पुष्टि का इंतज़ार है। यह कुछ ही पल में अपने आप भेज दिया जाएगा, इसलिए इसे दोबारा न भेजें।";
+"This post isn't on the network yet, so it can't be replied to. Try again once it has posted." = "यह पोस्ट अभी नेटवर्क पर नहीं है, इसलिए इसका जवाब नहीं दिया जा सकता। पोस्ट हो जाने पर फिर कोशिश करें।";
+
+/* KaPlay and KaPay round 2 */
+"Delete That Screenshot" = "वह स्क्रीनशॉट हटाएं";
+"Skip the Search: Import on Address #0" = "खोज छोड़ें: पते #0 पर इम्पोर्ट करें";
+"The search for funds on this account's other addresses didn't finish, so Import uses address #0." = "इस खाते के दूसरे पतों पर फंड की खोज पूरी नहीं हुई, इसलिए इम्पोर्ट पता #0 इस्तेमाल करेगा।";
+"Search Again" = "फिर से खोजें";
+"Re-enter PIN" = "PIN फिर से डालें";
+"The PINs don't match." = "PIN मेल नहीं खाते।";
+"Mining reward, not spendable here" = "माइनिंग इनाम, यहाँ खर्च नहीं हो सकता";
+"Not confirmed yet" = "अभी पुष्टि नहीं हुई";
+"Just spent by a post or send" = "अभी-अभी किसी पोस्ट या भेजने में खर्च हुआ";
+"The network fee is now %@ KAS, more than the Review showed. Nothing was sent: check the new fee and swipe again." = "नेटवर्क शुल्क अब %@ KAS है, समीक्षा में दिखाए गए से ज़्यादा। कुछ नहीं भेजा गया: नया शुल्क देखें और फिर से स्वाइप करें।";
+"This account's keys are on this phone again, so nothing was removed." = "इस खाते की कुंजियाँ फिर से इस फ़ोन पर हैं, इसलिए कुछ नहीं हटाया गया।";
+"Sending" = "भेजा जा रहा है";
+"Failed · Tap to retry" = "विफल · फिर से कोशिश करने के लिए टैप करें";
+"Needs attention" = "ध्यान देने की ज़रूरत";
+"Failed to send" = "भेजा नहीं जा सका";

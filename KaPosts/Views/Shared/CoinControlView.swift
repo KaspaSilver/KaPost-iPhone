@@ -38,8 +38,22 @@ struct CoinControlView: View {
         "\(utxo.outpoint.transactionId):\(utxo.outpoint.index)"
     }
 
+    /// Why a send can't spend this coin, nil when it can. The same coins the send leaves out
+    /// (`ChatService.withdrawalSpendable`): listed greyed out, never picked, so a selection can't
+    /// be made of coins the send would refuse.
+    private func unavailableReason(_ utxo: UTXO) -> LocalizedStringKey? {
+        if utxo.isCoinbase { return "Mining reward, not spendable here" }
+        if utxo.blockDaaScore == 0 { return "Not confirmed yet" }
+        if ChatService.shared.unreservedUtxos([utxo]).isEmpty { return "Just spent by a post or send" }
+        return nil
+    }
+
+    private var availableUtxos: [UTXO] {
+        utxos.filter { unavailableReason($0) == nil }
+    }
+
     private var selectedTotalSompi: UInt64 {
-        utxos.filter { selectedKeys.contains(key($0)) }.reduce(0) { $0 + $1.amount }
+        availableUtxos.filter { selectedKeys.contains(key($0)) }.reduce(0) { $0 + $1.amount }
     }
 
     var body: some View {
@@ -65,6 +79,7 @@ struct CoinControlView: View {
                         ForEach(Array(utxos.enumerated()), id: \.offset) { _, utxo in
                             let k = key(utxo)
                             let isSelected = selectedKeys.contains(k)
+                            let unavailable = unavailableReason(utxo)
                             Button {
                                 if isSelected {
                                     selectedKeys.remove(k)
@@ -89,12 +104,19 @@ struct CoinControlView: View {
                                         Text("\(utxo.outpoint.transactionId.prefix(10))...:\(utxo.outpoint.index)")
                                             .font(.system(.caption2, design: .monospaced))
                                             .foregroundColor(.secondary)
+                                        if let unavailable {
+                                            Text(unavailable)
+                                                .font(.caption2)
+                                                .foregroundColor(.orange)
+                                        }
                                     }
                                     Spacer()
                                 }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .disabled(unavailable != nil)
+                            .opacity(unavailable == nil ? 1 : 0.5)
                         }
                     } footer: {
                         if !selectedKeys.isEmpty {
@@ -111,7 +133,7 @@ struct CoinControlView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Button("Select All") { selectedKeys = Set(utxos.map(key)) }
+                        Button("Select All") { selectedKeys = Set(availableUtxos.map(key)) }
                         Button("Automatic (Clear Selection)") { selectedKeys.removeAll() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -120,7 +142,7 @@ struct CoinControlView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    let selected = utxos.filter { selectedKeys.contains(key($0)) }
+                    let selected = availableUtxos.filter { selectedKeys.contains(key($0)) }
                     onDone(selected.isEmpty ? nil : selected)
                     dismiss()
                 } label: {
@@ -138,7 +160,9 @@ struct CoinControlView: View {
                 utxoLabels = WalletManager.shared.loadSpendingUtxoLabels(address: fromAddress)
                 await loadUtxos()
                 if let initialSelection {
-                    selectedKeys = Set(initialSelection.map(key))
+                    // coins spent since they were picked drop out of the selection
+                    let available = Set(availableUtxos.map(key))
+                    selectedKeys = Set(initialSelection.map(key)).intersection(available)
                 }
             }
         }

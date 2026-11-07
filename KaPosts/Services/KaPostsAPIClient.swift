@@ -901,9 +901,10 @@ extension KaPostsAPIClient {
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
         }
-        let utxos = KaPostsScheduledStore.shared.excludingReserved(
+        // Nor coins a send still in flight spent.
+        let utxos = ChatService.shared.unreservedUtxos(KaPostsScheduledStore.shared.excludingReserved(
             try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
-        )
+        ))
         // Confirmed coins only: a transaction that will sit for hours must not chain on an
         // unconfirmed change output. And the SMALLEST single coin that can carry it: the
         // coins it spends stay reserved until it goes out, so it must not tie up the wallet's
@@ -1167,14 +1168,21 @@ extension KaPostsAPIClient {
 
     /// Shared write core: build the self-send tx from the chatting address's UTXOs with the K
     /// payload attached, sign, submit. The indexer ingests it from the chain (no REST submit).
+    /// When this account last put a post action on chain: your profile's pages loaded before it
+    /// are out of date (a new post, a delete, an edit).
+    private(set) static var ownActivityAt: Date?
+
     private func submitPayloadTx(_ payload: String) async throws -> String {
         guard let wallet = WalletManager.shared.currentWallet,
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
         }
-        // Coins a scheduled post is waiting to spend are not available (§5.10).
-        let utxos = KaPostsScheduledStore.shared.excludingReserved(
-            try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
+        // The coins rooms and sends draw from too: ones a scheduled post is waiting for (§5.10),
+        // or that a send still in flight spent, are left out, and the change of the last post
+        // or room message is offered, so two quick likes don't pick the same coin.
+        let chatService = ChatService.shared
+        let utxos = chatService.prepareMessageUtxos(
+            confirmed: try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
         )
         let signedTx = try KasiaTransactionBuilder.buildPayloadSelfSendTx(
             from: wallet.publicAddress,
@@ -1182,7 +1190,23 @@ extension KaPostsAPIClient {
             utxos: utxos,
             payload: Data(payload.utf8)
         )
-        let (txId, _) = try await NodePoolService.shared.submitTransaction(signedTx, allowOrphan: false)
+        let usesUnconfirmedInputs = chatService.spentMessageUtxos(from: signedTx, candidates: utxos)
+            .contains { $0.blockDaaScore == 0 }
+        let txId: String
+        do {
+            (txId, _) = try await NodePoolService.shared.submitTransaction(signedTx, allowOrphan: usesUnconfirmedInputs)
+        } catch let unknown as SendOutcomeUnknownError {
+            // It may land: its coins stay held.
+            chatService.recordPlainSend(signedTx, spent: utxos, txId: nil, changeScriptPubKey: nil)
+            throw unknown
+        }
+        chatService.recordPlainSend(signedTx, spent: utxos, txId: txId,
+                                    changeScriptPubKey: KaspaAddress.scriptPublicKey(from: wallet.publicAddress))
+        // Only what shows on your profile: a post, reply, quote, edit, delete or poll.
+        let action = payload.split(separator: ":", maxSplits: 4).dropFirst(2).first.map(String.init)
+        if let action, ["post", "reply", "quote", "unquote", "edit", "delete", "poll"].contains(action) {
+            Self.ownActivityAt = Date()
+        }
         AppLog.log("[KaPosts] Submitted %@ action tx %@", String(payload.prefix(12)), String(txId.prefix(12)))
         // The id a scheduled post is keyed on (§5.10) is computed before submission; every real
         // submit is a free check that the computation still agrees with the node.
@@ -1303,6 +1327,8 @@ final class KaPostsNotificationService {
         let settings = AppSettings.load()
         guard WalletManager.shared.currentWallet != nil,
               let key = lastSeenKey else { return }
+        // Notifications off: nothing here would be shown, so the indexer isn't asked.
+        guard settings.notificationsEnabled else { return }
         do {
             let notifications = try await KaPostsAPIClient.shared.fetchNotifications(limit: 50).notifications
             // OS banner gates apply only from here down. Remote-push mode: the push service
@@ -1333,6 +1359,18 @@ final class KaPostsNotificationService {
                 return
             }
             UserDefaults.standard.set(NSNumber(value: max(newest, lastSeen)), forKey: key)
+            // The bell's unseen count: what arrived, less your own actions and hidden people.
+            // Nothing is unseen while the notifications screen is open.
+            let me = WalletManager.shared.currentWallet?.publicAddress
+            let arrivals = fresh.filter { notification in
+                guard let address = KaPostsAPIClient.kaspaAddress(fromPubkey: notification.userPublicKey) else { return false }
+                return address != me && !KaPostsModerationStore.shared.isHidden(address)
+            }
+            if isNotificationsScreenVisible {
+                KaPostsNotificationCenter.shared.markAllSeen()
+            } else {
+                KaPostsNotificationCenter.shared.recordArrivals(arrivals.count)
+            }
             // Actions a remote push already bannered must not banner again: the ledger holds
             // ids willPresent presented or the user tapped, and deliveredNotifications covers
             // pushes delivered while backgrounded that still sit in Notification Center
