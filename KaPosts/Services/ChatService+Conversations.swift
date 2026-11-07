@@ -2394,8 +2394,8 @@ extension ChatService {
         sourceSpendingIndex: Int? = nil,
         /// Coin control: spend only these coins of the source address. nil = automatic.
         manualUtxos: [UTXO]? = nil,
-        /// A KaPosts tip: the payment names the post (KAPOSTS_INDEXER.md 5.11), always from the
-        /// chatting address.
+        /// A KaPosts tip: the payment names the post (KAPOSTS_INDEXER.md 5.11). Only from the
+        /// chatting address: with a `sourceSpendingIndex` it goes as a private payment instead.
         tip: KaPostTip? = nil
     ) async throws -> String? {
         // Paying someone is reaching out to them, like writing to them.
@@ -2407,7 +2407,7 @@ extension ChatService {
                 note: note,
                 pendingTxId: pendingTxId,
                 extraFeeSompi: extraFeeSompi,
-                sourceSpendingIndex: tip == nil ? sourceSpendingIndex : nil,
+                sourceSpendingIndex: sourceSpendingIndex,
                 manualUtxos: manualUtxos,
                 tip: tip
             )
@@ -2429,10 +2429,10 @@ extension ChatService {
         guard amountSompi > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
         }
-        // A tip stays a tip on a retry (which knows only the pending id), and is always paid
-        // from the chatting address.
-        let tip = tip ?? pendingTxId.flatMap { pendingTips[$0] }
-        let sourceSpendingIndex = tip == nil ? sourceSpendingIndex : nil
+        // A tip stays a tip on a retry (which knows only the pending id). Only one from the
+        // chatting address is a tip (KAPOSTS_INDEXER.md 5.11): from another address it's a
+        // private payment, which doesn't name the post or count on it.
+        let tip = sourceSpendingIndex == nil ? (tip ?? pendingTxId.flatMap { pendingTips[$0] }) : nil
         guard let wallet = WalletManager.shared.currentWallet else {
             throw KasiaError.walletNotFound
         }
@@ -3214,7 +3214,8 @@ extension ChatService {
     /// UI's "Max" uses this to reflect *one transaction's worth* of consolidatable value instead of
     /// the whole (over-mass) balance - the user consolidates that chunk, then repeats to reduce
     /// further. Returns the chunk so the send spends exactly those inputs.
-    func maxConsolidatableChunk(index: Int, extraFeeSompi: UInt64 = 0, availableUtxos: [UTXO] = []) async throws -> (amountSompi: UInt64, utxos: [UTXO]) {
+    /// `feeMultiplier` as in `estimateMaxWithdrawalAmount`.
+    func maxConsolidatableChunk(index: Int, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64 = 1, availableUtxos: [UTXO] = []) async throws -> (amountSompi: UInt64, utxos: [UTXO]) {
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
         }
@@ -3236,7 +3237,8 @@ extension ChatService {
         // broke compounding on mining-reward addresses: it dropped every one of their coinbase
         // UTXOs. Fetch the virtual DAA score only when coinbase is actually present.
         let virtualDaaScore = await resolveVirtualDaaScore(nil, utxos: utxos)
-        let spendable = ChatService.spendableUtxos(utxos, virtualDaaScore: virtualDaaScore)
+        // not coins a send still in flight spent, as in KaPay
+        let spendable = unreservedUtxos(ChatService.spendableUtxos(utxos, virtualDaaScore: virtualDaaScore))
         guard !spendable.isEmpty else {
             if utxos.contains(where: { $0.isCoinbase }) {
                 throw KasiaError.networkError("These are mining (coinbase) rewards that haven't matured yet. Each becomes spendable a short time (about 1–2 minutes) after it's mined - try again shortly.")
@@ -3245,7 +3247,7 @@ extension ChatService {
         }
         // Largest-first, capped to what fits one transaction's mass.
         let chunk = Array(spendable.sorted { $0.amount > $1.amount }.prefix(KasiaTransactionBuilder.maxInputsPerTransaction))
-        let amount = try await estimateMaxSpendingAddressAmount(index: index, toAddress: fromAddress, manualUtxos: chunk, extraFeeSompi: extraFeeSompi, availableUtxos: utxos, virtualDaaScore: virtualDaaScore).amountSompi
+        let amount = try await estimateMaxSpendingAddressAmount(index: index, toAddress: fromAddress, manualUtxos: chunk, extraFeeSompi: extraFeeSompi, feeMultiplier: feeMultiplier, availableUtxos: utxos, virtualDaaScore: virtualDaaScore).amountSompi
         return (amount, chunk)
     }
 

@@ -37,6 +37,13 @@ struct KaPostsSettingsView: View {
         }
     }
 
+    private var tipSourceTitle: String {
+        switch SendSource.defaultTip(settingsViewModel.settings) {
+        case .chatting: return AppLocalization.string("Chatting Address")
+        case .spending(_, _, let label): return label
+        }
+    }
+
     private var form: some View {
             Form {
                 Section {
@@ -106,6 +113,17 @@ struct KaPostsSettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel(Text(tipInFiat ? "Tip in \(tipCurrency.code), switch to KAS" : "Tip in KAS, switch to \(settingsViewModel.settings.currency.code)"))
+                        }
+                    }
+                    NavigationLink {
+                        TipSourcePage()
+                    } label: {
+                        HStack {
+                            Text("Tips From")
+                            Spacer()
+                            Text(verbatim: tipSourceTitle)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
                     }
                 } header: {
@@ -208,5 +226,35 @@ struct KaPostsSettingsView: View {
         while text.hasSuffix("0") { text.removeLast() }
         if text.hasSuffix(".") { text.removeLast() }
         return text
+    }
+}
+
+
+/// KaPosts > Settings > Tips From: the address tips leave from unless the tip sheet picks another.
+/// The chatting address sends a tip that counts on the post; another address sends it privately
+/// (`ChatService.sendPayment`: no post named, nothing counted, nobody listed as the tipper).
+private struct TipSourcePage: View {
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                OwnAddressList(selected: SendSource.defaultTip(settingsViewModel.settings).address) { picked in
+                    let index = picked.spendingIndex
+                    guard index != settingsViewModel.settings.kaPostsDefaultTipSourceIndex else { return }
+                    settingsViewModel.settings.kaPostsDefaultTipSourceIndex = index
+                    settingsViewModel.saveSettings()
+                    Haptics.selection()
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+        }
+        .navigationTitle("Tips From")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

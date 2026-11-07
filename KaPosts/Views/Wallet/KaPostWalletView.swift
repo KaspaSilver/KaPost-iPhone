@@ -79,15 +79,16 @@ struct KaPostWalletView: View {
                     }
                 }
             case .receive:
-                if let wallet = walletManager.currentWallet {
-                    NavigationStack {
-                        ChattingAddressQRView(address: wallet.publicAddress, balanceSompi: wallet.balanceSompi)
-                            .toolbar {
-                                ToolbarItem(placement: .navigationBarLeading) {
-                                    Button("Close") { self.action = nil }
-                                }
+                // A fresh address, never used before, as in KaPay.
+                NavigationStack {
+                    ReceiveKaspaQRView()
+                        .navigationTitle("Receive Kaspa")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button("Close") { self.action = nil }
                             }
-                    }
+                        }
                 }
             case .request:
                 CreatePaymentRequestView()
@@ -136,6 +137,11 @@ struct KaPostWalletView: View {
             if let at = appearRefreshedAt, Date().timeIntervalSince(at) < 30 { return }
             appearRefreshedAt = Date()
             Task { await refresh(force: false) }
+            // Receive's address decided ahead of the tap, so the QR opens without a wait.
+            Task {
+                guard let address = await walletManager.freshReceiveAddress() else { return }
+                ReceiveAddressWarmCache.address = address
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ownAddressUtxoActivity)) { _ in
             scheduleRefresh()
@@ -155,6 +161,8 @@ struct KaPostWalletView: View {
             if backupStatus.isHygieneDue(wallet.publicAddress) {
                 BackupHygieneCard { showBackupHygiene = true }
             }
+            // KaPay's Wallet tab: addresses, domains, contacts and help.
+            WalletAccountSections(wallet: wallet, onMessage: showToast)
             history(for: wallet.publicAddress)
         }
         .padding(.horizontal, 16)

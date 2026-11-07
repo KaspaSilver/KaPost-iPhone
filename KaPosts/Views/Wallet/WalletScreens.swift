@@ -834,9 +834,9 @@ struct WithdrawKaspaView: View {
     /// Someone's payment request (a tapped or pasted link): its address is locked in, its amount
     /// and memo filled in. A request pasted into the recipient field does the same.
     var paymentRequest: PaymentRequest? = nil
-    /// Where the Kaspa leaves from, with no From step to pick another. KaPost only ever sends from
-    /// the chatting address: other addresses are managed in KaChat and KaPay.
-    var lockedSource: SendSource? = .chatting
+    /// Opened from one address's own Send: the Kaspa leaves from that address and the From step
+    /// offers no other. nil (the Wallet's Send): the From step, as in KaPay.
+    var lockedSource: SendSource? = nil
     var onComplete: (() -> Void)? = nil
 
     /// The request this send pays, if any (`paymentRequest`, or one pasted in).

@@ -4467,11 +4467,18 @@ struct KaPostsView: View {
         var kasText = String(format: "%.8f", kas)
         while kasText.hasSuffix("0") { kasText.removeLast() }
         if kasText.hasSuffix(".") { kasText.removeLast() }
+        // Tips From (KaPosts > Settings): another address than the chatting one tips privately,
+        // so the payment names no post and nothing is counted.
+        let sourceIndex = SendSource.defaultTip(settingsViewModel.settings).spendingIndex
+        let countsOnPost = sourceIndex == nil
         tipsInFlight.insert(postId)
         Task {
             defer { tipsInFlight.remove(postId) }
             do {
-                let txId = try await ChatService.shared.sendPayment(to: recipient, amountSompi: amountSompi, extraFeeSompi: 0, tip: tip)
+                let txId = try await ChatService.shared.sendPayment(
+                    to: recipient, amountSompi: amountSompi, extraFeeSompi: 0,
+                    sourceSpendingIndex: sourceIndex, tip: countsOnPost ? tip : nil
+                )
                 guard let txId else {
                     // Put off until the coins confirm: the retry timer sends it. Not sent yet, so
                     // not counted, and no amount screen, which would invite a second tip.
@@ -4479,9 +4486,9 @@ struct KaPostsView: View {
                     return
                 }
                 Haptics.success()
-                countTip(tip)
+                if countsOnPost { countTip(tip) }
                 let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
-                showActionToast("Tipped \(amountText) to \(name)", txId: txId)
+                showActionToast(countsOnPost ? "Tipped \(amountText) to \(name)" : "Tipped \(amountText) to \(name) privately", txId: txId)
             } catch is SendOutcomeUnknownError {
                 // It may have gone through: no amount screen, which would invite a second tip.
                 AppLog.log("[KaPosts] Instant tip outcome unknown")
@@ -6732,9 +6739,13 @@ private struct KaPostTipSheet: View {
 
     private enum Step: Int { case from, amount, review, fee }
 
-    /// A tip on a post comes from your address only, so From is skipped.
-    /// Tips leave from the chatting address, like every send in KaPost, so there's no From step.
-    private var initialStep: Step { .amount }
+    /// From first: the chatting address sends a tip that counts on the post; another address
+    /// sends it privately (`ChatService.sendPayment`).
+    private var initialStep: Step { .from }
+
+    /// A tip that names the post: only one from the chatting address (KAPOSTS_INDEXER.md 5.11).
+    /// From another address it's a private payment, so nothing about the post goes with it.
+    private var postTip: KaPostTip? { source == .chatting ? tip : nil }
 
     private var currentStep: Step { step ?? initialStep }
 
@@ -6820,6 +6831,11 @@ private struct KaPostTipSheet: View {
             // conversation) is created in send(), only once a tip is actually sent.
             contact = ContactsManager.shared.getContact(byAddress: address)
             if errorMessage == nil, let initialError { errorMessage = initialError }
+            // Starts on Tips From (KaPosts > Settings); the From step can change it.
+            if step == nil {
+                source = SendSource.defaultTip(AppSettings.load())
+                choosingFrom = source != .chatting
+            }
         }
         // coins picked on one address can't pay from another
         .onChange(of: source) { _ in
@@ -6856,7 +6872,7 @@ private struct KaPostTipSheet: View {
             func estimate(extra: UInt64) async throws -> SendFeeEstimate {
                 try await ChatService.shared.estimatePaymentFee(
                     to: contact, amountSompi: amountSompi, note: note,
-                    sourceSpendingIndex: index, manualUtxos: coins, extraFeeSompi: extra, tip: tip
+                    sourceSpendingIndex: index, manualUtxos: coins, extraFeeSompi: extra, tip: postTip
                 )
             }
             do {
@@ -6907,6 +6923,12 @@ private struct KaPostTipSheet: View {
                             choosingFrom = true
                         }
                     }
+                    Text(choosingFrom
+                         ? "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper."
+                         : "From your Chatting Address the tip counts on the post, and you're listed as a tipper.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     if choosingFrom {
                         Text("Pick which of your addresses the Kaspa leaves from.")
                             .font(.footnote)
@@ -7212,7 +7234,7 @@ private struct KaPostTipSheet: View {
             do {
                 let max = try await ChatService.shared.estimateMaxPaymentAmount(
                     to: estimationContact, note: memo, sourceSpendingIndex: source.spendingIndex,
-                    manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi, tip: tip
+                    manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi, tip: postTip
                 )
                 await MainActor.run {
                     // a newer Max (another speed tapped meanwhile) decides the amount
@@ -7272,12 +7294,14 @@ private struct KaPostTipSheet: View {
         let tipMemo = memo.trimmingCharacters(in: .whitespacesAndNewlines)
         let tipUtxos = manualUtxos
         let tipSource = source.spendingIndex
+        let countsOnPost = postTip != nil
+        let sentTip = postTip
         Task {
             do {
                 try await SendFailureSimulation.failIfEnabled()
                 let txId = try await ChatService.shared.sendPayment(
                     to: recipient, amountSompi: amountSompi, note: tipMemo, extraFeeSompi: tipExtraFee,
-                    sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: tip
+                    sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: sentTip
                 )
                 await MainActor.run {
                     guard let txId else {
@@ -7288,7 +7312,8 @@ private struct KaPostTipSheet: View {
                         return
                     }
                     Haptics.success()
-                    onTipped?()
+                    // a private tip (another address) doesn't count on the post
+                    if countsOnPost { onTipped?() }
                     isSending = false
                     sentTransaction = SentTransaction(
                         txId: txId,

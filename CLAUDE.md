@@ -78,13 +78,27 @@ KaChat and KaPay, and `NFCCard.isAvailable` is false on iPad. Settings > Back Up
 exists for an account with a BIP39 passphrase, which is never written to the card. Import Account > Restore from
 NFC Card (`NFCCardRestoreView`). The App ID needs Near Field Communication Tag Reading on.
 
-## Chatting address only
+## Full wallet (KaPay's Wallet tab)
 
-KaPost uses the chatting address and nothing else (owner's call, 2026-11-05): Send, tips and chat
-payments leave from it (`WithdrawKaspaView.lockedSource` defaults to `.chatting`, and the tip sheet has
-no From step), and Receive and Request Payment are paid to it. Spending addresses only count in the
-Wallet total. Managing other addresses happens in KaChat and KaPay; `ChattingAddressManageView` and the
-coin-control screens stay in the code but nothing opens them.
+Every KaChat app has KaPay's full wallet (owner's call, 2026-11-07; it replaced "chatting address only"
+from 2026-11-05). Profile > Wallet (`KaPostWalletView`) is KaPay's Wallet tab: the total split into
+chatting and spending, Send, Receive and More (Compound UTXOs, Request Payment, the chatting address's
+keys), Backup Hygiene when due, then `WalletAccountSections` (`Views/Wallet/WalletDomainViews.swift`):
+the Manage Addresses (`ManageAddressesView`) and Chatting Address squares, Your Domains
+(`KNSDomainsListView`, no Customize Profile: profiles are edited on KaPost's Profile) and Help; then
+the history. No Contacts (saved addresses): people use KaChat or KaPay for that (owner's call,
+2026-11-07), so `AddressBookManager` isn't in KaPost.
+Send has the From step (`WithdrawKaspaView.lockedSource` is nil unless an address's own Send opens it),
+Receive shows a fresh address (`ReceiveKaspaQRView`), and Request Payment offers Fresh Address or Choose
+an Address. Ported from KaPay: keep these in unison with it, and port KaPay changes here. Spending
+addresses number from #1 (`WalletManager.addressNumber`).
+
+Tips: only one from the chatting address is a tip (KAPOSTS_INDEXER.md 5.11): it names the post,
+counts on it and lists the tipper. The tip sheet opens on From, and KaPosts > Settings > Tips From
+(`kaPostsDefaultTipSourceIndex`, `SendSource.defaultTip`) picks the instant tip's address and the
+sheet's first choice. From another address a tip is private (owner's call, 2026-11-07):
+`ChatService.sendPayment` drops the tip and sends a plain payment with the chat notice, so the author
+gets it in your chat but it names no post, isn't counted and doesn't list you.
 
 ## Sends and account safety
 

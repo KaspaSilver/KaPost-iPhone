@@ -2420,6 +2420,10 @@ struct AppSettings: Codable {
     var kaPostsDefaultTipFiat: Double?
     /// The currency `kaPostsDefaultTipFiat` is in (the app's currency when it was set).
     var kaPostsDefaultTipFiatCurrency: AppCurrency?
+    /// KaPosts > Settings > Tips From: the spending address (its index) tips leave from by default,
+    /// the instant tip and the tip sheet's first choice. nil = the chatting address, the only
+    /// one whose tips count on the post (KAPOSTS_INDEXER.md 5.11); another address tips privately.
+    var kaPostsDefaultTipSourceIndex: Int?
     /// KaPosts > Settings > Cool down before post: every KaPosts action (post, comment, like,
     /// repost, vote, edit, delete) waits 5 seconds with an Undo before it goes on chain. Off,
     /// they go at once. On by default.
@@ -2742,6 +2746,7 @@ struct AppSettings: Codable {
         case kaPostsDefaultTipSompi
         case kaPostsDefaultTipFiat
         case kaPostsDefaultTipFiatCurrency
+        case kaPostsDefaultTipSourceIndex
         case kaPostsCooldownEnabled
         case quickReactionEmojis
         case appearance
@@ -2813,6 +2818,7 @@ struct AppSettings: Codable {
         kaPostsDefaultTipSompi: UInt64? = nil,
         kaPostsDefaultTipFiat: Double? = nil,
         kaPostsDefaultTipFiatCurrency: AppCurrency? = nil,
+        kaPostsDefaultTipSourceIndex: Int? = nil,
         kaPostsCooldownEnabled: Bool = true,
         quickReactionEmojis: [String]? = nil,
         appearance: AppAppearance = .system,
@@ -2873,6 +2879,7 @@ struct AppSettings: Codable {
         self.kaPostsDefaultTipSompi = kaPostsDefaultTipSompi
         self.kaPostsDefaultTipFiat = kaPostsDefaultTipFiat
         self.kaPostsDefaultTipFiatCurrency = kaPostsDefaultTipFiatCurrency
+        self.kaPostsDefaultTipSourceIndex = kaPostsDefaultTipSourceIndex
         self.kaPostsCooldownEnabled = kaPostsCooldownEnabled
         self.quickReactionEmojis = quickReactionEmojis
         self.appearance = appearance
@@ -2961,6 +2968,7 @@ struct AppSettings: Codable {
         kaPostsDefaultTipSompi = try container.decodeIfPresent(UInt64.self, forKey: .kaPostsDefaultTipSompi)
         kaPostsDefaultTipFiat = try container.decodeIfPresent(Double.self, forKey: .kaPostsDefaultTipFiat)
         kaPostsDefaultTipFiatCurrency = try? container.decodeIfPresent(AppCurrency.self, forKey: .kaPostsDefaultTipFiatCurrency)
+        kaPostsDefaultTipSourceIndex = try? container.decodeIfPresent(Int.self, forKey: .kaPostsDefaultTipSourceIndex)
         kaPostsCooldownEnabled = try container.decodeIfPresent(Bool.self, forKey: .kaPostsCooldownEnabled) ?? true
         quickReactionEmojis = try container.decodeIfPresent([String].self, forKey: .quickReactionEmojis)
         appearance = try container.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system
@@ -3120,6 +3128,7 @@ struct AppSettings: Codable {
         try container.encodeIfPresent(kaPostsDefaultTipSompi, forKey: .kaPostsDefaultTipSompi)
         try container.encodeIfPresent(kaPostsDefaultTipFiat, forKey: .kaPostsDefaultTipFiat)
         try container.encodeIfPresent(kaPostsDefaultTipFiatCurrency, forKey: .kaPostsDefaultTipFiatCurrency)
+        try container.encodeIfPresent(kaPostsDefaultTipSourceIndex, forKey: .kaPostsDefaultTipSourceIndex)
         try container.encode(kaPostsCooldownEnabled, forKey: .kaPostsCooldownEnabled)
         try container.encodeIfPresent(quickReactionEmojis, forKey: .quickReactionEmojis)
         try container.encode(appearance, forKey: .appearance)

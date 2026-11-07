@@ -1861,6 +1861,20 @@ enum SendSource: Equatable, Hashable {
     }
 }
 
+extension SendSource {
+    /// Where tips leave from unless picked otherwise (KaPosts > Settings > Tips From): the
+    /// chatting address, or a spending address, whose tips are private. A spending index this
+    /// account can't derive right now falls back to the chatting address.
+    @MainActor
+    static func defaultTip(_ settings: AppSettings) -> SendSource {
+        guard let index = settings.kaPostsDefaultTipSourceIndex,
+              let address = WalletManager.shared.spendingAddress(at: index) else { return .chatting }
+        let label = WalletManager.shared.ownAddressLabel(for: address)
+            ?? "Address #\(WalletManager.addressNumber(forIndex: index))"
+        return .spending(index: index, address: address, label: label)
+    }
+}
+
 /// A pill to pick one of a few choices, like the amount's currency switch: the chosen one
 /// filled in teal. Send screens' From, Request Payment's address.
 struct SelectablePill: View {
