@@ -2566,3 +2566,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "Chatting Address'inizden gönderilen bahşiş gönderide sayılır ve bahşiş verenler arasında görünürsünüz.";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "Başka bir adresten bahşiş gizlidir: yazar alır ve sohbetinizde görür, ama gönderide sayılmaz ve adınızı vermez.";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "Chatting Address'inizden bahşişler gönderide sayılır ve bahşiş verenler arasında görünürsünüz. Başka bir adresten bahşiş gizlidir: yazar alır ve sohbetinizde görür, ama gönderide sayılmaz ve adınızı vermez.";
+"A post on KaPost" = "KaPost'ta bir gönderi";
+"Tap to open it in KaPost." = "KaPost'ta açmak için dokunun.";
+"Shared a KaPost" = "Bir KaPost gönderisi paylaştı";

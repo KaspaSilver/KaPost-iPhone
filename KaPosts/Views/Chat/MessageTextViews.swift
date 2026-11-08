@@ -47,7 +47,7 @@ struct KaChatInternalLinkCardView: View {
 
     private var iconName: String {
         switch match.link {
-        case .kaPost: return "square.and.pencil"          // AppTab.kaposts.icon
+        case .kaPost: return "text.bubble"                // as KaChat's KaPost card
         case .publicChatRoom: return "dot.radiowaves.left.and.right" // AppTab.publicChats.icon
         case .profile: return "person.crop.circle"
         case .paymentRequest: return "arrow.up.circle"
@@ -73,7 +73,7 @@ struct KaChatInternalLinkCardView: View {
     private var title: String {
         switch match.link {
         case .kaPost:
-            return kaPostEntry?.authorName ?? "KaPost post"
+            return kaPostEntry?.authorName ?? AppLocalization.string("A post on KaPost")
         case .publicChatRoom(let channel):
             return "#\(channel)"
         case .profile(let address):
@@ -89,11 +89,11 @@ struct KaChatInternalLinkCardView: View {
     private var subtitle: String {
         switch match.link {
         case .kaPost:
-            guard let entry = kaPostEntry else { return "Tap to open this post in KaPost." }
+            guard let entry = kaPostEntry else { return AppLocalization.string("Tap to open it in KaPost.") }
             // A quote with no added comment is a repost: there is no text to show, so say what
             // it is rather than leaving the card looking half-loaded.
             return entry.snippet.isEmpty
-                ? (entry.action == "quote" ? "Reposted a post." : "Tap to open this post in KaPost.")
+                ? (entry.action == "quote" ? "Reposted a post." : AppLocalization.string("Tap to open it in KaPost."))
                 : entry.snippet
         case .publicChatRoom(let channel):
             // Curated rooms and rooms already in the list just open; anything else is created
@@ -156,7 +156,8 @@ struct KaChatInternalLinkCardView: View {
                 Text(subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .lineLimit(kaPostEntry?.snippet.isEmpty == false ? 6 : 3)
+                    // three lines, as KaChat's KaPost card
+                    .lineLimit(3)
                     .multilineTextAlignment(.leading)
             }
 

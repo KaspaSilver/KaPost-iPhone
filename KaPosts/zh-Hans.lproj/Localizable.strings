@@ -2566,3 +2566,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "从你的 Chatting Address 打赏会计入帖子，你也会出现在打赏者名单中。";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "从其他地址打赏是私密的：作者会收到，并在你们的聊天中看到，但不会计入帖子，也不会显示你的名字。";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "从你的 Chatting Address 打赏会计入帖子，你也会出现在打赏者名单中。从其他地址打赏是私密的：作者会收到，并在你们的聊天中看到，但不会计入帖子，也不会显示你的名字。";
+"A post on KaPost" = "KaPost 上的帖子";
+"Tap to open it in KaPost." = "轻点以在 KaPost 中打开。";
+"Shared a KaPost" = "分享了一条 KaPost 帖子";

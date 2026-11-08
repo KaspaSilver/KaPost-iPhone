@@ -699,7 +699,13 @@ enum LinkSafePreview {
         // The whole text: length plus the first characters let two messages share an entry.
         let key = text as NSString
         if let cached = cache.object(forKey: key) { return cached as String }
-        let result = containsWebLink(text) ? sentALink : text
+        let result: String
+        // A message that is only a KaPost link reads as what it is, as in KaChat's chat list.
+        if let match = KaChatInternalLink.match(in: text), match.coversWholeMessage, case .kaPost = match.link {
+            result = AppLocalization.string("Shared a KaPost")
+        } else {
+            result = containsWebLink(text) ? sentALink : text
+        }
         cache.setObject(result as NSString, forKey: key)
         return result
     }

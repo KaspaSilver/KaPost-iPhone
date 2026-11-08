@@ -2566,3 +2566,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "С вашего Chatting Address чаевые засчитываются посту, и вы в списке давших чаевые.";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "С другого адреса чаевые приватны: автор их получит и увидит в вашем чате, но они не засчитываются посту и не называют вас.";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "Чаевые с вашего Chatting Address засчитываются посту, и вы в списке давших чаевые. С другого адреса чаевые приватны: автор их получит и увидит в вашем чате, но они не засчитываются посту и не называют вас.";
+"A post on KaPost" = "Публикация в KaPost";
+"Tap to open it in KaPost." = "Нажмите, чтобы открыть в KaPost.";
+"Shared a KaPost" = "Поделился публикацией KaPost";

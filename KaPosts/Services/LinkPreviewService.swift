@@ -215,12 +215,13 @@ enum KaChatInternalLink: Equatable {
         let coversWholeMessage: Bool
     }
 
-    /// Both link forms, anywhere in free text. `NSDataDetector` (what `MessageTextRenderPlan`
-    /// uses) only ever yields http(s) URLs, so the `kachat://` form needs its own scan; the
+    /// Every link form, anywhere in free text: `kachat://`, KaPost's own `kaposts://` (as KaChat
+    /// reads them) and the universal link. `NSDataDetector` (what `MessageTextRenderPlan`
+    /// uses) only ever yields http(s) URLs, so the custom schemes need their own scan; the
     /// universal form is matched here too so it is claimed as INTERNAL before the generic
     /// preview path can fetch it over the network.
     private static let pattern =
-        #"(?:kachat://(?:kapost|broadcast|profile|pay)/|https?://(?:www\.)?kachat\.app/(?:post|broadcast|u|pay)/)[^\s<>"']+"#
+        #"(?:(?:kachat|kaposts)://(?:kapost|broadcast|profile|pay)/|https?://(?:www\.)?kachat\.app/(?:post|broadcast|u|pay)/)[^\s<>"']+"#
 
     private static let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
 
@@ -501,11 +502,14 @@ final class KaPostLinkPreviewCache: ObservableObject {
     @Published private(set) var entries: [String: Entry] = [:]
     private var order: [String] = []
     private var inFlight: Set<String> = []
-    /// Ids the chain had nothing for. Retrying on every scroll would hammer the REST API for a
-    /// post that is never going to resolve (a mistyped link, a pruned node, another app's tx).
-    private var unresolvable: Set<String> = []
+    /// Ids the chain had nothing for, and when. Retrying on every scroll would hammer the REST
+    /// API for a post that is never going to resolve (a mistyped link, a pruned node, another
+    /// app's tx), so one is asked again only after `retryAfter` (a post just made, or a node
+    /// that was down, can turn up).
+    private var unresolvable: [String: Date] = [:]
+    private static let retryAfter: TimeInterval = 5 * 60
     private let limit = 512
-    private static let snippetMaxLength = 240
+    private static let snippetMaxLength = 300
 
     private init() {}
 
@@ -515,15 +519,16 @@ final class KaPostLinkPreviewCache: ObservableObject {
     /// already held, a fetch already running and an id already known to be unresolvable all
     /// return immediately.
     func load(postId: String) async {
-        guard !postId.isEmpty, entries[postId] == nil,
-              !inFlight.contains(postId), !unresolvable.contains(postId) else { return }
+        guard !postId.isEmpty, entries[postId] == nil, !inFlight.contains(postId) else { return }
+        if let missedAt = unresolvable[postId], Date().timeIntervalSince(missedAt) < Self.retryAfter { return }
         inFlight.insert(postId)
         defer { inFlight.remove(postId) }
 
         guard let record = await KaPostChainReader.fetch(txId: postId) else {
-            unresolvable.insert(postId)
+            unresolvable[postId] = Date()
             return
         }
+        unresolvable[postId] = nil
         let address = KaPostsAPIClient.kaspaAddress(fromPubkey: record.authorPubkey)
         // Paint the post immediately with whatever name is already known, then upgrade it if the
         // author has a KNS domain nobody has looked up yet. The text is the point of the card;
@@ -558,23 +563,38 @@ final class KaPostLinkPreviewCache: ObservableObject {
         entries[postId] = entry
     }
 
-    /// The same name KaPosts itself shows: a contact alias first, then the KNS domain, then the
-    /// tail of the address.
+    /// The poster as KaChat's card names them: their KNS domain or `.kachat` name, else their
+    /// contact name, else the tail of the address.
     private static func knownName(for address: String?) -> String? {
         guard let address, !address.isEmpty else { return nil }
-        if let alias = ContactsManager.shared.getContact(byAddress: address)?.alias,
-           !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return KaPostsView.displayKasName(alias)
-        }
         if let domain = KNSService.shared.profileCache[address]?.domainName,
            !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return KaPostsView.displayKasName(domain)
         }
+        if let label = KachatNamesRegistry.shared.cachedIdentity(for: address)?.label,
+           !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return label
+        }
+        if let alias = ContactsManager.shared.getContact(byAddress: address)?.alias,
+           !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return KaPostsView.displayKasName(alias)
+        }
         return String(address.suffix(10))
     }
 
+    /// The post's text on one card: line breaks as spaces, control and direction marks (the KaChat
+    /// marker U+2060 among them) gone, at most 300 characters. The same as KaChat's card.
     private static func snippet(from text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let flat = text.replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        let kept = flat.unicodeScalars.filter { scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format: return false
+            default: return true
+            }
+        }
+        let trimmed = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.count > snippetMaxLength
             ? String(trimmed.prefix(snippetMaxLength)) + "\u{2026}"
             : trimmed

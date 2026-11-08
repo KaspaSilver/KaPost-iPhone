@@ -149,6 +149,16 @@ a switch), a thread chain stops if the account changes, and Reply is off on a po
 phrase". `AppLog.log` shortens any Kaspa address to its last 8 characters, so logs
 (and URLs in them) name no account.
 
+## KaPost links in rooms
+
+A post link (`kachat://kapost/<id>`, `kaposts://kapost/<id>` or `https://kachat.app/post/<id>`) in a
+room or chat shows as a card (`KaChatInternalLinkCardView`) with the poster and the post's text, and a
+tap opens the post in KaPost. The same card as KaChat's (owner's call, 2026-11-07): KNS or `.kachat`
+name first, text on one line with control and direction marks gone, 300 characters, three lines,
+"A post on KaPost" until it loads, "Shared a KaPost" in the room list (`LinkSafePreview`).
+`KaPostLinkPreviewCache` reads the post from the chain (no reader key goes out) and asks again for a
+post it couldn't find after 5 minutes.
+
 ## Moderation (App Store guideline 1.2)
 
 - Terms: `ContentView` shows `TermsAcceptanceView` until `KaPostTerms.currentVersion` is agreed to on

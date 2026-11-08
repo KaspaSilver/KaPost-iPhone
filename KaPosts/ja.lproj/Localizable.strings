@@ -2566,3 +2566,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "Chatting Addressからのチップは投稿にカウントされ、チップを送った人として表示されます。";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "別のアドレスからのチップは非公開です。投稿者は受け取り、チャットで確認できますが、投稿にはカウントされず、あなたの名前も出ません。";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "Chatting Addressからのチップは投稿にカウントされ、チップを送った人として表示されます。別のアドレスからのチップは非公開です。投稿者は受け取り、チャットで確認できますが、投稿にはカウントされず、あなたの名前も出ません。";
+"A post on KaPost" = "KaPost の投稿";
+"Tap to open it in KaPost." = "タップして KaPost で開きます。";
+"Shared a KaPost" = "KaPost の投稿を共有しました";

@@ -2567,3 +2567,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "Depuis votre Chatting Address, le pourboire compte sur la publication et vous apparaissez parmi les donateurs.";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "Depuis une autre adresse, le pourboire est privé : l'auteur le reçoit et le voit dans votre chat, mais il ne compte pas sur la publication et ne vous nomme pas.";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "Les pourboires depuis votre Chatting Address comptent sur la publication et vous apparaissez parmi les donateurs. Depuis une autre adresse, un pourboire est privé : l'auteur le reçoit et le voit dans votre chat, mais il ne compte pas sur la publication et ne vous nomme pas.";
+"A post on KaPost" = "Une publication sur KaPost";
+"Tap to open it in KaPost." = "Touchez pour l'ouvrir dans KaPost.";
+"Shared a KaPost" = "A partagé une publication KaPost";

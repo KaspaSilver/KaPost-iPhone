@@ -2566,3 +2566,6 @@
 "From your Chatting Address the tip counts on the post, and you're listed as a tipper." = "Chatting Address에서 보낸 팁은 게시물에 집계되고 팁을 보낸 사람으로 표시됩니다.";
 "From another address the tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you as a tipper." = "다른 주소에서 보낸 팁은 비공개입니다. 작성자는 받고 채팅에서 볼 수 있지만, 게시물에 집계되지 않고 이름도 나오지 않습니다.";
 "Tips from your Chatting Address count on the post, and you're listed as a tipper. From another address a tip is private: the author gets it, and sees it in your chat, but it doesn't count on the post or name you." = "Chatting Address에서 보낸 팁은 게시물에 집계되고 팁을 보낸 사람으로 표시됩니다. 다른 주소에서 보낸 팁은 비공개입니다. 작성자는 받고 채팅에서 볼 수 있지만, 게시물에 집계되지 않고 이름도 나오지 않습니다.";
+"A post on KaPost" = "KaPost 게시물";
+"Tap to open it in KaPost." = "탭하여 KaPost에서 엽니다.";
+"Shared a KaPost" = "KaPost 게시물을 공유함";
