@@ -84,7 +84,6 @@ struct PublicChatChannelView: View {
     @State private var isEstimatingFee = false
     @State private var feeEstimateLength: Int?
     @State private var feeEstimateTask: Task<Void, Never>?
-    @State private var feeShimmerPhase: CGFloat = -1
     /// A once-a-minute clock for the reaction pill's green "sent" check, which is meant to go
     /// away 10 minutes after your reaction. Rows skip re-rendering unless their inputs change
     /// (`.equatable()`), so the expiry has to arrive as an input - see `isReactionCheckFresh`.
@@ -966,7 +965,7 @@ struct PublicChatChannelView: View {
         .background(glassBackground(cornerRadius: 14))
         .overlay {
             if isEstimatingFee {
-                FeeShimmerOverlay(phase: feeShimmerPhase)
+                FeeShimmerOverlay()
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .allowsHitTesting(false)
             }
@@ -976,12 +975,6 @@ struct PublicChatChannelView: View {
             guard !isEstimatingFee, let currentFee = feeOverrideSompi ?? feeEstimateSompi else { return }
             feeEditorText = formatKaspaExact(currentFee)
             showFeeEditor = true
-        }
-        .onAppear {
-            updateFeeShimmer()
-        }
-        .onChange(of: isEstimatingFee) { _ in
-            updateFeeShimmer()
         }
     }
 
@@ -994,17 +987,6 @@ struct PublicChatChannelView: View {
     private func localizedFeeText(_ feeSompi: UInt64) -> String {
         let template = KaspaUnit.label(AppLocalization.string("fee: %@ KAS"))
         return String(format: template, locale: AppLocalization.locale, formatKaspaExact(feeSompi))
-    }
-
-    private func updateFeeShimmer() {
-        if isEstimatingFee {
-            feeShimmerPhase = -1
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                feeShimmerPhase = 1
-            }
-        } else {
-            feeShimmerPhase = -1
-        }
     }
 
     /// While typing (`force` false): waits for a 0.6 s pause, and skips the estimate while the
