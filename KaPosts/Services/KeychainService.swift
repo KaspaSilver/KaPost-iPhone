@@ -416,7 +416,7 @@ final class KeychainService {
     /// Decoded bags, by group id. `loadGroupBag` is on the group poll's path - every group,
     /// every tick (5s while a group is open), and again per incoming message - and each uncached
     /// call is a Keychain read, a Secure Enclave unwrap and a JSON decode, on the main actor
-    /// for its `GroupChatService` callers. The bag only changes through `saveGroupBag` /
+    /// for its KaChat's `GroupChatService` callers. The bag only changes through `saveGroupBag` /
     /// `deleteGroupBag` here, which keep this in step; `clearAll` drops it.
     private var groupBagCache: [String: GroupBag] = [:]
     private let groupBagCacheLock = NSLock()
@@ -481,7 +481,7 @@ final class KeychainService {
         if let wrappedData = tryWrapPrivateKey(data) {
             wrapped = wrappedData
         } else {
-            // Fallback to raw storage if SE unavailable
+            // Fallback to raw storage if SE unavailable (logged in tryWrapPrivateKey)
             wrapped = data
         }
 
@@ -495,16 +495,25 @@ final class KeychainService {
         baseKey == .seedPhrase ? kSecAttrAccessibleWhenUnlockedThisDeviceOnly : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     }
 
-    /// Moves a words item saved before that rule onto it, once per launch. Failing changes nothing.
+    /// Moves a words item saved before that rule onto it, once per launch. Failing changes nothing
+    /// and is tried again: a launch with the phone locked can't update the item.
     private func tightenSeedItem(keyName: String) {
         seedTighteningLock.lock()
-        let isNew = tightenedSeedItems.insert(keyName).inserted
+        let alreadyDone = tightenedSeedItems.contains(keyName)
         seedTighteningLock.unlock()
-        guard isNew else { return }
+        guard !alreadyDone else { return }
         let update = [kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly] as CFDictionary
+        var settled = true
         for includeAccessGroup in [true, false] {
-            SecItemUpdate(genericPasswordQueryForKey(keyName, includeAccessGroup: includeAccessGroup) as CFDictionary, update)
+            let status = SecItemUpdate(genericPasswordQueryForKey(keyName, includeAccessGroup: includeAccessGroup) as CFDictionary, update)
+            if status != errSecSuccess, status != errSecItemNotFound, status != errSecMissingEntitlement {
+                settled = false
+            }
         }
+        guard settled else { return }
+        seedTighteningLock.lock()
+        tightenedSeedItems.insert(keyName)
+        seedTighteningLock.unlock()
     }
 
     /// Every saved account's words item onto the unlocked-only rule, at launch: one is otherwise
@@ -831,6 +840,9 @@ final class KeychainService {
         do {
             return try wrapPrivateKey(privateKey)
         } catch {
+            // Every sensitive write comes through here, and the caller then stores it with only
+            // the Keychain's protection. Normal on the Simulator, worth knowing about on a phone.
+            AppLog.log("%@", "[Keychain] WARNING: Secure Enclave wrap failed, storing without it: \(error.localizedDescription)")
             return nil
         }
     }

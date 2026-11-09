@@ -48,6 +48,7 @@ struct KaPostsApp: App {
                 .onAppear {
                     ChatService.shared.settingsViewModel = settingsViewModel
                     applyWindowAppearanceOverride()
+                    PrivacyCoverWindow.startObserving()
                 }
                 .onOpenURL { url in
                     handleIncomingURL(url)
@@ -109,12 +110,6 @@ struct KaPostsApp: App {
 
     @MainActor
     private func handleScenePhaseChange(to newPhase: ScenePhase) {
-        // Covered the moment the app stops being the thing in front, uncovered when it is again.
-        if newPhase == .active {
-            PrivacyCoverWindow.hide()
-        } else {
-            PrivacyCoverWindow.show()
-        }
         switch newPhase {
         case .background:
             KaPostsNotificationService.shared.stop()
@@ -471,13 +466,80 @@ enum KaChatLinkRouter {
     private static func openPublicChatRoom(channel: String) {
         // Re-validated here, the last gate before a name from a pasted link can create a row.
         guard let normalized = KaChatInternalLink.normalizeAndValidateChannel(channel) else { return }
-        // Curated rooms always exist; anything else joins the user's own list first, as if
-        // typed into "Join or Create a Channel".
-        if !PublicChatService.curatedChannels.contains(normalized) {
-            PublicChatService.shared.joinChannel(normalized)
+        // Curated rooms always exist, and one already on the list needs nothing. Anything else
+        // joins the user's own list first, as if typed into "Join or Create a Channel", once
+        // they say so: any app or post can hand over a link, and the name is whatever it likes.
+        let listed = PublicChatService.curatedChannels.contains(normalized)
+            || PublicChatService.shared.channels.contains { $0.channelName == normalized }
+        guard listed else {
+            confirmJoin(normalized) {
+                PublicChatService.shared.joinChannel(normalized)
+                navigateToPublicChatRoom(normalized)
+            }
+            return
         }
+        navigateToPublicChatRoom(normalized)
+    }
+
+    @MainActor
+    private static func navigateToPublicChatRoom(_ normalized: String) {
         PublicChatService.shared.pendingPublicChatNavigation = normalized
         NotificationCenter.default.post(name: .openPublicChat, object: nil, userInfo: ["channel": normalized])
+    }
+
+    /// Asks before a link adds a room. Waits a few seconds for a window on a cold start.
+    @MainActor
+    private static func confirmJoin(_ normalized: String, attemptsLeft: Int = 10, onJoin: @escaping @MainActor () -> Void) {
+        guard let presenter = topViewController() else {
+            guard attemptsLeft > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                confirmJoin(normalized, attemptsLeft: attemptsLeft - 1, onJoin: onJoin)
+            }
+            return
+        }
+        let title = String(format: AppLocalization.string("Join #%@?"), normalized)
+        var message = AppLocalization.string("A link wants to add this room to your Public Chats.")
+        if hasMixedScripts(normalized) {
+            message += "\n\n" + AppLocalization.string("This name mixes letters from different alphabets, so it may be imitating another room.")
+        }
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: AppLocalization.string("Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: AppLocalization.string("Join"), style: .default) { _ in
+            Task { @MainActor in onJoin() }
+        })
+        presenter.present(alert, animated: true)
+    }
+
+    @MainActor
+    private static func topViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+        let window = scene?.windows.first(where: \.isKeyWindow)
+            ?? scene?.windows.first { !$0.isHidden && $0.windowLevel == .normal }
+        var top = window?.rootViewController
+        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        return top
+    }
+
+    /// Letters from more than one of the alphabets that share look-alike shapes, the way a
+    /// Cyrillic "а" passes for a Latin "a" in a well-known room's name.
+    private static func hasMixedScripts(_ name: String) -> Bool {
+        var seen = Set<String>()
+        for scalar in name.unicodeScalars where scalar.properties.isAlphabetic {
+            switch scalar.value {
+            case 0x41...0x5A, 0x61...0x7A, 0xC0...0x24F: seen.insert("latin")
+            case 0x370...0x3FF, 0x1F00...0x1FFF: seen.insert("greek")
+            case 0x400...0x52F, 0x2DE0...0x2DFF, 0xA640...0xA69F: seen.insert("cyrillic")
+            case 0x530...0x58F: seen.insert("armenian")
+            case 0x13A0...0x13FF, 0xAB70...0xABBF: seen.insert("cherokee")
+            default: break
+            }
+        }
+        return seen.count > 1
     }
 }
 
@@ -499,23 +561,38 @@ private enum PrivacyCoverWindow {
     /// One per scene: on iPad each window of the app is its own scene, and a cover over only the
     /// first left the others showing in the App Switcher.
     private static var windows: [ObjectIdentifier: UIWindow] = [:]
+    private static var observers: [NSObjectProtocol] = []
 
-    static func show() {
-        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
-        where windows[ObjectIdentifier(scene)] == nil {
-            let cover = UIWindow(windowScene: scene)
-            cover.windowLevel = .alert + 1
-            // the app's appearance (Settings' choice), which its own windows carry
-            cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
-            cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
-            cover.isHidden = false
-            windows[ObjectIdentifier(scene)] = cover
-        }
+    /// Each scene by its own state. The app-level `scenePhase` stays `.active` while any window
+    /// is, so on iPad a window that left the front kept showing its contents.
+    static func startObserving() {
+        guard observers.isEmpty else { return }
+        observe(UIScene.willDeactivateNotification) { show(over: $0) }
+        observe(UIScene.didEnterBackgroundNotification) { show(over: $0) }
+        observe(UIScene.didActivateNotification) { hide(over: $0) }
+        observe(UIScene.didDisconnectNotification) { hide(over: $0) }
     }
 
-    static func hide() {
-        windows.values.forEach { $0.isHidden = true }
-        windows = [:]
+    private static func observe(_ name: Notification.Name, _ action: @escaping @MainActor (UIWindowScene) -> Void) {
+        observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { notification in
+            guard let scene = notification.object as? UIWindowScene else { return }
+            MainActor.assumeIsolated { action(scene) }
+        })
+    }
+
+    private static func show(over scene: UIWindowScene) {
+        guard windows[ObjectIdentifier(scene)] == nil else { return }
+        let cover = UIWindow(windowScene: scene)
+        cover.windowLevel = .alert + 1
+        // the app's appearance (Settings' choice), which its own windows carry
+        cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
+        cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
+        cover.isHidden = false
+        windows[ObjectIdentifier(scene)] = cover
+    }
+
+    private static func hide(over scene: UIWindowScene) {
+        windows.removeValue(forKey: ObjectIdentifier(scene))?.isHidden = true
     }
 }
 

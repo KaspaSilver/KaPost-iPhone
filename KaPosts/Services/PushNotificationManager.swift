@@ -88,7 +88,6 @@ final class PushNotificationManager: ObservableObject {
     private let registrationEndpoint = "/v1/push/register"
     private let updateEndpoint = "/v1/push/update"
     private let unregisterEndpoint = "/v1/push/unregister"
-    private let ringEndpoint = "/v1/push/ring"
     private let challengeEndpoint = "/v1/push/challenge"
     private let pushAuthDomain = "kchat-push-auth:v1"
     private let pushDeviceAuthDomain = "kchat-push-device-auth:v1"
@@ -268,64 +267,6 @@ final class PushNotificationManager: ObservableObject {
     }
 
     /// Called from AppDelegate when APNs token received
-    /// PushKit handed out (or withdrew) the VoIP token. Persisted and pushed to the service
-    /// with the next device update - it is part of the watched signature, so the update goes
-    /// out as soon as the token changes.
-    func didUpdateVoIPToken(_ token: String?) {
-        guard token != voipToken else { return }
-        voipToken = token
-        saveVoipTokenToKeychain(token)
-        AppLog.log("[Push] VoIP token %@", token.map { "updated: \($0.prefix(8))..." } ?? "invalidated")
-        guard isRegistered else { return }
-        Task { await updateWatchedAddresses() }
-    }
-
-    /// Asks the service to ring `address`'s devices for a call this device is placing. The
-    /// request is signed like every other push call, which is how the service knows the
-    /// sender it puts in the push. `payloadHex` is the opening call message encrypted to the
-    /// contact, for the callee to decrypt on arrival (PUSH_EXTENSIONS.md §5).
-    func requestRing(to address: String, callId: String, video: Bool, kind: String, payloadHex: String) async throws {
-        guard let token = deviceToken else { throw PushError.noDeviceToken }
-        guard hasPushService else { throw PushError.noPushService }
-        let settings = AppSettings.load()
-        guard let url = URL(string: "\(settings.pushIndexerURL)\(ringEndpoint)") else {
-            throw PushError.invalidResponse
-        }
-        // The service checks a ring in its legacy shape (PUSH_EXTENSIONS.md §5): no
-        // watched_group_ids line, and the caller's own wallet address as primary_address - a
-        // ring signed like register never verified, so a sleeping phone was never woken.
-        let auth = try await buildPushAuth(
-            method: "POST",
-            path: ringEndpoint,
-            deviceToken: token,
-            watchedAddresses: [],
-            watchedGroupIds: [],
-            primaryAddress: WalletManager.shared.currentWallet?.publicAddress,
-            aliases: [],
-            includeWatchedGroupIds: false
-        )
-        let request = PushRingRequest(
-            deviceToken: token,
-            toAddress: address,
-            callId: callId,
-            video: video,
-            kind: kind,
-            payload: payloadHex,
-            timestampMs: UInt64(Date().timeIntervalSince1970 * 1000),
-            auth: auth
-        )
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONEncoder().encode(request)
-        urlRequest.timeoutInterval = 15
-        let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else { throw PushError.invalidResponse }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw PushError.ringFailed(statusCode: httpResponse.statusCode, reason: parseIndexerError(from: responseData))
-        }
-    }
-
     func didRegisterForRemoteNotifications(deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         let previousToken = self.deviceToken
@@ -708,6 +649,9 @@ final class PushNotificationManager: ObservableObject {
     }
 
     private func runWatchedUpdate(fromDebounceTask: Bool = false) async {
+        // Before the guard: a finished debounce task left set here reads as one still pending
+        // (`updateWatchedAddresses`), and no update would be started again.
+        if fromDebounceTask { updateWatchedTask = nil }
         guard let token = deviceToken, isRegistered else {
             updateWatchedPending = false
             return
@@ -716,9 +660,7 @@ final class PushNotificationManager: ObservableObject {
         // task this code executes in poisons the subsequent URLSession call (it throws .cancelled),
         // which silently dropped every debounced update. Roster changes emit in bursts, so group
         // watch-list updates were routinely lost this way (members missing pushes per-sender).
-        if fromDebounceTask {
-            updateWatchedTask = nil
-        } else {
+        if !fromDebounceTask {
             updateWatchedTask?.cancel()
             updateWatchedTask = nil
         }
@@ -727,8 +669,9 @@ final class PushNotificationManager: ObservableObject {
             return
         }
         updateWatchedInFlight = true
+        var ownsInFlightFlag = true
         defer {
-            updateWatchedInFlight = false
+            if ownsInFlightFlag { updateWatchedInFlight = false }
         }
 
         let settings = AppSettings.load()
@@ -891,6 +834,10 @@ final class PushNotificationManager: ObservableObject {
             if let nextSignature,
                nextSignature != lastWatchedSignature,
                nextSignature != inFlightWatchedSignature {
+                // Handed over first: the drained run would find the flag still set, mark itself
+                // pending and return, so the newer list never went out.
+                updateWatchedInFlight = false
+                ownsInFlightFlag = false
                 await runWatchedUpdate()
             }
         }
@@ -1070,86 +1017,6 @@ final class PushNotificationManager: ObservableObject {
             AppLog.log("[Push] Failed to unregister: status=%d reason=%@", httpResponse.statusCode, reason)
         } catch {
             AppLog.log("[Push] Error unregistering: %@", error.localizedDescription)
-        }
-    }
-
-    /// Process pending messages stored by notification extension
-    func processPendingMessages() async {
-        // Decrypted messages an older notification extension stored in plain text (it no longer
-        // does - IOS-051): processed once, then only those entries removed (IOS-052).
-        let storedMessages = SharedDataManager.getStoredMessages()
-        if !storedMessages.isEmpty {
-            AppLog.log("[Push] Processing %d messages from extension", storedMessages.count)
-
-            for msg in storedMessages {
-                // Add to ChatService if not already present
-                if let txId = msg["txId"] as? String,
-                   let sender = msg["sender"] as? String,
-                   let content = msg["content"] as? String,
-                   let timestamp = msg["timestamp"] as? Int64 {
-                    ChatService.shared.recordRemotePushDelivery(
-                        txId: txId,
-                        sender: sender,
-                        messageType: "contextual"
-                    )
-                    await ChatService.shared.addMessageFromPush(
-                        txId: txId,
-                        sender: sender,
-                        content: content,
-                        timestamp: timestamp
-                    )
-                }
-            }
-
-            SharedDataManager.removeStoredMessages(txIds: Set(storedMessages.compactMap { $0["txId"] as? String }))
-        }
-
-        // Get pending messages that need fetching (large payloads, and every 1:1 message the
-        // extension decrypted for its banner)
-        let pendingMessages = SharedDataManager.getPendingMessages()
-        if !pendingMessages.isEmpty {
-            AppLog.log("[Push] Fetching %d pending messages", pendingMessages.count)
-
-            // Group pushes (`NotificationService.handleGroupPush`) always add a pending entry
-            // with `sender: "group"` regardless of whether the NSE already decrypted and showed
-            // it, since there's no single-txId REST fetch for a group message the way 1:1 has
-            // `fetchMessageByTxId`. Routing them through that 1:1-only call below with a literal
-            // "group" sender always silently fails - the message never lands in the group
-            // thread even though its notification banner showed correctly. Group catch-up sync
-            // (cursor-based, already run separately every app-active) is the real mechanism that
-            // persists these, so just make sure it runs and drop these from the retry queue
-            // rather than repeatedly failing the same bogus 1:1 fetch.
-            let hasGroupPending = pendingMessages.contains { $0.type == "group_message" || $0.type == "group_control" }
-            // KaPosts has no groups: a group push here can only be stale, and is dropped below.
-            _ = hasGroupPending
-
-            var failed: [SharedPendingMessage] = []
-            for pending in pendingMessages {
-                if pending.type == "group_message" || pending.type == "group_control" {
-                    continue
-                }
-                ChatService.shared.recordRemotePushDelivery(
-                    txId: pending.txId,
-                    sender: pending.sender,
-                    messageType: pending.type
-                )
-                let fetched: Bool
-                if pending.type == "payment" {
-                    fetched = await ChatService.shared.fetchPaymentByTxId(
-                        pending.txId,
-                        sender: pending.sender,
-                        amount: nil,
-                        timestamp: pending.timestamp
-                    )
-                } else {
-                    fetched = await ChatService.shared.fetchMessageByTxId(pending.txId, sender: pending.sender)
-                }
-                if !fetched {
-                    failed.append(pending)
-                }
-            }
-
-            SharedDataManager.setPendingMessages(failed)
         }
     }
 
@@ -1418,21 +1285,6 @@ final class PushNotificationManager: ObservableObject {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
-    }
-
-    private func saveVoipTokenToKeychain(_ token: String?) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.voipKeychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard let token, let data = token.data(using: .utf8) else { return }
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse!
-        SecItemAdd(addQuery as CFDictionary, nil)
     }
 
     private func loadVoipTokenFromKeychain() -> String? {
@@ -2342,30 +2194,6 @@ struct PushUpdateRequest: Codable {
 
 /// `POST /v1/push/ring` - ring `toAddress`'s devices for a call this device is placing
 /// (PUSH_EXTENSIONS.md §5).
-struct PushRingRequest: Codable {
-    let deviceToken: String
-    let toAddress: String
-    let callId: String
-    let video: Bool
-    /// "invite" (the caller hosts the room) | "request" (the caller asks the callee to host).
-    let kind: String
-    /// The opening call message, encrypted to the callee exactly as on chain, hex.
-    let payload: String
-    let timestampMs: UInt64
-    let auth: PushAuthRequest?
-
-    enum CodingKeys: String, CodingKey {
-        case deviceToken = "device_token"
-        case toAddress = "to_address"
-        case callId = "call_id"
-        case video
-        case kind
-        case payload
-        case timestampMs = "timestamp"
-        case auth
-    }
-}
-
 struct PushUnregisterRequest: Codable {
     let deviceToken: String
     let auth: PushAuthRequest?
@@ -2442,7 +2270,6 @@ enum PushError: LocalizedError {
     case registrationInProgress
     case noWatchedAddresses
     case authFailed(reason: String)
-    case ringFailed(statusCode: Int, reason: String?)
     case noPushService
 
     var errorDescription: String? {
@@ -2471,8 +2298,6 @@ enum PushError: LocalizedError {
             return "No addresses available for push notifications"
         case .authFailed(let reason):
             return "Push auth failed: \(reason)"
-        case .ringFailed(let statusCode, let reason):
-            return "Ring push failed (\(statusCode))" + (reason.map { ": \($0)" } ?? "")
         }
     }
 }

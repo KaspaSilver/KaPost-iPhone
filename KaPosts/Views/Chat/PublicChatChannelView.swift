@@ -27,7 +27,7 @@ struct PublicChatChannelView: View {
     }
 
     /// The composer's text, held by reference so a keystroke doesn't redraw the whole chat
-    /// (see `ChatDetailView.messageText`): `messageText` setter redraws, typing doesn't.
+    /// (see KaChat's `ChatDetailView.messageText`): `messageText` setter redraws, typing doesn't.
     @State private var composerBox = ComposerTextBox()
     @State private var composerHasText = false
     @State private var composerRevision = 0
@@ -89,11 +89,11 @@ struct PublicChatChannelView: View {
     /// away 10 minutes after your reaction. Rows skip re-rendering unless their inputs change
     /// (`.equatable()`), so the expiry has to arrive as an input - see `isReactionCheckFresh`.
     @State private var reactionCheckClock = Date()
-    /// User-set fee, from tapping the fee pill - see ChatDetailView.feeOverrideSompi's doc comment.
+    /// User-set fee, from tapping the fee pill - see KaChat's ChatDetailView.feeOverrideSompi's doc comment.
     @State private var feeOverrideSompi: UInt64?
     @State private var showFeeEditor = false
     @State private var feeEditorText = ""
-    /// Tap-a-reply-quote-to-jump-to-original - mirrors `ChatDetailView`/`GroupChatDetailView`'s
+    /// Tap-a-reply-quote-to-jump-to-original - mirrors KaChat's `ChatDetailView`/KaChat's `GroupChatDetailView`'s
     /// identical pair. `PublicChatMessage.id` is already the wire txId, unlike 1:1/group's `UUID`
     /// row ids, so this stays a `String` throughout.
     @State private var pendingJumpToTxId: String?
@@ -106,7 +106,7 @@ struct PublicChatChannelView: View {
     @State private var showNotifySheet = false
     @State private var highlightedMessageID: String?
     /// Which message (if any) currently has its double-tap quick-reaction bar open - mirrors
-    /// group chat's identical `GroupChatDetailView.activeQuickReactionMessageId`, except public chat
+    /// group chat's identical KaChat's `GroupChatDetailView.activeQuickReactionMessageId`, except public chat
     /// row ids are the wire txId `String` rather than a local `UUID`.
     @State private var activeQuickReactionMessageId: String?
     /// The message whose full emoji picker is open. Owned by the SCREEN, not by the reaction bar.
@@ -153,7 +153,7 @@ struct PublicChatChannelView: View {
     // Split into four expressions rather than one 14-modifier chain. The type checker solves a
     // view's whole modifier chain as a SINGLE expression, and this one had grown past what it
     // will spend on that ("unable to type-check this expression in reasonable time"). Same split,
-    // for the same reason, as ChatListView's.
+    // for the same reason, as KaChat's ChatListView's.
     var body: some View {
         chrome
         .onAppear {
@@ -380,7 +380,7 @@ struct PublicChatChannelView: View {
             // overlay with a manually-tracked keyboard offset) is what guarantees it always sits
             // flush above the keyboard on every device - this is the mechanism SwiftUI itself
             // uses for keyboard avoidance, so there's no custom math to get wrong. See
-            // ChatDetailView's identical fix for why the old floating approach left a gap.
+            // KaChat's ChatDetailView's identical fix for why the old floating approach left a gap.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     if isChattingBalanceZero {
@@ -529,7 +529,7 @@ struct PublicChatChannelView: View {
                         .onChange(of: pendingJumpToStart) { jump in
                             guard jump else { return }
                             pendingJumpToStart = false
-                            // Not animated: see `ChatDetailView.jumpToChatStart` for why a long
+                            // Not animated: see KaChat's `ChatDetailView.jumpToChatStart` for why a long
                             // animated ride across a whole history is worse than landing.
                             proxy.scrollTo("top_anchor", anchor: .top)
                         }
@@ -547,7 +547,7 @@ struct PublicChatChannelView: View {
                                 scrollToBottom(using: proxy, animated: true)
                             }
                         }
-                        // Same interactive drag-down keyboard dismissal as ChatDetailView - the
+                        // Same interactive drag-down keyboard dismissal as KaChat's ChatDetailView - the
                         // room's keyboard had no way down other than sending a message.
                         // `.immediately` rather than `.interactively`. An interactive dismissal drives the
                     // keyboard frame from the drag, so SwiftUI's keyboard safe-area inset is mid-
@@ -686,9 +686,19 @@ struct PublicChatChannelView: View {
     /// in reasonable time").
     @ViewBuilder
     private func messageRow(_ message: PublicChatMessage) -> some View {
-        // An edited message reads with its newest text; the row itself is untouched.
-        let edit = publicChatService.edits(forChannel: channelName)[message.id]
+        // An edited message reads with its newest text; the row itself is untouched. A failed
+        // edit (only an older build left one in the store) never reached the chain.
+        let storedEdit: MessageEditSnapshot? = publicChatService.edits(forChannel: channelName)[message.id]
+        let edit: MessageEditSnapshot? = storedEdit?.deliveryStatus == .failed ? nil : storedEdit
         let message = edit.map { message.replacingContent(MessageEditCodec.apply($0.text, to: message.content)) } ?? message
+        let failedEditText = publicChatService.failedEditText(forChannel: channelName, targetTxId: message.id)
+        // The bubble carries the edit's send state; `message` keeps the row's own for the actions.
+        let shownMessage: PublicChatMessage = failedEditText != nil
+            ? message.replacingDeliveryStatus(.failed)
+            : (edit?.deliveryStatus == .warning ? message.replacingDeliveryStatus(.unconfirmed) : message)
+        let retryAction: () -> Void = failedEditText != nil
+            ? { retryEdit(of: message) }
+            : { publicChatService.retryPublicChat(message) }
         let canEdit = message.senderAddress == myAddress && message.deliveryStatus == .sent && MessageEditCodec.isEditable(message.content)
         let messageReplyQuote = replyQuote(for: message)
         // Hoisted out of the initializer with explicit types. A ternary producing an OPTIONAL
@@ -702,7 +712,7 @@ struct PublicChatChannelView: View {
             publicChatService.reactions(forChannel: channelName)[message.id] ?? []
         let replySender: String? = messageReplyQuote.map { displayName(for: $0.replyToSender) }
         PublicChatMessageRow(
-            message: message,
+            message: shownMessage,
             isOwnMessage: message.senderAddress == myAddress,
             avatarURLString: knsService.profileCache[message.senderAddress]?.avatarURL,
             displayName: displayName(for: message.senderAddress),
@@ -727,7 +737,7 @@ struct PublicChatChannelView: View {
                 UIPasteboard.general.string = displayContent(for: message).text
                 showToast("Message copied.")
             },
-            onRetry: { publicChatService.retryPublicChat(message) },
+            onRetry: retryAction,
             onJumpToReply: jumpToReply,
             reactions: messageReactions,
             myReactorAddress: myAddress ?? "",
@@ -802,9 +812,9 @@ struct PublicChatChannelView: View {
 
     private var composeBar: some View {
         VStack(spacing: 8) {
-            if let editing = publicChatService.editingMessage {
+            if let editing = publicChatService.editTarget(inChannel: channelName) {
                 editBanner(for: editing)
-            } else if let reply = publicChatService.replyingTo {
+            } else if let reply = publicChatService.replyTarget(inChannel: channelName) {
                 replyBanner(for: reply)
             }
             ZStack(alignment: .topLeading) {
@@ -1181,12 +1191,12 @@ struct PublicChatChannelView: View {
         feeOverrideSompi = nil
         // Editing: the composer's text replaces the message being edited - one edit
         // transaction, no new row.
-        if let editing = publicChatService.editingMessage {
+        if let editing = publicChatService.editTarget(inChannel: channelName) {
             Task {
                 do {
                     try await publicChatService.sendPublicChatEdit(channel: channelName, targetTxId: editing.id, text: trimmed)
                 } catch {
-                    showToast("Failed to edit: \(error.localizedDescription)")
+                    showEditFailure(error)
                 }
                 isSending = false
             }
@@ -1199,6 +1209,25 @@ struct PublicChatChannelView: View {
                 showToast("Failed to send: \(error.localizedDescription)")
             }
             isSending = false
+        }
+    }
+
+    private func retryEdit(of message: PublicChatMessage) {
+        Task {
+            do {
+                try await publicChatService.retryFailedEdit(channel: channelName, targetTxId: message.id)
+            } catch {
+                showEditFailure(error)
+            }
+        }
+    }
+
+    private func showEditFailure(_ error: Error) {
+        // Not "Failed": it may well have gone through.
+        if error is SendOutcomeUnknownError {
+            showToast(error.localizedDescription)
+        } else {
+            showToast("Failed to edit: \(error.localizedDescription)")
         }
     }
 
@@ -1340,8 +1369,8 @@ struct PublicChatChannelView: View {
 }
 
 /// The room's `#name` in the navigation bar, as the button that opens Room Info.
-/// The room's header chip: an icon over a name capsule, matching `ChatDetailView`'s and
-/// `GroupChatDetailView`'s chips measure for measure. A room has no photo, so the circle carries
+/// The room's header chip: an icon over a name capsule, matching KaChat's `ChatDetailView`'s and
+/// KaChat's `GroupChatDetailView`'s chips measure for measure. A room has no photo, so the circle carries
 /// the same glyph the room list uses rather than an avatar.
 private struct PublicChatRoomTitleChip: View {
     let channelName: String
@@ -1512,7 +1541,8 @@ private struct PublicChatMessageRow: View, Equatable {
     /// Everything that decides WHAT the message is (voice, links, length) still reads
     /// `displayText`, the original.
     private var shownText: String {
-        translation.displayText(for: translationKey, original: displayText)
+        // Every way a room's body is drawn reads this one (see `strippingBidiControls`).
+        KaPostsMarkdown.strippingBidiControls(translation.displayText(for: translationKey, original: displayText))
     }
 
     /// Worth offering Translate: someone else's plain text message, confidently in a language

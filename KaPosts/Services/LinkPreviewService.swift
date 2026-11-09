@@ -1,5 +1,149 @@
 import Foundation
 import CryptoKit
+import ImageIO
+import UIKit
+
+// MARK: - Bounded downloads and image decoding
+
+/// A download that stops at a byte limit instead of holding whatever a server sends in memory:
+/// the URLs here come from strangers' posts. Runs on the data-task delegate, in chunks, since a
+/// `URLSession.AsyncBytes` loop over single bytes proved too slow on real devices.
+final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    enum Failure: Error { case tooLarge }
+
+    enum Overflow {
+        /// Fail, as soon as Content-Length says so or the body passes the limit.
+        case reject
+        /// Keep what fits and stop (an HTML page: its tags are at the top).
+        case truncate
+    }
+
+    static func data(
+        for request: URLRequest,
+        session: URLSession,
+        maxBytes: Int,
+        onOverflow overflow: Overflow = .reject
+    ) async throws -> (Data, URLResponse) {
+        let download = BoundedDownload(maxBytes: maxBytes, overflow: overflow)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                download.start(request, session: session, continuation: continuation)
+            }
+        } onCancel: {
+            download.cancel()
+        }
+    }
+
+    private let maxBytes: Int
+    private let overflow: Overflow
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var response: URLResponse?
+    private var task: URLSessionDataTask?
+    private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
+    private var isCancelled = false
+
+    private init(maxBytes: Int, overflow: Overflow) {
+        self.maxBytes = maxBytes
+        self.overflow = overflow
+    }
+
+    private func start(_ request: URLRequest, session: URLSession, continuation: CheckedContinuation<(Data, URLResponse), Error>) {
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        let task = session.dataTask(with: request)
+        task.delegate = self
+        self.task = task
+        lock.unlock()
+        task.resume()
+    }
+
+    private func cancel() {
+        lock.lock()
+        isCancelled = true
+        let running = task
+        lock.unlock()
+        running?.cancel()
+    }
+
+    private func finish(_ result: Result<(Data, URLResponse), Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        lock.lock()
+        self.response = response
+        lock.unlock()
+        if overflow == .reject, response.expectedContentLength > Int64(maxBytes) {
+            finish(.failure(Failure.tooLarge))
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        let room = maxBytes - buffer.count
+        guard data.count > room else {
+            buffer.append(data)
+            lock.unlock()
+            return
+        }
+        buffer.append(data.prefix(max(0, room)))
+        let kept = buffer
+        let received = response
+        lock.unlock()
+        if overflow == .truncate, let received {
+            finish(.success((kept, received)))
+        } else {
+            finish(.failure(Failure.tooLarge))
+        }
+        dataTask.cancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let kept = buffer
+        let received = response
+        lock.unlock()
+        if let error {
+            finish(.failure(error))
+        } else if let received {
+            finish(.success((kept, received)))
+        } else {
+            finish(.failure(URLError(.badServerResponse)))
+        }
+    }
+}
+
+/// Decodes straight to the size it will be shown at, off the main thread. `UIImage(data:)` makes
+/// the whole bitmap, and a few megabytes of crafted image can ask for gigabytes of it.
+enum ImageThumbnail {
+    static func decode(_ data: Data, maxPixelSize: Int) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
+            let options = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ] as CFDictionary
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+            return UIImage(cgImage: cgImage)
+        }.value
+    }
+}
 
 // MARK: - Internal KaChat links
 
@@ -457,7 +601,7 @@ struct PaymentRequest: Equatable, Identifiable {
     }
 }
 
-/// The payment request waiting to be shown: `MainTabView` presents Send Kaspa for it.
+/// The payment request waiting to be shown: `KaPostsTabView` presents Send Kaspa for it.
 @MainActor
 final class PaymentRequestRouter: ObservableObject {
     static let shared = PaymentRequestRouter()
@@ -798,10 +942,9 @@ actor LinkPreviewService {
         if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
         request.setValue("image/avif,image/webp,image/png,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBytes ?? maxImageBytes)
             guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode),
-                  data.count <= (maxBytes ?? maxImageBytes) else { return nil }
+                  (200..<300).contains(http.statusCode) else { return nil }
             return data
         } catch {
             return nil
@@ -939,7 +1082,8 @@ actor LinkPreviewService {
     }
 
     /// `https://host/s/TOKEN` (or `/index.php/s/TOKEN`, token 10+ url-safe chars) -> the share's
-    /// raw-file `/download` and thumbnail `/preview` endpoints; nil for any other URL.
+    /// raw-file `/download` and thumbnail `/preview` endpoints; nil for any other URL. Only a
+    /// shape: any stranger's server can match it, so it earns no larger download limit.
     nonisolated static func nextcloudShareEndpoints(for url: URL) -> NextcloudShareEndpoints? {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
         let path = url.path
@@ -1109,15 +1253,9 @@ actor LinkPreviewService {
                 request.setValue(Self.facebookExternalHitUserAgent, forHTTPHeaderField: "User-Agent")
             }
 
-            // Simple whole-response fetch (matches KNSService's fetch pattern) rather than
-            // streaming byte-by-byte - a `URLSession.AsyncBytes` loop reading up to a million
-            // individual `UInt8` awaits turned out unreliable in practice (device-dependent
-            // slowness compounding with the 8s timeout, silently yielding no preview far more
-            // often than this simpler approach does). The size cap below is enforced by
-            // truncating the *received* data instead of the *streamed* data - a materially
-            // weaker DoS guard against a truly adversarial server, acceptable for previewing
-            // links the user's own contacts sent.
-            let (data, response) = try await session.data(for: request)
+            // Stops once `maxBodyBytes` have arrived and keeps those: the tags a preview reads
+            // are at the top of the page, and a server can send as much as it likes.
+            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBodyBytes, onOverflow: .truncate)
             guard let httpResponse = response as? HTTPURLResponse else {
                 AppLog.log("[LinkPreview] non-HTTP response for %@", LinkPreviewService.logLabel(url))
                 return nil
@@ -1127,8 +1265,7 @@ actor LinkPreviewService {
                 return nil
             }
 
-            let capped = data.count > maxBodyBytes ? data.prefix(maxBodyBytes) : data
-            guard let html = String(data: capped, encoding: .utf8) ?? String(data: capped, encoding: .isoLatin1) else {
+            guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
                 AppLog.log("[LinkPreview] could not decode response body as text for %@", LinkPreviewService.logLabel(url))
                 return nil
             }

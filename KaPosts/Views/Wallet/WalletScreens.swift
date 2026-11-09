@@ -11,9 +11,19 @@ import UniformTypeIdentifiers
 /// A plain box rather than state on a view: the value is warmed by the Profile screen and read
 /// by the QR screen, which is presented by a NavigationLink and so has no chance to run anything
 /// before its first frame. Process-lifetime only - it is a head start, never a source of truth,
-/// and `freshReceiveAddress` re-confirms it on every open.
+/// and `freshReceiveAddress` re-confirms it on every open. One per account, so a switch can't
+/// show the previous account's address for a moment.
 enum ReceiveAddressWarmCache {
-    @MainActor static var address: String?
+    @MainActor private static var addresses: [String: String] = [:]
+
+    @MainActor static func address(for account: String?) -> String? {
+        account.flatMap { addresses[$0] }
+    }
+
+    @MainActor static func store(_ address: String?, for account: String?) {
+        guard let account else { return }
+        addresses[account] = address
+    }
 }
 
 
@@ -60,6 +70,8 @@ struct ChattingAddressManageView: View {
     @State private var showPrivateKeySheet = false
     /// The "Address Actions" half sheet, and the public-key screen it can open.
     @State private var showAddressActions = false
+    /// What a row of the options sheet opens next, run from its onDismiss.
+    @State private var afterAddressActions: (() -> Void)?
     @State private var showPublicKeySheet = false
     @State private var utxoLabels: [String: String] = [:]
     @State private var renamingUtxo: UTXO?
@@ -90,25 +102,6 @@ struct ChattingAddressManageView: View {
             .padding(.top, 12)
 
 
-            // What used to be two unlabelled glyphs in the navigation bar. A pair of icons has
-            // room for no words at all, so neither said what it did, and there was nowhere to put
-            // a third thing. Same button and same sheet as Manage Addresses' own Address Actions.
-            Button {
-                Haptics.impact(.light)
-                showAddressActions = true
-            } label: {
-                Text("Address Actions")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.black)
-                    .background(Capsule().fill(Color.accentColor))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
 
             // Right above what it switches, the way Chats has it.
             UnderlineTabBar(
@@ -125,13 +118,45 @@ struct ChattingAddressManageView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showAddressActions) {
-            addressActionsSheet
-                .presentationDetents([.height(330)])
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                AddressOptionsButton { showAddressActions = true }
+            }
+        }
+        .sheet(isPresented: $showAddressActions, onDismiss: {
+            let next = afterAddressActions
+            afterAddressActions = nil
+            next?()
+        }) {
+            let sheet = AddressActionsSheet(
+                explorerURL: settingsViewModel.settings.kaspaExplorer.addressURL(for: address),
+                onViewPrivateKey: {
+                    afterAddressActions = {
+                        if settingsViewModel.settings.biometricSpendingKeyEnabled {
+                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
+                                showPrivateKeySheet = true
+                            }
+                        } else {
+                            showPrivateKeySheet = true
+                        }
+                    }
+                    showAddressActions = false
+                },
+                onViewPublicKey: {
+                    afterAddressActions = { showPublicKeySheet = true }
+                    showAddressActions = false
+                },
+                onViewInExplorer: { url in
+                    showAddressActions = false
+                    UIApplication.shared.open(url)
+                }
+            )
+            sheet
+                .presentationDetents([.height(sheet.height)])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPublicKeySheet) {
-            ChattingAddressPublicKeyView(address: address)
+            AddressPublicKeyView(address: address, note: "This is the public half of your chatting address. It identifies you and cannot spend anything.")
         }
         .safeAreaInset(edge: .bottom) {
             // Receive and Send belong to the history; the UTXOs and Domains tabs don't show them.
@@ -241,60 +266,6 @@ struct ChattingAddressManageView: View {
         }
         .padding(.horizontal)
         .padding(.bottom, 16)
-    }
-
-    /// The half sheet behind "Address Actions". Same shape as Manage Addresses' and Cold
-    /// Storage's sheets of the same name, so all three read as the same object.
-    private var addressActionsSheet: some View {
-        VStack(spacing: 0) {
-            Text("Address Actions")
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
-            VStack(spacing: 12) {
-                ActionSheetRow(
-                    title: "View Private Key",
-                    subtitle: "The key that spends this address. Never share it.",
-                    systemImage: "key.fill"
-                ) {
-                    showAddressActions = false
-                    // A turn later: presenting straight from a dismissing sheet is dropped.
-                    DispatchQueue.main.async {
-                        if settingsViewModel.settings.biometricSpendingKeyEnabled {
-                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
-                                showPrivateKeySheet = true
-                            }
-                        } else {
-                            showPrivateKeySheet = true
-                        }
-                    }
-                }
-                ActionSheetRow(
-                    title: "View Public Key",
-                    subtitle: "The public half of this address, for anyone who asks for it.",
-                    systemImage: "number"
-                ) {
-                    showAddressActions = false
-                    DispatchQueue.main.async { showPublicKeySheet = true }
-                }
-                if let url = settingsViewModel.settings.kaspaExplorer.addressURL(for: address) {
-                    ActionSheetRow(
-                        title: "View in Explorer",
-                        subtitle: "Opens this address on your chosen block explorer.",
-                        systemImage: "globe"
-                    ) {
-                        showAddressActions = false
-                        UIApplication.shared.open(url)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, 20)
     }
 
     private var transactionsList: some View {
@@ -603,8 +574,9 @@ struct ChattingAddressPrivateKeyView: View {
 /// Nothing is derived or unlocked to show this: a Kaspa P2PK address IS its public key in bech32,
 /// so this decodes the address the screen already has. No reveal gate and no clipboard expiry
 /// either - unlike the private key alongside it, this is a value you hand out on purpose.
-struct ChattingAddressPublicKeyView: View {
+struct AddressPublicKeyView: View {
     let address: String
+    let note: LocalizedStringKey
     @Environment(\.dismiss) private var dismiss
 
     @State private var toastMessage: String?
@@ -623,7 +595,7 @@ struct ChattingAddressPublicKeyView: View {
                     Label("Safe to share", systemImage: "checkmark.seal.fill")
                         .font(.headline)
                         .foregroundColor(.accentColor)
-                    Text("This is the public half of your chatting address. It identifies you and cannot spend anything.")
+                    Text(note)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -1555,6 +1527,11 @@ struct WithdrawKaspaView: View {
 
     /// Fills in a payment request: the address (locked), the exact amount and the memo.
     private func apply(_ request: PaymentRequest) {
+        // the request's amount is the amount: a Max from before, or one still being worked out, is over
+        usedMax = false
+        maxCapped = false
+        maxRequest = UUID()
+        isEstimatingMax = false
         activeRequest = request
         addressInput = request.address
         isValidAddress = KaspaAddress.isValidOnActiveNetwork(request.address)
@@ -1708,7 +1685,8 @@ struct WithdrawKaspaView: View {
                     // failure to try again, which would pay twice.
                     guard let sent = try await chatService.sendPayment(
                         to: contact, amountSompi: amountSompi, note: request.memo,
-                        extraFeeSompi: tipSompi, sourceSpendingIndex: spendingIndex, manualUtxos: manualUtxos
+                        extraFeeSompi: tipSompi, sourceSpendingIndex: spendingIndex, manualUtxos: manualUtxos,
+                        expectedFeeSompi: expectedFee
                     ) else { throw SendDeferredError() }
                     txId = sent
                 } else if let spendingIndex {

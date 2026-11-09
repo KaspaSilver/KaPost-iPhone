@@ -31,7 +31,8 @@ struct ToastBanner: View {
         HStack(spacing: 8) {
             Image(systemName: style.iconName)
                 .foregroundColor(style.iconColor)
-            Text(message)
+            // Looked up, not parsed: callers pass plain text, some of it with addresses in it.
+            Text(AppLocalization.string(message))
                 .font(.subheadline)
                 .foregroundColor(.primary)
         }

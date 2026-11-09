@@ -2322,6 +2322,8 @@ extension ChatService {
         /// The payment's extra (Fast / Priority / custom) fee and coin-control selection.
         paymentExtraFeeSompi: UInt64 = 0,
         paymentManualUtxos: [UTXO]? = nil,
+        /// The account a payment was made as: after a switch its retry is dropped.
+        paymentOwner: String? = nil,
         handshakeIsResponse: Bool? = nil
     ) {
         guard !scheduledSendRetries.contains(pendingTxId) else { return }
@@ -2355,6 +2357,9 @@ extension ChatService {
                         )
                     case .payment:
                         guard let paymentAmountSompi else { return }
+                        // a retry is signed by the account it was made as, or not at all
+                        guard WalletManager.shared.currentWallet?.publicAddress == paymentOwner else { return }
+                        let account = try self.paymentFundingAccount(sourceSpendingIndex: paymentSourceIndex)
                         try await self.sendPaymentInternal(
                             to: contact,
                             amountSompi: paymentAmountSompi,
@@ -2362,7 +2367,8 @@ extension ChatService {
                             pendingTxId: retryPendingTxId,
                             extraFeeSompi: paymentExtraFeeSompi,
                             sourceSpendingIndex: paymentSourceIndex,
-                            manualUtxos: paymentManualUtxos
+                            manualUtxos: paymentManualUtxos,
+                            account: account
                         )
                     case .handshake:
                         let isResponse = handshakeIsResponse ?? self.shouldRetryHandshakeAsResponse(for: contact.address)
@@ -2396,8 +2402,14 @@ extension ChatService {
         manualUtxos: [UTXO]? = nil,
         /// A KaPosts tip: the payment names the post (KAPOSTS_INDEXER.md 5.11). Only from the
         /// chatting address: with a `sourceSpendingIndex` it goes as a private payment instead.
-        tip: KaPostTip? = nil
+        tip: KaPostTip? = nil,
+        /// The fee the Review showed. A first send built at the swipe that would pay more throws
+        /// `SendFeeChangedError` and sends nothing. A retry doesn't check: it was already agreed.
+        expectedFeeSompi: UInt64? = nil
     ) async throws -> String? {
+        // Taken now, as `sendWithdrawal` does: the payment may wait in the queue, and it is
+        // signed by the account it was made as, not whichever is active when its turn comes.
+        let account = try paymentFundingAccount(sourceSpendingIndex: sourceSpendingIndex)
         // Paying someone is reaching out to them, like writing to them.
         acceptChat(contact.address)
         return try await enqueueOutgoingTxOperation {
@@ -2409,8 +2421,48 @@ extension ChatService {
                 extraFeeSompi: extraFeeSompi,
                 sourceSpendingIndex: sourceSpendingIndex,
                 manualUtxos: manualUtxos,
-                tip: tip
+                tip: tip,
+                expectedFeeSompi: pendingTxId == nil ? expectedFeeSompi : nil,
+                account: account
             )
+        }
+    }
+
+    /// The account and keys a payment is signed with (`PaymentFundingAccount`).
+    func paymentFundingAccount(sourceSpendingIndex: Int?) throws -> PaymentFundingAccount {
+        guard let wallet = WalletManager.shared.currentWallet else {
+            throw KasiaError.walletNotFound
+        }
+        guard let spendingIndex = sourceSpendingIndex else {
+            guard let identityKey = WalletManager.shared.getPrivateKey() else {
+                throw KasiaError.keychainError("Could not get private key")
+            }
+            return PaymentFundingAccount(wallet: wallet, sourceAddress: wallet.publicAddress,
+                                         sourcePrivateKey: identityKey, senderRedeemScript: nil)
+        }
+        guard let spendingAddress = WalletManager.shared.spendingAddress(at: spendingIndex),
+              let spendingPrivateKey = WalletManager.shared.spendingPrivateKey(at: spendingIndex) else {
+            throw KasiaError.keychainError("Could not derive spending address")
+        }
+        // A quantum-safe source (KIP-22) spends with its redeem script pushed after the
+        // signature; nil for a quantum index means the seed is unreadable this instant.
+        var senderRedeemScript: Data?
+        if WalletManager.isQuantumIndex(spendingIndex) {
+            guard let redeem = WalletManager.shared.quantumRedeemScript(at: spendingIndex) else {
+                throw KasiaError.keychainError("Could not derive the quantum address's key")
+            }
+            senderRedeemScript = redeem
+        }
+        return PaymentFundingAccount(wallet: wallet, sourceAddress: spendingAddress,
+                                     sourcePrivateKey: spendingPrivateKey, senderRedeemScript: senderRedeemScript)
+    }
+
+    /// A payment made as one account never goes out once another is active: the person is no
+    /// longer looking at the account it would pay from.
+    private func dropPaymentIfAccountChanged(_ wallet: Wallet) throws {
+        guard WalletManager.shared.currentWallet?.publicAddress == wallet.publicAddress else {
+            AppLog.log("[ChatService] payment dropped: the account changed while it waited")
+            throw KasiaError.networkError(AppLocalization.string("The account changed, so this payment wasn't sent."))
         }
     }
 
@@ -2424,7 +2476,9 @@ extension ChatService {
         extraFeeSompi: UInt64 = 0,
         sourceSpendingIndex: Int? = nil,
         manualUtxos: [UTXO]? = nil,
-        tip: KaPostTip? = nil
+        tip: KaPostTip? = nil,
+        expectedFeeSompi: UInt64? = nil,
+        account: PaymentFundingAccount
     ) async throws -> String? {
         guard amountSompi > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
@@ -2433,46 +2487,36 @@ extension ChatService {
         // chatting address is a tip (KAPOSTS_INDEXER.md 5.11): from another address it's a
         // private payment, which doesn't name the post or count on it.
         let tip = sourceSpendingIndex == nil ? (tip ?? pendingTxId.flatMap { pendingTips[$0] }) : nil
-        guard let wallet = WalletManager.shared.currentWallet else {
-            throw KasiaError.walletNotFound
-        }
+        let wallet = account.wallet
         // FUNDING SOURCE - keyed on the per-account Chats Payment Privacy toggle:
         //
         // The From the person chose: the chatting address (nil, the default) - funded with the
         // identity key, change back to it - or one of their spending addresses, whose change goes
         // to a never-used address (revealed in Manage Addresses). Estimators must agree - see
         // `paymentFundingSourceAddress`.
-        let sourceAddress: String
-        let sourcePrivateKey: Data
+        let sourceAddress = account.sourceAddress
+        let sourcePrivateKey = account.sourcePrivateKey
         let changeAddress: String?
         let freshChangeIndex: Int?
         if let spendingIndex = sourceSpendingIndex {
-            guard let spendingAddress = WalletManager.shared.spendingAddress(at: spendingIndex),
-                  let spendingPrivateKey = WalletManager.shared.spendingPrivateKey(at: spendingIndex) else {
-                throw KasiaError.keychainError("Could not derive spending address")
-            }
             // Change always lands on a brand-new quantum-safe slot (KIP-22): never an address
-            // used before, and its key stays hidden until IT spends.
-            // Slot and address from the account the source was derived from (IOS-109).
+            // used before, and its key stays hidden until IT spends. Taken here rather than
+            // before the queue, so a payment waiting behind another gets the slot after that
+            // one's. Slot and address from the account the source was derived from (IOS-109).
             let slot = await WalletManager.shared.verifiedFreshQuantumSlot()
             // A quantum source's spend reveals its key: change back to it would park funds on a
             // revealed key (IOS-104). A legacy source may still fall back to itself.
             if slot == nil, WalletManager.isQuantumIndex(spendingIndex) {
                 throw KasiaError.keychainError(AppLocalization.string("Couldn't prepare the next address. Try again."))
             }
-            sourceAddress = spendingAddress
-            sourcePrivateKey = spendingPrivateKey
             changeAddress = slot?.address
             freshChangeIndex = slot?.index
         } else {
-            guard let identityKey = WalletManager.shared.getPrivateKey() else {
-                throw KasiaError.keychainError("Could not get private key")
-            }
-            sourceAddress = wallet.publicAddress
-            sourcePrivateKey = identityKey
             changeAddress = nil
             freshChangeIndex = nil
         }
+        // After the slot: it is read from the active account, and its probe awaits.
+        try dropPaymentIfAccountChanged(wallet)
         let fromChattingAddress = sourceSpendingIndex == nil
 
         if pendingTxId == nil {
@@ -2595,6 +2639,8 @@ extension ChatService {
             // A tip: the same sealed note, inside a signed payload that names the post.
             var tipPayload: Data?
             if let tip {
+                // signed below with the active account's key
+                try dropPaymentIfAccountChanged(wallet)
                 let sealed = try KasiaTransactionBuilder.sealedPaymentHex(message: note, amount: amountSompi, recipientPublicKey: recipientPublicKey)
                 let pubkey = try KaPostsAPIClient.shared.requesterPubkey()
                 let signature = try WalletManager.shared.signArbitraryMessage(
@@ -2619,15 +2665,6 @@ extension ChatService {
                     payloadOverride: tipPayload
                 )
             } else {
-                // A quantum-safe source (KIP-22) spends with its redeem script pushed after the
-                // signature; nil for a quantum index means the seed is unreadable this instant.
-                var senderRedeemScript: Data?
-                if let spendingIndex = sourceSpendingIndex, WalletManager.isQuantumIndex(spendingIndex) {
-                    guard let redeem = WalletManager.shared.quantumRedeemScript(at: spendingIndex) else {
-                        throw KasiaError.keychainError("Could not derive the quantum address's key")
-                    }
-                    senderRedeemScript = redeem
-                }
                 tx = try KasiaTransactionBuilder.buildPlainTransferTx(
                     from: sourceAddress,
                     to: destinationAddress,
@@ -2636,9 +2673,10 @@ extension ChatService {
                     utxos: spendable,
                     extraFeeSompi: extraFeeSompi,
                     changeAddress: changeAddress,
-                    senderRedeemScript: senderRedeemScript
+                    senderRedeemScript: account.senderRedeemScript
                 )
             }
+            try checkFeeAgainstReview(tx, spending: spendable, expectedFeeSompi: expectedFeeSompi)
 
             // Submit via RPC manager
             AppLog.log("[ChatService] Submitting payment via RPC manager...")
@@ -2718,6 +2756,21 @@ extension ChatService {
                 if !fromChattingAddress, let spendingIndex = sourceSpendingIndex, WalletManager.isQuantumIndex(spendingIndex) {
                     WalletManager.shared.markQuantumAddressSpent(sourceAddress, owner: wallet.publicAddress)
                 }
+                // Not a failure: the bubble stays pending under the id this device computed, so
+                // nothing offers to send it again and its copy on chain still settles it.
+                if let builtTxId {
+                    _ = updatePendingMessageById(pendingMessageId, newTxId: builtTxId, contactAddress: contact.address)
+                    markOutgoingAttemptSubmitted(
+                        messageId: pendingMessageId,
+                        pendingTxId: activePendingTxId,
+                        contactAddress: contact.address,
+                        messageType: .payment,
+                        txId: builtTxId
+                    )
+                }
+                clearNoInputRetryState(for: activePendingTxId)
+                saveMessages()
+                throw error
             }
 
             if isNoConfirmedInputsError(error) {
@@ -2737,7 +2790,8 @@ extension ChatService {
                     paymentNote: note,
                     paymentSourceIndex: sourceSpendingIndex,
                     paymentExtraFeeSompi: extraFeeSompi,
-                    paymentManualUtxos: manualUtxos
+                    paymentManualUtxos: manualUtxos,
+                    paymentOwner: wallet.publicAddress
                 )
                 // Deferred, not sent - nothing to confirm yet.
                 return nil
@@ -2796,7 +2850,8 @@ extension ChatService {
             var resolvedManualUtxos: [UTXO]?
             if let manualUtxos, !manualUtxos.isEmpty {
                 func outpointKey(_ utxo: UTXO) -> String { "\(utxo.outpoint.transactionId):\(utxo.outpoint.index)" }
-                let spendableByOutpoint = Dictionary(uniqueKeysWithValues: spendable.map { (outpointKey($0), $0) })
+                // a node can list an outpoint twice: the first wins rather than a crash
+                let spendableByOutpoint = Dictionary(spendable.map { (outpointKey($0), $0) }, uniquingKeysWith: { first, _ in first })
                 let resolved = manualUtxos.compactMap { spendableByOutpoint[outpointKey($0)] }
                 guard !resolved.isEmpty else {
                     throw KasiaError.networkError("Selected UTXOs are no longer available - please reselect")
@@ -3018,16 +3073,21 @@ extension ChatService {
         }
     }
 
-    /// After a plain send, or one whose outcome is unknown: its coins are reserved so neither the
-    /// next send nor the next post picks them again, and the UTXO cache is dropped. With a `txId`
-    /// and `changeScriptPubKey` (the chatting address), its outputs back there are offered to the
-    /// next post the way a post's own change is. Callers pass nil for an unknown outcome, since a
-    /// post chained on a transaction that never landed would never land either.
+    /// After a plain send: its coins are reserved so neither the next send nor the next post
+    /// picks them again, and the UTXO cache is dropped. With a `changeScriptPubKey` (the chatting
+    /// address), its outputs back there are offered to the next post the way a post's own change
+    /// is. A nil `txId` is an unknown outcome: only the cache is dropped. Its coins stay spendable
+    /// on purpose, so a send made after "Not confirmed" picks the same ones and only one of the
+    /// two can land (held, it would pick other coins and both could).
     func recordPlainSend(_ tx: KaspaRpcTransaction, spent candidates: [UTXO], txId: String?, changeScriptPubKey: Data?) {
+        guard let txId else {
+            invalidateUtxoCache()
+            return
+        }
         let spentUtxos = spentMessageUtxos(from: tx, candidates: candidates)
         reserveMessageOutpoints(spentUtxos)
         consumePendingUtxos(spentUtxos)
-        if let txId, let changeScriptPubKey {
+        if let changeScriptPubKey {
             addPendingOutputs(from: tx, txId: txId, senderScriptPubKey: changeScriptPubKey)
         }
         invalidateUtxoCache()
@@ -3042,9 +3102,11 @@ extension ChatService {
     /// Sends a plain KAS transfer from a specific spending-chain address (Manage Addresses'
     /// per-row Withdraw action).
     ///
-    /// For a NON-primary index the change stays on the same address: that is a scoped,
+    /// For a NON-primary legacy index the change stays on the same address: that is a scoped,
     /// explicit single-address operation, and the row's own balance is what the user is
-    /// managing. The primary is different. A send from it puts its change on a fresh index and
+    /// managing. A non-primary quantum index can't keep it (the spend reveals its key), so its
+    /// change goes to a fresh slot, revealed in Manage Addresses, and the primary stays put.
+    /// The primary is different. A send from it puts its change on a fresh index and
     /// rotates the primary to that index - exactly what a chat payment does - so the address
     /// you spend from and hand out next has never been used before. This path used to leave
     /// the primary sitting on the address it had just spent from. The old primary keeps
@@ -3065,22 +3127,24 @@ extension ChatService {
               let privateKey = WalletManager.shared.spendingPrivateKey(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
         }
-        // Fresh change index for the primary only: past the all-time max, so it has never been
-        // revealed, funded or offered (the same rule `sendPaymentInternal` uses). Decided up
-        // front and applied only after the node accepts the transaction, so a failed send moves
-        // nothing. If the fresh address cannot be derived this instant, change stays put and
-        // the primary stays put with it - rotating onto an address the change did not reach
-        // would strand the funds behind a pointer. A self-send (the Compound action) moves
-        // nothing out of the address, so it neither splits its consolidation onto a fresh
+        // Fresh change index for the primary and for any quantum source: past the all-time max,
+        // so it has never been revealed, funded or offered (the same rule `sendPaymentInternal`
+        // uses). Decided up front and applied only after the node accepts the transaction, so a
+        // failed send moves nothing. If the fresh address cannot be derived this instant, change
+        // stays put and the primary stays put with it - rotating onto an address the change did
+        // not reach would strand the funds behind a pointer. A self-send (the Compound action)
+        // moves nothing out of the address, so it neither splits its consolidation onto a fresh
         // address nor rotates.
         var freshChangeIndex: Int?
         var changeAddress: String?
+        // Only the primary rotates: a non-primary quantum source's slot is just revealed.
+        let sourceIsPrimary = index == WalletManager.shared.currentSpendingAddressIndex
         let isSelfSend = toAddress.lowercased() == fromAddress.lowercased()
         // A quantum source's change must NEVER return to it - the spend reveals its key, and
         // change back would park funds on a revealed address (KIP-22). A legacy primary keeps
-        // rotating as before; both rotate onto a fresh quantum slot now. A self-send (Compound)
-        // still consolidates into the address itself, shield off.
-        if !isSelfSend, WalletManager.isQuantumIndex(index) || index == WalletManager.shared.currentSpendingAddressIndex {
+        // rotating as before, onto a fresh quantum slot now. A self-send (Compound) still
+        // consolidates into the address itself, shield off.
+        if sendUsesFreshChange(index: index, isSelfSend: isSelfSend) {
             if let slot = await WalletManager.shared.verifiedFreshQuantumSlot() {
                 freshChangeIndex = slot.index
                 changeAddress = slot.address
@@ -3103,12 +3167,14 @@ extension ChatService {
             // gate dropped every coinbase UTXO, which is why compounding/withdrawing a mining
             // address failed with a bare "No spendable UTXOs".
             let vds = await self.resolveVirtualDaaScore(nil, utxos: utxos)
-            var spendable = ChatService.spendableUtxos(utxos, virtualDaaScore: vds)
+            // Not the coins a send still in flight spent, whichever address it spent them from:
+            // the node lists them until that spend is in a block.
+            var spendable = self.unreservedUtxos(ChatService.spendableUtxos(utxos, virtualDaaScore: vds))
             if spendable.isEmpty, let manualUtxos, !manualUtxos.isEmpty {
                 // The fresh fetch came back empty (transient pool/node condition) but the caller
                 // pinned an explicit set (e.g. a compound chunk) - fall back to it; the node will
                 // reject any of those inputs that were actually already spent.
-                spendable = ChatService.spendableUtxos(manualUtxos, virtualDaaScore: vds)
+                spendable = self.unreservedUtxos(ChatService.spendableUtxos(manualUtxos, virtualDaaScore: vds))
             }
             guard !spendable.isEmpty else {
                 throw KasiaError.networkError("No spendable UTXOs available")
@@ -3121,7 +3187,8 @@ extension ChatService {
             var resolvedManualUtxos: [UTXO]?
             if let manualUtxos, !manualUtxos.isEmpty {
                 func outpointKey(_ utxo: UTXO) -> String { "\(utxo.outpoint.transactionId):\(utxo.outpoint.index)" }
-                let spendableByOutpoint = Dictionary(uniqueKeysWithValues: spendable.map { (outpointKey($0), $0) })
+                // a node can list an outpoint twice: the first wins rather than a crash
+                let spendableByOutpoint = Dictionary(spendable.map { (outpointKey($0), $0) }, uniquingKeysWith: { first, _ in first })
                 let resolved = manualUtxos.compactMap { spendableByOutpoint[outpointKey($0)] }
                 guard !resolved.isEmpty else {
                     throw KasiaError.networkError("Selected UTXOs are no longer available - please reselect")
@@ -3171,9 +3238,14 @@ extension ChatService {
                 WalletManager.shared.markQuantumAddressSpent(fromAddress, owner: owner)
             }
             if let freshChangeIndex {
-                // The primary follows its change onto the fresh address. Manage Addresses
-                // listens for this and moves its star at once.
-                await WalletManager.shared.setActiveSpendingAddress(freshChangeIndex, owner: owner)
+                if sourceIsPrimary {
+                    // The primary follows its change onto the fresh address. Manage Addresses
+                    // listens for this and moves its star at once.
+                    await WalletManager.shared.setActiveSpendingAddress(freshChangeIndex, owner: owner)
+                } else {
+                    // Not the primary: its change is listed, and the primary stays where it was.
+                    await WalletManager.shared.revealSpendingAddress(at: freshChangeIndex, owner: owner)
+                }
             }
             return txId
         }
@@ -3214,8 +3286,9 @@ extension ChatService {
     /// UI's "Max" uses this to reflect *one transaction's worth* of consolidatable value instead of
     /// the whole (over-mass) balance - the user consolidates that chunk, then repeats to reduce
     /// further. Returns the chunk so the send spends exactly those inputs.
-    /// `feeMultiplier` as in `estimateMaxWithdrawalAmount`.
-    func maxConsolidatableChunk(index: Int, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64 = 1, availableUtxos: [UTXO] = []) async throws -> (amountSompi: UInt64, utxos: [UTXO]) {
+    /// `feeMultiplier` as in `estimateMaxWithdrawalAmount`. `selection`: the coins Coin Control
+    /// picked, nil for all of them; the chunk is taken from those.
+    func maxConsolidatableChunk(index: Int, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64 = 1, availableUtxos: [UTXO] = [], selection: [UTXO]? = nil) async throws -> (amountSompi: UInt64, utxos: [UTXO]) {
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
         }
@@ -3245,15 +3318,35 @@ extension ChatService {
             }
             throw KasiaError.networkError("No spendable UTXOs available")
         }
+        let candidates = try resolveReviewSelection(selection, against: spendable) ?? spendable
         // Largest-first, capped to what fits one transaction's mass.
-        let chunk = Array(spendable.sorted { $0.amount > $1.amount }.prefix(KasiaTransactionBuilder.maxInputsPerTransaction))
+        let chunk = Array(candidates.sorted { $0.amount > $1.amount }.prefix(KasiaTransactionBuilder.maxInputsPerTransaction))
         let amount = try await estimateMaxSpendingAddressAmount(index: index, toAddress: fromAddress, manualUtxos: chunk, extraFeeSompi: extraFeeSompi, feeMultiplier: feeMultiplier, availableUtxos: utxos, virtualDaaScore: virtualDaaScore).amountSompi
         return (amount, chunk)
     }
 
+    /// Whether a send from this spending address puts its change on a fresh quantum slot: the
+    /// primary and any quantum source do, and a self-send (Compound) never does. The send and
+    /// its estimates share this, or the Review prices change the send doesn't build.
+    private func sendUsesFreshChange(index: Int, isSelfSend: Bool) -> Bool {
+        !isSelfSend && (WalletManager.isQuantumIndex(index) || index == WalletManager.shared.currentSpendingAddressIndex)
+    }
+
+    /// A fresh slot's change script, for pricing only: a KIP-22 P2SH script, 35 bytes against
+    /// P2PK's 34. Only its length reaches the fee, so no slot is derived or probed for a Review.
+    private static let freshChangeScriptForPricing = KachatNames.Codec.p2shScript(Data())
+
+    /// The script a spending address's change will really have (`buildPlainTransferTx` prices
+    /// change at its own script): 11 mass grams more on a fresh slot, 1,100 sompi at the minimum
+    /// fee and past `reviewFeeMarginSompi`, so priced at the sender's own the send was refused.
+    private func changeScriptForPricing(index: Int, fromAddress: String, toAddress: String, senderScriptPubKey: Data) -> Data {
+        let isSelfSend = toAddress.lowercased() == fromAddress.lowercased()
+        return sendUsesFreshChange(index: index, isSelfSend: isSelfSend) ? Self.freshChangeScriptForPricing : senderScriptPubKey
+    }
+
     /// Estimates the total fee for a spending-address withdrawal. Calls NodePoolService
-    /// directly rather than fetchUtxosWithFallback, whose single-address UTXO cache would
-    /// return the wrong address's data when estimating for anything but the identity address.
+    /// directly rather than fetchUtxosWithFallback, whose 20-second cache can still list coins a
+    /// send just spent.
     func estimateSpendingAddressWithdrawalFee(index: Int, toAddress: String, amountSompi: UInt64, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, availableUtxos: [UTXO] = [], virtualDaaScore: UInt64? = nil) async throws -> SendFeeEstimate {
         guard amountSompi > 0 else { throw KasiaError.networkError("Amount is zero") }
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
@@ -3266,7 +3359,8 @@ extension ChatService {
 
         let utxos = availableUtxos.isEmpty ? try await NodePoolService.shared.getUtxosByAddresses([fromAddress]) : availableUtxos
         let vds = await resolveVirtualDaaScore(virtualDaaScore, utxos: utxos)
-        let spendable = ChatService.spendableUtxos(utxos, virtualDaaScore: vds)
+        // the coins `sendFromSpendingAddress` builds from
+        let spendable = unreservedUtxos(ChatService.spendableUtxos(utxos, virtualDaaScore: vds))
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
@@ -3276,7 +3370,7 @@ extension ChatService {
             utxos: spendable,
             amount: amountSompi,
             recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: senderScriptPubKey,
+            senderScriptPubKey: changeScriptForPricing(index: index, fromAddress: fromAddress, toAddress: toAddress, senderScriptPubKey: senderScriptPubKey),
             manualUtxos: resolvedManualUtxos,
             extraFeeSompi: extraFeeSompi,
             virtualDaaScore: vds,
@@ -3302,7 +3396,8 @@ extension ChatService {
 
         let utxos = availableUtxos.isEmpty ? try await NodePoolService.shared.getUtxosByAddresses([fromAddress]) : availableUtxos
         let vds = await resolveVirtualDaaScore(virtualDaaScore, utxos: utxos)
-        let spendable = ChatService.spendableUtxos(utxos, virtualDaaScore: vds)
+        // the coins `sendFromSpendingAddress` builds from
+        let spendable = unreservedUtxos(ChatService.spendableUtxos(utxos, virtualDaaScore: vds))
         guard !spendable.isEmpty else {
             throw KasiaError.networkError("No spendable UTXOs")
         }
@@ -3314,6 +3409,7 @@ extension ChatService {
         let totalBalance = try maxSet.totalAmount()
         let signatureScriptSize = WalletManager.isQuantumIndex(index)
             ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
+        let changeScriptPubKey = changeScriptForPricing(index: index, fromAddress: fromAddress, toAddress: toAddress, senderScriptPubKey: senderScriptPubKey)
 
         let amount = try Self.maxSendAmount(
             total: totalBalance,
@@ -3324,7 +3420,7 @@ extension ChatService {
                     utxos: maxSet,
                     payload: Data(),
                     recipientScriptPubKey: recipientScriptPubKey,
-                    senderScriptPubKey: senderScriptPubKey,
+                    senderScriptPubKey: changeScriptPubKey,
                     extraFeeSompi: extra,
                     virtualDaaScore: vds,
                     signatureScriptSize: signatureScriptSize
@@ -3336,7 +3432,7 @@ extension ChatService {
                     utxos: spendable,
                     amount: sompi,
                     recipientScriptPubKey: recipientScriptPubKey,
-                    senderScriptPubKey: senderScriptPubKey,
+                    senderScriptPubKey: changeScriptPubKey,
                     manualUtxos: resolvedManualUtxos,
                     virtualDaaScore: vds,
                     signatureScriptSize: signatureScriptSize
@@ -3345,6 +3441,25 @@ extension ChatService {
         )
 
         return (amount, chunk != nil)
+    }
+
+    /// What Send All To Primary pays to sweep one address, at the Normal speed: the real coins and
+    /// the shape the sweep builds, not a reference transaction. `cappedAtInputLimit` as in
+    /// `estimateMaxWithdrawalAmount`.
+    func estimateSweepFee(index: Int, toAddress: String) async throws -> (feeSompi: UInt64, cappedAtInputLimit: Bool) {
+        guard let fromAddress = WalletManager.shared.spendingAddress(at: index) else {
+            throw KasiaError.keychainError("Could not derive this spending address")
+        }
+        let utxos = try await NodePoolService.shared.getUtxosByAddresses([fromAddress])
+        let vds = await resolveVirtualDaaScore(nil, utxos: utxos)
+        let result = try await estimateMaxSpendingAddressAmount(index: index, toAddress: toAddress, availableUtxos: utxos, virtualDaaScore: vds)
+        let spendable = unreservedUtxos(ChatService.spendableUtxos(utxos, virtualDaaScore: vds))
+        let swept = Self.oneTransactionChunk(spendable) ?? spendable
+        let total = try swept.totalAmount()
+        guard total >= result.amountSompi else {
+            throw KasiaError.networkError("No spendable UTXOs")
+        }
+        return (total - result.amountSompi, result.cappedAtInputLimit)
     }
 
     /// Re-resolves a coin-control selection by outpoint against a freshly-fetched spendable
@@ -3357,7 +3472,8 @@ extension ChatService {
     private func resolveManualUtxos(_ manualUtxos: [UTXO]?, against spendable: [UTXO]) -> [UTXO]? {
         guard let manualUtxos, !manualUtxos.isEmpty else { return nil }
         func outpointKey(_ utxo: UTXO) -> String { "\(utxo.outpoint.transactionId):\(utxo.outpoint.index)" }
-        let spendableByOutpoint = Dictionary(uniqueKeysWithValues: spendable.map { (outpointKey($0), $0) })
+        // a node can list an outpoint twice: the first wins rather than a crash
+        let spendableByOutpoint = Dictionary(spendable.map { (outpointKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         let resolved = manualUtxos.compactMap { spendableByOutpoint[outpointKey($0)] }
         return resolved.isEmpty ? nil : resolved
     }
@@ -3620,7 +3736,10 @@ extension ChatService {
             throw KasiaError.invalidAddress
         }
 
-        let payload = try estimationPayload(note: note, amount: amountSompi, recipientPublicKey: recipientPublicKey, tip: tip)
+        // From a spending address it goes as a plain transfer with no payload, its change on a
+        // fresh slot (`sendPaymentInternal`): priced as that, not as the chat payment it isn't.
+        let payload = try sourceSpendingIndex != nil ? Data()
+            : estimationPayload(note: note, amount: amountSompi, recipientPublicKey: recipientPublicKey, tip: tip)
         // Use fallback method - doesn't require gRPC connection. The coins the send may spend:
         // none a scheduled post holds or a send in flight already spent.
         let utxos = try await fetchUtxosWithFallback(for: sourceAddress)
@@ -3640,7 +3759,7 @@ extension ChatService {
             payload: payload,
             amount: amountSompi,
             recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: senderScriptPubKey,
+            senderScriptPubKey: sourceSpendingIndex != nil ? Self.freshChangeScriptForPricing : senderScriptPubKey,
             extraFeeSompi: extraFeeSompi,
             signatureScriptSize: sourceSpendingIndex.map(WalletManager.isQuantumIndex) == true
                 ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
@@ -3673,15 +3792,17 @@ extension ChatService {
             throw KasiaError.invalidAddress
         }
 
-        // Build payload with a placeholder amount (doesn't affect fee calculation significantly)
-        let payload = try estimationPayload(note: note, amount: totalBalance, recipientPublicKey: recipientPublicKey, tip: tip)
+        // Build payload with a placeholder amount (doesn't affect fee calculation significantly).
+        // None from a spending address: a plain transfer, as in `estimatePaymentFee`.
+        let payload = try sourceSpendingIndex != nil ? Data()
+            : estimationPayload(note: note, amount: totalBalance, recipientPublicKey: recipientPublicKey, tip: tip)
 
         // Calculate fee for send-all (uses 2 outputs to match selectUtxosForPayment behavior)
         let fee = KasiaTransactionBuilder.estimateSendAllFee(
             utxos: spendable,
             payload: payload,
             recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: senderScriptPubKey,
+            senderScriptPubKey: sourceSpendingIndex != nil ? Self.freshChangeScriptForPricing : senderScriptPubKey,
             signatureScriptSize: sourceSpendingIndex.map(WalletManager.isQuantumIndex) == true
                 ? KasiaTransactionBuilder.kip22SignatureScriptSize : 66
         )
@@ -4347,9 +4468,13 @@ extension ChatService {
         }
     }
 
+    /// Whose coins `cachedUtxos` holds: a fee or Max for one address never reads another's.
+    private static var cachedUtxosAddress: String?
+
     func fetchCachedUtxos(for address: String) async throws -> [UTXO] {
         if let timestamp = cachedUtxosTimestamp,
            Date().timeIntervalSince(timestamp) < utxoCacheInterval,
+           Self.cachedUtxosAddress == address,
            !cachedUtxos.isEmpty {
             return cachedUtxos
         }
@@ -4358,6 +4483,7 @@ extension ChatService {
         updateWalletBalanceIfNeeded(address: address, utxos: utxos)
         cachedUtxos = utxos
         cachedUtxosTimestamp = Date()
+        Self.cachedUtxosAddress = address
         return utxos
     }
 
@@ -4367,6 +4493,7 @@ extension ChatService {
         // Check cache first
         if let timestamp = cachedUtxosTimestamp,
            Date().timeIntervalSince(timestamp) < utxoCacheInterval,
+           Self.cachedUtxosAddress == address,
            !cachedUtxos.isEmpty {
             return cachedUtxos
         }
@@ -4376,6 +4503,7 @@ extension ChatService {
         updateWalletBalanceIfNeeded(address: address, utxos: utxos)
         cachedUtxos = utxos
         cachedUtxosTimestamp = Date()
+        Self.cachedUtxosAddress = address
         return utxos
     }
 
@@ -5017,6 +5145,16 @@ private struct KaspaAddressTransactionsCountResponse: Decodable {
 struct KaPostTip: Equatable {
     let postId: String
     let authorPubkey: String
+}
+
+/// Who pays a chat payment, taken before it waits in the transaction queue
+/// (`ChatService.sendPayment`), so it signs as the account it was made as.
+struct PaymentFundingAccount {
+    let wallet: Wallet
+    let sourceAddress: String
+    let sourcePrivateKey: Data
+    /// A quantum-safe spending address's redeem script (KIP-22); nil for any other source.
+    let senderRedeemScript: Data?
 }
 
 /// A send built at the swipe would pay more than its Review showed: its coins changed in between

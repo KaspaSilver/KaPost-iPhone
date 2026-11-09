@@ -1555,12 +1555,16 @@ struct KasiaTransactionBuilder {
         var total: UInt64 = 0
         // Funds were enough but no shape fit without giving away real change - see below.
         var blockedByStorageMass = false
+        // The first set of coins that could send by giving its change to the fee, held back while
+        // a further coin might let that change stay - see below.
+        var foldIfNothingBetter: PaymentSelection?
 
         for utxo in sorted {
             // Refuse to build an over-mass transaction: if we've hit the input cap and still
             // haven't covered the amount, more inputs would exceed Kaspa's mass limit and the node
             // would reject the tx. Fail with a clear, actionable message instead.
             if selected.count >= maxInputsPerTransaction {
+                if let foldIfNothingBetter { return foldIfNothingBetter }
                 throw KasiaError.networkError("This send needs more than \(maxInputsPerTransaction) inputs. Compound (consolidate) this address's UTXOs first, then try again.")
             }
             selected.append(utxo)
@@ -1612,12 +1616,19 @@ struct KasiaTransactionBuilder {
                 // Another coin lowers that mass, so keep adding before giving up.
                 if change <= maxFoldedChangeSompi,
                    fitsStorageMass(inputAmounts: selected.map(\.amount), outputAmounts: [amount]) {
-                    return PaymentSelection(utxos: selected, change: change, emitChange: false)
+                    let fold = PaymentSelection(utxos: selected, change: change, emitChange: false)
+                    // Worth less than this transaction's fee it really is dust, and a Max lands
+                    // here too. Worth more it is real money (up to 0.1 KAS), and a further coin
+                    // lets the change stay, since a bigger change output fits the storage mass.
+                    if change <= feeWithChange { return fold }
+                    if foldIfNothingBetter == nil { foldIfNothingBetter = fold }
+                    continue
                 }
                 blockedByStorageMass = true
             }
         }
 
+        if let foldIfNothingBetter { return foldIfNothingBetter }
         if blockedByStorageMass {
             throw KasiaError.networkError(smallSendMassMessage)
         }

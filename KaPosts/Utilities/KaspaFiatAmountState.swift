@@ -7,7 +7,7 @@ import SwiftUI
 /// typing in (`isFiatMode`), this object owns only the field's own display text and mode.
 ///
 /// `priceInCurrency` (1 KAS's price in the wallet's selected fiat currency - see
-/// `PortfolioViewModel.currentPriceUsd`) and `currency` are passed into each call fresh rather
+/// KaChat's `PortfolioViewModel.currentPriceUsd`) and `currency` are passed into each call fresh rather
 /// than captured once, since both can change live while this field is on screen (a price refresh
 /// landing async, a currency switched in Settings). Mirrors the Android `KaspaFiatAmountState`.
 @MainActor
@@ -86,7 +86,7 @@ final class KaspaFiatAmountState: ObservableObject {
 
     /// Unlike Android's equivalent (whose per-screen `remember` state gets torn down for free
     /// whenever its conditionally-composed dialog/payment-mode row is dismissed), this object is
-    /// a single `@StateObject` living with the whole `ChatDetailView`/dialog for as long as it's
+    /// a single `@StateObject` living with the whole KaChat's `ChatDetailView`/dialog for as long as it's
     /// on screen - callers must call this explicitly wherever they already reset their own
     /// canonical KAS `@State` var (leaving payment mode, a successful send, a dialog dismissing).
     func reset() {

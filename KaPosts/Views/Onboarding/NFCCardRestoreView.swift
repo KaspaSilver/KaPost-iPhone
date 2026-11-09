@@ -151,7 +151,11 @@ struct NFCCardRestoreView: View {
             )
             // Same as typing the words: whoever restored it has the seed.
             AccountBackupStatus.shared.markConfirmed(wallet.publicAddress)
-            Task { await walletManager.discoverSpendingAddresses() }
+            Task {
+                await walletManager.discoverSpendingAddresses()
+                _ = try? await walletManager.refreshBalance(force: true)
+                NotificationCenter.default.post(name: .ownAddressUtxoActivity, object: nil)
+            }
         } catch {
             walletManager.justCreatedNewWallet = false
             walletManager.justImportedWallet = false

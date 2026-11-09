@@ -4,7 +4,7 @@ struct PublicChatListView: View {
     @EnvironmentObject var publicChatService: PublicChatService
 
     /// Channel to auto-push into on first appearance - set when this view is opened by tapping a
-    /// public chat-room notification (see `ChatListView.navigateToPublicChat`), so the notification
+    /// public chat-room notification (see KaChat's `ChatListView.navigateToPublicChat`), so the notification
     /// lands the user directly in the room instead of just this list.
     let initialChannel: String?
     /// True when shown as the Chats screen's "Public Chats" tab: the Chats screen already owns
@@ -99,8 +99,8 @@ struct PublicChatListView: View {
                 hasAppliedInitialChannel = true
                 selectedChannel = initialChannel
             }
-            // Cold-start push tap: MainTabView routes here, and the pending channel (set by the
-            // notification handler) is consumed on mount - ChatListView no longer brokers this.
+            // Cold-start push tap: KaPostsTabView routes here, and the pending channel (set by the
+            // notification handler) is consumed on mount - KaChat's ChatListView no longer brokers this.
             if let pending = publicChatService.pendingPublicChatNavigation {
                 publicChatService.pendingPublicChatNavigation = nil
                 // On the next tick: the stack is still coming on screen with its tab during this
@@ -111,7 +111,7 @@ struct PublicChatListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { notification in
             // Already viewing the public chat list (or a room within it) when another public chat
             // notification is tapped - swap straight to the new room instead of no-oping, since
-            // `ChatListView`'s own handling only covers opening the list from scratch.
+            // KaChat's `ChatListView`'s own handling only covers opening the list from scratch.
             guard let channel = notification.userInfo?["channel"] as? String else { return }
             openChannelFromHandoff(channel)
         }

@@ -2420,9 +2420,8 @@ struct AppSettings: Codable {
     var kaPostsDefaultTipFiat: Double?
     /// The currency `kaPostsDefaultTipFiat` is in (the app's currency when it was set).
     var kaPostsDefaultTipFiatCurrency: AppCurrency?
-    /// KaPosts > Settings > Tips From: the spending address (its index) tips leave from by default,
-    /// the instant tip and the tip sheet's first choice. nil = the chatting address, the only
-    /// one whose tips count on the post (KAPOSTS_INDEXER.md 5.11); another address tips privately.
+    /// The device-wide Tips From this used to be: read once to seed each account's own
+    /// (`KaPostsTipSourceStore`), and not written any more.
     var kaPostsDefaultTipSourceIndex: Int?
     /// KaPosts > Settings > Cool down before post: every KaPosts action (post, comment, like,
     /// repost, vote, edit, delete) waits 5 seconds with an Undo before it goes on chain. Off,

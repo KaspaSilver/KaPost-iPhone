@@ -16,7 +16,6 @@ struct KaPostsFeedDrawer: View {
     /// Dismisses the cover; the card has already slid out.
     let onClose: () -> Void
 
-    @ObservedObject private var notifCenter = KaPostsNotificationCenter.shared
     @State private var shown = false
     @State private var dragOffset: CGFloat = 0
     @State private var closing = false
@@ -124,8 +123,7 @@ struct KaPostsFeedDrawer: View {
     }
 
     private func row(_ item: KaPostsView.SideMenuItem) -> some View {
-        let unseen = item == .notifications ? notifCenter.unseenCount : 0
-        return Button {
+        Button {
             Haptics.impact(.light)
             onSelect(item)
             close()
@@ -139,21 +137,13 @@ struct KaPostsFeedDrawer: View {
                     .font(.title3.weight(.semibold))
                     .foregroundColor(.primary)
                 Spacer(minLength: 0)
-                if unseen > 0 {
-                    Text(notifCenter.badgeText)
-                        .font(.scaled(size: 13, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.red))
-                }
             }
             .padding(.horizontal, 20)
             .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(unseen > 0 ? "\(item.rawValue), \(unseen) unseen" : item.rawValue))
+        .accessibilityLabel(Text(item.rawValue))
     }
 
     private func close() {

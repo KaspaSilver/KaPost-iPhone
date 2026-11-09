@@ -56,7 +56,9 @@ struct KNSAvatarView: View {
               !base64.isEmpty else { return nil }
         let key = contactAddress as NSString
         if let cached = Self.backupPhotoCache.object(forKey: key) { return cached }
-        guard let data = Data(base64Encoded: base64), let image = UIImage(data: data) else { return nil }
+        // the same limit as a downloaded avatar, as base64 (4 characters per 3 bytes)
+        guard base64.utf8.count <= KNSProfileImageCache.maxImageBytes / 3 * 4,
+              let data = Data(base64Encoded: base64), let image = UIImage(data: data) else { return nil }
         Self.backupPhotoCache.setObject(image, forKey: key, cost: data.count)
         return image
     }
@@ -631,6 +633,8 @@ private actor KNSProfileImageCache {
     /// pattern as LinkPreviewService's Nextcloud probe failures). Bounded by periodic pruning.
     private var downloadFailureAt: [String: Date] = [:]
     private let downloadFailureCooldown: TimeInterval = 60
+    /// Any avatar over this is refused while it downloads: the URL is whatever a profile says.
+    static let maxImageBytes = 5_000_000
     private let maxFailureEntries = 512
 
     private init() {
@@ -868,7 +872,7 @@ private actor KNSProfileImageCache {
         }
 
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: Self.maxImageBytes)
             guard let http = response as? HTTPURLResponse else {
                 return nil
             }

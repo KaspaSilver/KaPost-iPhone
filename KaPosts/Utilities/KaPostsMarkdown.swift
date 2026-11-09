@@ -76,10 +76,24 @@ enum KaPostsMarkdown {
         mutating func append(_ string: String) { text.append(string); count += string.count }
     }
 
+    /// `text` without the bidi embedding, override and isolate controls. Anyone can post them,
+    /// and one reverses the order the rest of the text is read in. The plain direction marks
+    /// (U+200E, U+200F) stay: they can't reorder anything, and right-to-left writing uses them.
+    static func strippingBidiControls(_ text: String) -> String {
+        guard text.unicodeScalars.contains(where: isBidiControl) else { return text }
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: text.unicodeScalars.filter { !isBidiControl($0) })
+        return String(scalars)
+    }
+
+    private static func isBidiControl(_ scalar: Unicode.Scalar) -> Bool {
+        (0x202A...0x202E).contains(scalar.value) || (0x2066...0x2069).contains(scalar.value)
+    }
+
     static func render(_ source: String) -> Rendered {
         var out = Output()
         var spans: [Span] = []
-        let lines = source.components(separatedBy: "\n")
+        let lines = strippingBidiControls(source).components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
             if index > 0 { out.append("\n") }
             renderLine(line, into: &out, spans: &spans)

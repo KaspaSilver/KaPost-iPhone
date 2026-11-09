@@ -318,6 +318,78 @@ struct ReactionsSheet: View {
 }
 
 /// Identifiable wrapper so a plain txId can drive `.sheet(item:)`.
+/// The one options icon at the top right of every page for a single address (the same as KaChat
+/// and KaPay). Opens `AddressActionsSheet`.
+struct AddressOptionsButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            Haptics.impact(.light)
+            action()
+        } label: {
+            Image(systemName: "ellipsis")
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(.regularMaterial))
+        }
+        .accessibilityLabel(Text("Address Actions"))
+    }
+}
+
+/// The same half sheet on every address page. A row that opens another screen closes this
+/// sheet first and opens it from `onDismiss`, as a sheet presented while another is still
+/// closing can be dropped.
+struct AddressActionsSheet: View {
+    var showsPublicKey = true
+    let explorerURL: URL?
+    let onViewPrivateKey: () -> Void
+    let onViewPublicKey: () -> Void
+    let onViewInExplorer: (URL) -> Void
+
+    /// Fits however many rows are showing.
+    var height: CGFloat { (showsPublicKey ? 250 : 170) + (explorerURL == nil ? 0 : 80) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Address Actions")
+                .font(.headline)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
+            VStack(spacing: 12) {
+                ActionSheetRow(
+                    title: "View Private Key",
+                    subtitle: "The key that spends this address. Never share it.",
+                    systemImage: "key.fill",
+                    action: onViewPrivateKey
+                )
+                if showsPublicKey {
+                    ActionSheetRow(
+                        title: "View Public Key",
+                        subtitle: "The public half of this address, for anyone who asks for it.",
+                        systemImage: "number",
+                        action: onViewPublicKey
+                    )
+                }
+                if let explorerURL {
+                    ActionSheetRow(
+                        title: "View in Explorer",
+                        subtitle: "Opens this address on your chosen block explorer.",
+                        systemImage: "globe"
+                    ) {
+                        onViewInExplorer(explorerURL)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, 20)
+    }
+}
+
 struct ReactionsSheetTarget: Identifiable {
     let txId: String
     var id: String { txId }

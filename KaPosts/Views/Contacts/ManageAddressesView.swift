@@ -21,6 +21,8 @@ struct ManageAddressesView: View {
     @State private var showConsolidateConfirm = false
     @State private var showConsolidateSuccess = false
     @State private var consolidateSentTxIds: [String] = []
+    /// An address swept held more coins than one transaction can spend: only its largest moved.
+    @State private var consolidateCapped = false
     @State private var errorMessage: String?
     @State private var qrTarget: SpendingAddressEntry?
     @State private var renameTarget: SpendingAddressEntry?
@@ -179,12 +181,13 @@ struct ManageAddressesView: View {
         .sheet(isPresented: $showConsolidateSuccess) {
             ConsolidateSuccessCard(
                 txIds: consolidateSentTxIds,
-                explorer: settingsViewModel.settings.kaspaExplorer
+                explorer: settingsViewModel.settings.kaspaExplorer,
+                capped: consolidateCapped
             ) {
                 showConsolidateSuccess = false
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .presentationDetents([.height(min(420, 220 + CGFloat(consolidateSentTxIds.count) * 44))])
+            .presentationDetents([.height(min(480, 220 + CGFloat(consolidateSentTxIds.count) * 44 + (consolidateCapped ? 60 : 0)))])
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $qrTarget) { entry in
@@ -928,6 +931,15 @@ struct ManageAddressesView: View {
     /// several separate transactions, one per source address.
     private func consolidateToPrimary(extraFeeSompi: UInt64 = 0) {
         guard !isConsolidating else { return }
+        // Every address's balance leaves at once, with no swipe to ask first: the phone's lock
+        // comes first. Declining leaves everything as it was.
+        DeviceAuth.authenticate(reason: AppLocalization.string("Confirm sending Kaspa")) {
+            sweepToPrimary(extraFeeSompi: extraFeeSompi)
+        }
+    }
+
+    private func sweepToPrimary(extraFeeSompi: UInt64) {
+        guard !isConsolidating else { return }
         isConsolidating = true
         errorMessage = nil
         Task {
@@ -937,15 +949,17 @@ struct ManageAddressesView: View {
             }
             let activeIndex = walletManager.currentSpendingAddressIndex
             var sentTxIds: [String] = []
+            var capped = false
             // One address failing must not hide the others' success - but if nothing went out
             // and something threw, that error is the answer, not a sheet that just closes.
             var lastError: Error?
             for entry in entries where entry.index != activeIndex && entry.balanceSompi > 0 {
                 do {
-                    let maxSendable = try await chatService.estimateMaxSpendingAddressAmount(index: entry.index, toAddress: primaryAddress, extraFeeSompi: extraFeeSompi).amountSompi
-                    guard maxSendable > 0 else { continue }
-                    let txId = try await chatService.sendFromSpendingAddress(index: entry.index, toAddress: primaryAddress, amountSompi: maxSendable, extraFeeSompi: extraFeeSompi)
+                    let maxSendable = try await chatService.estimateMaxSpendingAddressAmount(index: entry.index, toAddress: primaryAddress, extraFeeSompi: extraFeeSompi)
+                    guard maxSendable.amountSompi > 0 else { continue }
+                    let txId = try await chatService.sendFromSpendingAddress(index: entry.index, toAddress: primaryAddress, amountSompi: maxSendable.amountSompi, extraFeeSompi: extraFeeSompi)
                     sentTxIds.append(txId)
+                    if maxSendable.cappedAtInputLimit { capped = true }
                 } catch {
                     lastError = error
                 }
@@ -954,6 +968,7 @@ struct ManageAddressesView: View {
             isConsolidating = false
             if !sentTxIds.isEmpty {
                 consolidateSentTxIds = sentTxIds
+                consolidateCapped = capped
                 showConsolidateSuccess = true
             } else if let lastError {
                 errorMessage = lastError.localizedDescription
@@ -1021,13 +1036,17 @@ private struct ConsolidateToPrimaryConfirmView: View {
     @State private var isEditingFee = false
     @State private var feeEditorText = ""
     @FocusState private var feeFieldFocused: Bool
+    /// What each address's sweep really pays at Normal, by index, from its own coins
+    /// (`ChatService.estimateSweepFee`). Missing: that address's couldn't be worked out.
+    @State private var sweepFees: [Int: UInt64] = [:]
+    @State private var isEstimatingFees = true
+    @State private var feeError: String?
+    /// Bumped by Try Again under a failed fee estimate, to work them out again.
+    @State private var feeRetry = 0
 
-    /// Same reference-mass shortcut used by Cold Storage's fee editor - a fixed 1-input/2-output
-    /// mass, good enough to show/edit a per-transaction fee estimate without a network round trip.
-    private var referenceMass: UInt64 { SweepFeeReference.referenceMass }
-
+    /// The dearest sweep's fee: the base the speeds multiply, since one extra goes on every sweep.
     private var normalFeeSompi: UInt64 {
-        referenceMass * KaspaFeePolicy.minimumRelayFeePerGramSompi
+        sweepFees.values.max() ?? 0
     }
 
     /// Extra priority tip on top of the base (Normal-tier) fee - same Normal/Fast/Priority
@@ -1060,9 +1079,19 @@ private struct ConsolidateToPrimaryConfirmView: View {
                                         .font(.system(.subheadline, design: .monospaced))
                                 }
                                 Spacer()
-                                Text(verbatim: "\(formatKas(entry.balanceSompi)) \(KaspaUnit.symbol)")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(verbatim: "\(formatKas(entry.balanceSompi)) \(KaspaUnit.symbol)")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                    if let fee = sweepFees[entry.index] {
+                                        HStack(spacing: 4) {
+                                            Text("Network Fee")
+                                            Text(verbatim: "~\(formatKas(fee + extraFeeSompi)) \(KaspaUnit.symbol)")
+                                        }
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1095,7 +1124,9 @@ private struct ConsolidateToPrimaryConfirmView: View {
                         HStack {
                             Text("Network Fee")
                             Spacer()
-                            if isEditingFee {
+                            if isEstimatingFees {
+                                ProgressView().controlSize(.small)
+                            } else if isEditingFee {
                                 TextField("0.00", text: $feeEditorText)
                                     .keyboardType(.decimalPad)
                                     .numericKeyboardDoneButton()
@@ -1123,7 +1154,16 @@ private struct ConsolidateToPrimaryConfirmView: View {
                                     .foregroundColor(.accentColor)
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(sweepFees.isEmpty)
                             }
+                        }
+
+                        if let feeError {
+                            Text(feeError)
+                                .font(.footnote)
+                                .foregroundColor(.red)
+                            Button("Try Again") { feeRetry += 1 }
+                                .font(.footnote.weight(.semibold))
                         }
                     } footer: {
                         Text(sources.count > 1
@@ -1149,10 +1189,31 @@ private struct ConsolidateToPrimaryConfirmView: View {
                         onConfirm(extraFeeSompi)
                         dismiss()
                     }
-                    .disabled(sources.isEmpty)
+                    .disabled(sources.isEmpty || isEstimatingFees || sweepFees.isEmpty)
                 }
             }
+            .task(id: feeRetry) { await loadSweepFees() }
         }
+    }
+
+    /// One address's failure leaves its row without a fee (the sweep skips it the same way);
+    /// only when none could be worked out is there nothing to confirm.
+    private func loadSweepFees() async {
+        isEstimatingFees = true
+        feeError = nil
+        var fees: [Int: UInt64] = [:]
+        var lastError: Error?
+        for entry in sources {
+            do {
+                fees[entry.index] = try await ChatService.shared.estimateSweepFee(index: entry.index, toAddress: primaryAddress).feeSompi
+            } catch {
+                lastError = error
+            }
+        }
+        guard !Task.isCancelled else { return }
+        sweepFees = fees
+        feeError = fees.isEmpty ? lastError.map { UserFacingError.message(for: $0) } : nil
+        isEstimatingFees = false
     }
 
     /// Commits the manually-typed total fee. Values below the network-computed minimum are
@@ -1181,6 +1242,8 @@ private struct ConsolidateToPrimaryConfirmView: View {
 private struct ConsolidateSuccessCard: View {
     let txIds: [String]
     let explorer: KaspaExplorer
+    /// An address held more coins than one transaction can spend, so some stayed behind.
+    let capped: Bool
     let onDismiss: () -> Void
 
     var body: some View {
@@ -1192,6 +1255,14 @@ private struct ConsolidateSuccessCard: View {
             Text("Sent")
                 .font(.headline)
                 .fontWeight(.bold)
+
+            if capped {
+                Text(String(format: AppLocalization.string("One transaction can spend %d coins, so an address holding more moved only its largest. Send All again for the rest."),
+                            locale: AppLocalization.locale, KasiaTransactionBuilder.maxInputsPerTransaction))
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             VStack(spacing: 8) {
                 ForEach(txIds, id: \.self) { txId in
@@ -1701,8 +1772,8 @@ struct SpendingAddressWithdrawView: View {
                     // max over only the UTXOs that fit ONE transaction (largest-first) and pin the
                     // send to exactly those inputs. This is why "Max" works even when the address has
                     // more UTXOs than a single tx can hold - it consolidates one batch; repeat to
-                    // reduce further.
-                    let (maxSompi, utxos) = try await chatService.maxConsolidatableChunk(index: source.index, extraFeeSompi: fixedExtra, feeMultiplier: multiplier, availableUtxos: preloadedUtxos)
+                    // reduce further. Coin Control's pick limits which coins that batch is taken from.
+                    let (maxSompi, utxos) = try await chatService.maxConsolidatableChunk(index: source.index, extraFeeSompi: fixedExtra, feeMultiplier: multiplier, availableUtxos: preloadedUtxos, selection: manualUtxos)
                     await MainActor.run {
                         guard maxRequest == request else { return }
                         manualUtxos = utxos
@@ -2101,6 +2172,11 @@ private struct SpendingAddressPrivateKeyView: View {
 struct SpendingAddressTransactionHistoryView: View {
     let entry: SpendingAddressEntry
 
+    @State private var showAddressActions = false
+    @State private var showPublicKeySheet = false
+    /// What a row of the options sheet opens next, run from its onDismiss.
+    @State private var afterAddressActions: (() -> Void)?
+
     /// The tapped transaction, while its action chooser is up.
     @State private var transactionActionTarget: KaspaFullTransactionResponse?
 
@@ -2171,14 +2247,21 @@ struct SpendingAddressTransactionHistoryView: View {
         .navigationTitle(entry.displayLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // A single ToolbarItem with both icons inside an HStack (rather than two separate
-            // ToolbarItems) so left-to-right order (Export, then Explorer) is guaranteed - but
-            // each icon draws its own circular glass background explicitly, so they read as two
-            // distinct pills with a gap between them instead of iOS's automatic toolbar-item
-            // grouping merging adjacent trailing items into one shared pill shape.
             ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 10) {
-                    Button {
+                AddressOptionsButton { showAddressActions = true }
+            }
+        }
+        .sheet(isPresented: $showAddressActions, onDismiss: {
+            let next = afterAddressActions
+            afterAddressActions = nil
+            next?()
+        }) {
+            let sheet = AddressActionsSheet(
+                // A quantum address keeps its key hidden until it spends: that's the point of it.
+                showsPublicKey: !WalletManager.isQuantumIndex(entry.index),
+                explorerURL: settingsViewModel.settings.kaspaExplorer.addressURL(for: entry.address),
+                onViewPrivateKey: {
+                    afterAddressActions = {
                         if settingsViewModel.settings.biometricSpendingKeyEnabled {
                             DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
                                 showPrivateKeySheet = true
@@ -2186,20 +2269,24 @@ struct SpendingAddressTransactionHistoryView: View {
                         } else {
                             showPrivateKeySheet = true
                         }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up.on.square")
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(.regularMaterial))
                     }
-                    if let url = settingsViewModel.settings.kaspaExplorer.addressURL(for: entry.address) {
-                        Link(destination: url) {
-                            Image(systemName: "globe")
-                                .frame(width: 32, height: 32)
-                                .background(Circle().fill(.regularMaterial))
-                        }
-                    }
+                    showAddressActions = false
+                },
+                onViewPublicKey: {
+                    afterAddressActions = { showPublicKeySheet = true }
+                    showAddressActions = false
+                },
+                onViewInExplorer: { url in
+                    showAddressActions = false
+                    UIApplication.shared.open(url)
                 }
-            }
+            )
+            sheet
+                .presentationDetents([.height(sheet.height)])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPublicKeySheet) {
+            AddressPublicKeyView(address: entry.address, note: "This is the public half of this address. It cannot spend anything.")
         }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 12) {
@@ -2869,22 +2956,3 @@ private struct AddressVisibilityChainList: View {
     }
 }
 
-
-/// The fee editor's reference transaction for a sweep: one input, two standard outputs (KaPay takes
-/// the same figure from its Cold Storage engine, which KaPost doesn't have).
-private enum SweepFeeReference {
-    static let referenceMass: UInt64 = {
-        let numInputs: UInt64 = 1
-        let outputScriptLens: [UInt64] = [34, 34]
-        var byteSize: UInt64 = 2 + 8 + numInputs * (36 + 8 + 8) + numInputs * 66 + 8
-        var scriptPubKeyMass: UInt64 = 0
-        for scriptLen in outputScriptLens {
-            byteSize += 8 + 2 + 8 + scriptLen
-            scriptPubKeyMass += (2 + scriptLen) * 10
-        }
-        byteSize += 8 + 20 + 8 + 32 + 8
-        let computeMass = byteSize + scriptPubKeyMass + numInputs * 1000
-        // the minimum-fee policy: max(compute mass, twice the byte size)
-        return max(computeMass, byteSize * 2)
-    }()
-}

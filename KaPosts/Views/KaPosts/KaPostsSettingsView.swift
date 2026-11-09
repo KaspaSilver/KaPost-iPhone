@@ -12,6 +12,8 @@ struct KaPostsSettingsView: View {
 
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @ObservedObject private var priceService = KaspaPriceService.shared
+    /// Tips From on the row below, once its page has changed it.
+    @ObservedObject private var tipSourceStore = KaPostsTipSourceStore.shared
     @State private var defaultTipText = ""
     @State private var instantTipEnabled = false
     /// The default tip is typed in `tipCurrency` rather than KAS.
@@ -38,9 +40,10 @@ struct KaPostsSettingsView: View {
     }
 
     private var tipSourceTitle: String {
-        switch SendSource.defaultTip(settingsViewModel.settings) {
+        switch SendSource.defaultTip() {
         case .chatting: return AppLocalization.string("Chatting Address")
         case .spending(_, _, let label): return label
+        case nil: return AppLocalization.string("Not available")
         }
     }
 
@@ -234,7 +237,7 @@ struct KaPostsSettingsView: View {
 /// The chatting address sends a tip that counts on the post; another address sends it privately
 /// (`ChatService.sendPayment`: no post named, nothing counted, nobody listed as the tipper).
 private struct TipSourcePage: View {
-    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+    @ObservedObject private var tipSourceStore = KaPostsTipSourceStore.shared
 
     var body: some View {
         ScrollView {
@@ -243,11 +246,10 @@ private struct TipSourcePage: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                OwnAddressList(selected: SendSource.defaultTip(settingsViewModel.settings).address) { picked in
+                OwnAddressList(selected: SendSource.defaultTip()?.address) { picked in
                     let index = picked.spendingIndex
-                    guard index != settingsViewModel.settings.kaPostsDefaultTipSourceIndex else { return }
-                    settingsViewModel.settings.kaPostsDefaultTipSourceIndex = index
-                    settingsViewModel.saveSettings()
+                    guard index != tipSourceStore.index else { return }
+                    tipSourceStore.index = index
                     Haptics.selection()
                 }
             }

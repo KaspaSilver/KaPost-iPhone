@@ -37,6 +37,11 @@ struct PublicChatMessage: Identifiable, Equatable {
     func replacingContent(_ newContent: String) -> PublicChatMessage {
         PublicChatMessage(id: id, channelName: channelName, senderAddress: senderAddress, content: newContent, blockTime: blockTime, deliveryStatus: deliveryStatus)
     }
+
+    /// The same row with another status - how an edit's send state is shown on it.
+    func replacingDeliveryStatus(_ newStatus: DeliveryStatus) -> PublicChatMessage {
+        PublicChatMessage(id: id, channelName: channelName, senderAddress: senderAddress, content: content, blockTime: blockTime, deliveryStatus: newStatus)
+    }
 }
 
 /// Local-only, per-wallet store for KaChat 2.0 Public Chat channel data.
@@ -67,6 +72,9 @@ final class PublicChatStore {
     var isReady: Bool { isLoaded }
     /// See `MessageStore.loadGeneration`.
     private var loadGeneration = 0
+    /// The current store is still opening; those asking for it wait in `loadSettledWaiters`.
+    private var loadInFlight = false
+    private var loadSettledWaiters: [() -> Void] = []
 
     private static let indexSpecs: [CoreDataIndexBuilder.Spec] = [
         .init(entityName: CDPublicChatMessage.entityName, attributes: ["channelName", "blockTime"]),
@@ -93,7 +101,12 @@ final class PublicChatStore {
     /// which is when the caller may read from it.
     func setCurrentWallet(_ walletAddress: String?, completion: (() -> Void)? = nil) {
         guard walletAddress != currentWalletAddress else {
-            completion?()
+            // The same store, still opening: it isn't usable yet.
+            if loadInFlight, let completion {
+                loadSettledWaiters.append(completion)
+            } else {
+                completion?()
+            }
             return
         }
 
@@ -105,12 +118,14 @@ final class PublicChatStore {
         currentWalletAddress = walletAddress
         isLoaded = false
         loadGeneration += 1
+        settleLoad()
 
         guard let walletAddress else {
             completion?()
             return
         }
 
+        loadInFlight = true
         load(NSPersistentStoreDescription(url: storeURL(forWallet: walletAddress)), generation: loadGeneration, isRetry: false, completion: completion)
     }
 
@@ -135,14 +150,60 @@ final class PublicChatStore {
                     return
                 }
                 CoreDataStoreLoader.reportFailure(store: "PublicChatStore", error: error)
+                self.settleLoad()
                 completion?()
                 return
             }
             self.isLoaded = true
             self.container.viewContext.automaticallyMergesChangesFromParent = true
             self.container.viewContext.mergePolicy = NSMergeByPropertyStoreTrumpMergePolicy
+            self.settleLoad()
             completion?()
         }
+    }
+
+    private func settleLoad() {
+        loadInFlight = false
+        let waiters = loadSettledWaiters
+        loadSettledWaiters = []
+        waiters.forEach { $0() }
+    }
+
+    /// `setCurrentWallet`, waited for. Bounded as `MessageStore.setCurrentWallet` is: a load that
+    /// stalls must not hold up deleting an account.
+    @MainActor
+    private func openStore(forWallet walletAddress: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeLock = NSLock()
+            var hasResumed = false
+            func resumeOnce() {
+                resumeLock.lock()
+                let alreadyResumed = hasResumed
+                hasResumed = true
+                resumeLock.unlock()
+                guard !alreadyResumed else { return }
+                continuation.resume()
+            }
+            let timeoutWorkItem = DispatchWorkItem { resumeOnce() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: timeoutWorkItem)
+            setCurrentWallet(walletAddress) {
+                timeoutWorkItem.cancel()
+                resumeOnce()
+            }
+        }
+    }
+
+    /// Empties one wallet's rooms and deletes its SQLite file; the store is left closed, and the
+    /// caller opens whichever one comes next. Waits for the store to open first: `clearAll` does
+    /// nothing on one that hasn't, which left rooms and the file behind after a delete.
+    @MainActor
+    func destroyLocalStore(forWallet walletAddress: String) async {
+        await openStore(forWallet: walletAddress)
+        clearAll()
+        let context = viewContext
+        context.performAndWait { context.reset() }
+        setCurrentWallet(nil)
+        CoreDataStoreLoader.destroyStore(at: storeURL(forWallet: walletAddress), in: container)
     }
 
     private var viewContext: NSManagedObjectContext { container.viewContext }
@@ -650,6 +711,28 @@ final class PublicChatStore {
         return changed
     }
 
+    /// Puts a message's edit back to `previous` (nil: no edit at all) after the user's own edit
+    /// failed to send. Leaves it alone if a delivered edit replaced the pending one meanwhile.
+    func restoreEdit(targetTxId: String, to previous: MessageEditSnapshot?) {
+        guard isLoaded else { return }
+        let context = viewContext
+        context.performAndWait {
+            let request = NSFetchRequest<CDPublicChatEdit>(entityName: CDPublicChatEdit.entityName)
+            request.predicate = NSPredicate(format: "targetTxId == %@", targetTxId)
+            request.fetchLimit = 1
+            guard let row = (try? context.fetch(request))?.first, row.deliveryStatus == "pending" else { return }
+            if let previous {
+                row.text = previous.text
+                row.editTxId = previous.editTxId
+                row.blockTime = previous.blockTime
+                row.deliveryStatus = previous.deliveryStatus == .warning ? "unconfirmed" : nil
+            } else {
+                context.delete(row)
+            }
+            save(context)
+        }
+    }
+
     /// The body of `upsertEdit`, on any context; the caller saves.
     private static func upsertEditRow(
         targetTxId: String,
@@ -778,6 +861,8 @@ final class PublicChatStore {
             switch record.deliveryStatus {
             case "failed": status = .failed
             case "pending": status = .pending
+            // An edit whose outcome is unknown: the view shows "Not confirmed".
+            case "unconfirmed": status = .warning
             default: status = .sent
             }
             edits[record.targetTxId] = MessageEditSnapshot(targetTxId: record.targetTxId, text: text, editTxId: record.editTxId, blockTime: record.blockTime, deliveryStatus: status)
@@ -1007,7 +1092,7 @@ final class PublicChatStore {
         guard isLoaded else { return }
         let context = viewContext
         context.performAndWait {
-            for entityName in [CDPublicChatMessage.entityName, CDPublicChatChannel.entityName, CDHiddenPublicChatSender.entityName, CDPublicChatReaction.entityName] {
+            for entityName in [CDPublicChatMessage.entityName, CDPublicChatChannel.entityName, CDHiddenPublicChatSender.entityName, CDPublicChatReaction.entityName, CDPublicChatEdit.entityName] {
                 let request = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
                 let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
                 _ = try? context.execute(deleteRequest)

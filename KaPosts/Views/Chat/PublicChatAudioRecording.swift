@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 
 /// Records a short voice message for a public chat channel, reusing the exact same Opus/WebM
-/// encoding pipeline as 1:1 chat's voice messages (`WebMOpusEncoder`, `ChatDetailView.swift`) so
+/// encoding pipeline as 1:1 chat's voice messages (`WebMOpusEncoder`, KaChat's `ChatDetailView.swift`) so
 /// the wire format is identical - a cap of 10s / ~13KB keeps it well inside a single self-stash
 /// transaction's payload.
 @MainActor

@@ -918,7 +918,15 @@ struct WebMOpusDecoder {
                         // than a bare SimpleBlock, unlike this app's own hand-rolled encoder.
         ]
 
-        func parseElements(in range: Range<Int>) throws {
+        // A real file nests Segment > Cluster > BlockGroup > Block. Containers carry no limit of
+        // their own, so a crafted voice note from a stranger in a room could nest them until the
+        // stack ran out.
+        let maxContainerDepth = 8
+
+        func parseElements(in range: Range<Int>, depth: Int) throws {
+            guard depth <= maxContainerDepth else {
+                throw WebMOpusDecodeError.invalidWebM("Containers nested too deeply.")
+            }
             var offset = range.lowerBound
             while offset < range.upperBound {
                 let (id, idLen, _) = try readVInt(data, offset: offset, forSize: false)
@@ -950,7 +958,7 @@ struct WebMOpusDecoder {
                         packets.append(packet)
                     }
                 } else if containerIDs.contains(id) {
-                    try parseElements(in: payloadStart..<payloadEnd)
+                    try parseElements(in: payloadStart..<payloadEnd, depth: depth + 1)
                 }
 
                 if payloadEnd <= offset {
@@ -960,7 +968,7 @@ struct WebMOpusDecoder {
             }
         }
 
-        try parseElements(in: 0..<data.count)
+        try parseElements(in: 0..<data.count, depth: 0)
 
         guard let opusHead else {
             throw WebMOpusDecodeError.missingOpusHead

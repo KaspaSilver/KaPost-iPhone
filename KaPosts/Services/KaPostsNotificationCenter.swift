@@ -1,12 +1,6 @@
 import Foundation
 
-/// Unseen-KaPosts-activity count, kept apart from `GlobalNotificationCenter`.
-///
-/// KaPosts activity used to be listed in the global center alongside group mentions, public chats
-/// and wallet events. It does not belong there: KaPosts has its own notifications screen with its
-/// own richer rows, so the same like or reply was reported twice, and the profile bell's count was
-/// dominated by whichever feed happened to be busiest. The global center no longer keeps KaPosts
-/// rows at all; this holds the count that KaPosts itself reports.
+/// Unseen-KaPosts-activity count: what the notifications tab's badge shows.
 ///
 /// A COUNT, not a feed. The rows are already served by the KaPosts notifications screen straight
 /// from the indexer, so storing them a second time would only be a cache that could disagree with
@@ -34,9 +28,8 @@ final class KaPostsNotificationCenter: ObservableObject {
         unseenCount = max(0, UserDefaults.standard.integer(forKey: unseenKey))
     }
 
-    /// Adds newly-arrived activity to the count. Called from the same ingest pass that used to
-    /// write KaPosts rows into the global center, so it inherits its filtering: the wallet's own
-    /// actions, hidden actors and Simple Mode are all already excluded by the caller.
+    /// Adds newly-arrived activity to the count. `KaPostsNotificationService.pollOnce` calls it
+    /// with the wallet's own actions and hidden people already taken out.
     func recordArrivals(_ count: Int) {
         guard count > 0 else { return }
         unseenCount += count

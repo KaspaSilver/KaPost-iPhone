@@ -16,7 +16,7 @@ import P256K
 /// recovery).
 ///
 /// Reconstructed after this file's original implementation was accidentally lost to an
-/// uncommitted-work-discarding `git checkout` earlier in development (see conversation) -
+/// uncommitted-work-discarding `git checkout` earlier in development -
 /// rebuilt from every call site's exact usage, cross-checked against `Wallet`'s own
 /// `spendingAddressIndex`/`maxSpendingAddressIndex`/`effective*` fields (which survived, since
 /// they live in Models.swift, a file the bad checkout never touched) rather than guessed from
@@ -496,7 +496,12 @@ extension WalletManager {
     }
 
     private func nextFreshQuantumIndex(owner: String) -> Int {
-        Self.quantumIndexBase + quantumMaxIndex(owner: owner) + 1
+        let next = Self.quantumIndexBase + quantumMaxIndex(owner: owner) + 1
+        // The slot the Receive QR is pointing at is that QR's alone: change and Request skip it,
+        // even while it sits past the chain's end (a pointer set before the end was raised).
+        guard let key = spendingDefaultsKey("receiveIndex", owner: owner),
+              UserDefaults.standard.object(forKey: key) as? Int == next else { return next }
+        return next + 1
     }
 
     /// False once `owner` is neither the active account nor a saved one (it was removed).
@@ -577,7 +582,9 @@ extension WalletManager {
     /// `revealing`: the address is being shown (Receive Kaspa's QR is open), so it goes on the
     /// Manage Addresses list - extending the chain to it if needed, so its payment is watched.
     /// Without it (Profile warming the QR ahead of the tap) nothing about the list changes: an
-    /// address appearing after Hide All with nobody having done anything was exactly that.
+    /// address appearing after Hide All with nobody having done anything was exactly that. Nor
+    /// is the pointer written: a slot it named past the chain's end could also be handed to
+    /// change or a Request, and only a QR really on screen holds a slot.
     func freshReceiveAddress(revealing: Bool = false) async -> String? {
         // The QR is for the account active now: an answer that comes back after a switch
         // belongs to the other account and is dropped, nothing written (IOS-109).
@@ -585,8 +592,10 @@ extension WalletManager {
         let chosen: (index: Int, address: String)
         // Rule 1: the pointer from last time, while it is still untouched - and quantum. A
         // legacy pointer, even unused, carries its key in the address itself (P2PK), so the QR
-        // moves to the quantum chain the first time it is opened after the upgrade.
+        // moves to the quantum chain the first time it is opened after the upgrade. An address
+        // this phone has spent from is used, whatever the session's "unused" memory still says.
         if let index = receiveAddressIndex, Self.isQuantumIndex(index), let address = spendingAddress(at: index),
+           !isQuantumAddressSpentLocally(address),
            await ChatService.shared.spendingAddressUsedState(address) != true {
             chosen = (index, address)
         } else {
@@ -595,7 +604,7 @@ extension WalletManager {
             let index = await lowestUnusedQuantumAddress()
             guard currentWallet?.publicAddress == owner else { return nil }
             guard let address = spendingAddress(at: index) else { return currentSpendingAddress() }
-            receiveAddressIndex = index
+            if revealing { receiveAddressIndex = index }
             chosen = (index, address)
         }
         guard currentWallet?.publicAddress == owner else { return nil }
@@ -968,10 +977,17 @@ extension WalletManager {
             }
         }
 
-        let allUtxos = (try? await NodePoolService.shared.getUtxosByAddresses(Array(addressesByIndex.values))) ?? []
+        // Read before the await: it is this account's, whichever is active when the answer comes.
+        let lastKnown = cachedSpendingAddressList()
         var balanceByAddress: [String: UInt64] = [:]
-        for utxo in allUtxos {
-            balanceByAddress[utxo.address, default: 0] += utxo.amount
+        if let allUtxos = try? await NodePoolService.shared.getUtxosByAddresses(Array(addressesByIndex.values)) {
+            for utxo in allUtxos {
+                balanceByAddress[utxo.address, default: 0] += utxo.amount
+            }
+        } else {
+            // A failed read says nothing about the balances: the last known figures stay, or the
+            // list shows 0 and the snapshot saves those zeros over good data.
+            balanceByAddress = Dictionary(lastKnown.map { ($0.address, $0.balanceSompi) }, uniquingKeysWith: { first, _ in first })
         }
 
         return addressesByIndex.keys.sorted().map { index in

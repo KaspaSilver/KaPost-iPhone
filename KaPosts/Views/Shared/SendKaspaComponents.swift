@@ -1863,15 +1863,72 @@ enum SendSource: Equatable, Hashable {
 
 extension SendSource {
     /// Where tips leave from unless picked otherwise (KaPosts > Settings > Tips From): the
-    /// chatting address, or a spending address, whose tips are private. A spending index this
-    /// account can't derive right now falls back to the chatting address.
+    /// chatting address, or a spending address, whose tips are private. Nil when a spending
+    /// address is set but can't be read or isn't one of this account's revealed ones: nothing
+    /// should then go out on its own, since a tip from the chatting address isn't private.
     @MainActor
-    static func defaultTip(_ settings: AppSettings) -> SendSource {
-        guard let index = settings.kaPostsDefaultTipSourceIndex,
-              let address = WalletManager.shared.spendingAddress(at: index) else { return .chatting }
-        let label = WalletManager.shared.ownAddressLabel(for: address)
+    static func defaultTip() -> SendSource? {
+        guard let index = KaPostsTipSourceStore.shared.index else { return .chatting }
+        let wallet = WalletManager.shared
+        let revealed = WalletManager.isQuantumIndex(index)
+            ? index - WalletManager.quantumIndexBase <= wallet.maxQuantumAddressIndex
+            : index <= wallet.maxSpendingAddressIndex
+        guard index >= 0, revealed, let address = wallet.spendingAddress(at: index) else { return nil }
+        let label = wallet.ownAddressLabel(for: address)
             ?? "Address #\(WalletManager.addressNumber(forIndex: index))"
         return .spending(index: index, address: address, label: label)
+    }
+}
+
+/// KaPosts > Settings > Tips From, per account: a spending index only means something on the
+/// account that revealed it.
+@MainActor
+final class KaPostsTipSourceStore: ObservableObject {
+    static let shared = KaPostsTipSourceStore()
+
+    private init() {}
+
+    private static let deviceSettingMovedKey = "kachat_kaposts_tip_source_moved"
+
+    private static func key(_ address: String) -> String {
+        "kachat_kaposts_tip_source_" + address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// The spending address this account tips from, by index. nil = the chatting address.
+    var index: Int? {
+        get {
+            moveDeviceSettingIfNeeded()
+            guard let address = WalletManager.shared.currentWallet?.publicAddress else { return nil }
+            return UserDefaults.standard.object(forKey: Self.key(address)) as? Int
+        }
+        set {
+            moveDeviceSettingIfNeeded()
+            guard let address = WalletManager.shared.currentWallet?.publicAddress else { return }
+            objectWillChange.send()
+            if let newValue {
+                UserDefaults.standard.set(newValue, forKey: Self.key(address))
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.key(address))
+            }
+        }
+    }
+
+    /// The setting used to be one per device: every saved account starts from what it was, and
+    /// `SendSource.defaultTip` turns away an index an account hasn't revealed.
+    private func moveDeviceSettingIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.deviceSettingMovedKey) else { return }
+        defaults.set(true, forKey: Self.deviceSettingMovedKey)
+        guard let index = AppSettings.load().kaPostsDefaultTipSourceIndex else { return }
+        let wallet = WalletManager.shared
+        for address in wallet.savedAccounts.map(\.publicAddress) + [wallet.currentWallet?.publicAddress].compactMap({ $0 }) {
+            defaults.set(index, forKey: Self.key(address))
+        }
+    }
+
+    /// Delete Account: one wallet's choice, from this device.
+    static func removeAllData(forWalletAddress walletAddress: String) {
+        UserDefaults.standard.removeObject(forKey: key(walletAddress))
     }
 }
 

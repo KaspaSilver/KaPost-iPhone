@@ -121,6 +121,9 @@ final class UtxoSubscriptionManager: ObservableObject {
     /// remembered, so every utxosChanged batch arrived twice from then on.
     private var subscribeInFlight: Task<Void, Error>?
 
+    /// The retries after a failed resubscribe on a network change (`retryEpochResubscribe`).
+    private var epochRetryTask: Task<Void, Never>?
+
     /// Subscribe to UTXO changes for addresses
     /// Tries all capable nodes in pool in sequence, throws if all fail
     /// `reuseConnection`: when only addresses are being added on the node already serving the
@@ -287,6 +290,8 @@ final class UtxoSubscriptionManager: ObservableObject {
         healthCheckTask = nil
         // a subscribe still queued or running must not re-subscribe after this
         subscribeInFlight?.cancel()
+        epochRetryTask?.cancel()
+        epochRetryTask = nil
 
         // Remove notification handlers from connections
         if let conn = primaryConnection, let handlerId = primaryHandlerId {
@@ -806,11 +811,37 @@ final class UtxoSubscriptionManager: ObservableObject {
 
         AppLog.log("[UtxoSub] Network epoch changed - resubscribing")
 
+        epochRetryTask?.cancel()
+        epochRetryTask = nil
+
         // Resubscribe to current addresses
         do {
             try await subscribe(addresses: subscribedAddresses)
         } catch {
             AppLog.log("[UtxoSub] Resubscription after epoch change failed: %@", error.localizedDescription)
+            retryEpochResubscribe()
+        }
+    }
+
+    /// A failed subscribe has already cancelled the health loop, so nothing else would bring the
+    /// subscription back and balances and receive notices stayed frozen until the app reopened.
+    /// Retries with a capped backoff while the subscription is still `.failed` and wanted.
+    private func retryEpochResubscribe() {
+        epochRetryTask = Task { [weak self] in
+            var delay = 2.0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return }
+                guard self.state == .failed, !self.subscribedAddresses.isEmpty else { return }
+                do {
+                    try await self.subscribe(addresses: self.subscribedAddresses)
+                    AppLog.log("[UtxoSub] Resubscribed after epoch change on retry")
+                    return
+                } catch {
+                    AppLog.log("[UtxoSub] Epoch resubscribe retry failed: %@", error.localizedDescription)
+                }
+                delay = min(60, delay * 2)
+            }
         }
     }
 

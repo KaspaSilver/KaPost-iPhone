@@ -41,6 +41,9 @@ extension KachatNames {
         /// dropped it (a busy network evicts low-fee transactions).
         var commitSentAt: Int64? = nil
         var commitResends: Int? = nil
+        /// The coins the current commit spends ("txid:index"): a resend may use only these
+        /// (`resendCommit`). nil on claims from before it was kept.
+        var commitInputs: [String]? = nil
         var cancelTxId: String?
         var stage: Stage
         var createdAt: Int64
@@ -535,14 +538,15 @@ final class KachatNamesActions: ObservableObject {
 
     /// Builder, environment and the wallet's funding UTXOs for one transaction, at `feerate`
     /// (default: the priority rate).
-    private func context(_ s: Signer, feerate rate: Double? = nil) async throws -> (KachatNames.Builder, KachatNames.Env, [KachatNames.Utxo]) {
+    /// `respending`: only those coins, for rebuilding a transaction that spends them.
+    private func context(_ s: Signer, feerate rate: Double? = nil, respending: Set<String>? = nil) async throws -> (KachatNames.Builder, KachatNames.Env, [KachatNames.Utxo]) {
         let builder = try await service.builder()
         let chosen: Double
         if let rate { chosen = rate } else { chosen = await feerate() }
         let env = try await service.environment(privateKey: s.privateKey, feerate: chosen)
         virtualDaa = env.blockDaa
         let utxos = try await NodePoolService.shared.getUtxosByAddresses([s.address])
-        let funding = KachatNamesService.fundingUtxos(utxos, me: s.me, virtualDaaScore: env.blockDaa)
+        let funding = KachatNamesService.fundingUtxos(utxos, me: s.me, virtualDaaScore: env.blockDaa, respending: respending)
         return (builder, env, funding)
     }
 
@@ -997,6 +1001,9 @@ final class KachatNamesActions: ObservableObject {
                 case nil: continue
                 }
             }
+            // A withdraw goes out with no prompt, and the lookup above can have answered from a
+            // chain copy behind the chain: nothing is pulled back on a read that old.
+            guard registry.readsAreCurrentForAutoSpend else { return }
             // still made to the name's current owner, who still holds it: it stands
             if case .some(.some(let current)) = ownerByName[name], !o.isDeclined(currentOwner: current) { continue }
             withdrawingOffers.insert(o.id)
@@ -1128,7 +1135,7 @@ final class KachatNamesActions: ObservableObject {
         loadPending(for: walletAddress)
         await registry.refresh()
         var lapsed: KachatNames.NameInfo?
-        switch try await registry.lookup(name) {
+        switch try await registry.lookupForCommit(name) {
         case .registered(let n) where n.status(graceMs: registry.graceMs) == .lapsed:
             // Expired past grace: free to claim. The commit and the reclaim that frees the old
             // record both go out now; the driver registers once the commit has aged.
@@ -1147,7 +1154,8 @@ final class KachatNamesActions: ObservableObject {
         let now = KachatNames.nowMs()
         var record = KachatNames.PendingRegistration(
             id: id, name: name, years: years, owner: KachatNames.hex(s.me), commitTxId: plan.unsignedTx.idHex,
-            commitScript: KachatNames.hex(script), commitDaa: nil, registerTxId: nil, cancelTxId: nil,
+            commitScript: KachatNames.hex(script), commitDaa: nil, registerTxId: nil,
+            commitInputs: Self.inputKeys(plan), cancelTxId: nil,
             stage: .committing, createdAt: now, updatedAt: now, lastError: nil, maxPrice: maxPrice,
             feeTier: feeTier.rawValue, customFeerate: customFeerate
         )
@@ -1313,11 +1321,15 @@ final class KachatNamesActions: ObservableObject {
             guard let commit = await liveCommit(p) else {
                 if p.commitDaa == nil, await commitStillPending(p) { return }
                 // the commit is gone: registered by us (another device?), or never confirmed
-                if await ownsName(p.name) {
+                switch await ownsName(p.name) {
+                case true?:
                     finishRegistered(p)
-                } else {
+                case false?:
                     let why = p.commitDaa == nil ? "The commit never reached the chain." : "The commit is no longer on chain."
                     set(p) { $0.stage = .failed; $0.lastError = AppLocalization.string(why) }
+                case nil:
+                    // the registry can't be read right now: asked again on the next tick, not failed
+                    break
                 }
                 return
             }
@@ -1378,20 +1390,39 @@ final class KachatNamesActions: ObservableObject {
     }
 
     /// Sends the commit again - same name, owner and salt, so the same commit script - with
-    /// the current fee, after a node dropped the first one.
+    /// the current fee, after a node dropped the first one. Only on the coins the last send spent,
+    /// never others: each send then shares a coin with the one before, so two can't both land and
+    /// strand 0.2 KAS, and a one-coin wallet isn't "out of funds" while that coin is on hold.
     private func resendCommit(_ p: KachatNames.PendingRegistration) async {
         do {
             guard let s = try? ownerSigner(try KachatNames.unhex32(p.owner)) else { return }
             guard let salt = try KeychainService.shared.loadKachatCommitSalt(id: p.id, walletAddress: pendingWallet ?? s.address) else { throw ActionError.noSalt }
-            let (b, env, wallet) = try await context(s, feerate: await registrationFeerate(p))
+            let (b, env, wallet) = try await context(s, feerate: await registrationFeerate(p), respending: Set(p.commitInputs ?? []))
+            // The coins are gone: the commit took them after all and will show up, or something
+            // else spent them. Either way no second commit goes out on other coins.
+            guard !wallet.isEmpty else {
+                AppLog.log("[KachatNames] commit for %@ not sent again: its coins are no longer there", p.name)
+                set(p) {
+                    $0.commitSentAt = KachatNames.nowMs()
+                    $0.commitResends = ($0.commitResends ?? 0) + 1
+                }
+                return
+            }
             let plan = try b.commit(env: env, wallet: wallet, name: p.name, salt: salt)
             guard let script = plan.newCommit?.utxo?.entry.script, KachatNames.hex(script) == p.commitScript else {
                 throw KachatNames.Failure("commit: a different script")
             }
-            let txId = try await service.signAndSubmit(plan, privateKey: s.privateKey, env: env)
+            let txId: String
+            do {
+                txId = try await service.signAndSubmit(plan, privateKey: s.privateKey, env: env)
+            } catch let unknown as SendOutcomeUnknownError {
+                // it may yet land: followed under its own id, like a send
+                txId = unknown.txId
+            }
             AppLog.log("[KachatNames] commit for %@ sent again: %@", p.name, txId)
             set(p) {
                 $0.commitTxId = txId
+                $0.commitInputs = Self.inputKeys(plan)
                 $0.commitSentAt = KachatNames.nowMs()
                 $0.commitResends = ($0.commitResends ?? 0) + 1
                 $0.lastError = AppLocalization.string("The network is busy, so the commit was sent again.")
@@ -1404,6 +1435,11 @@ final class KachatNamesActions: ObservableObject {
                 $0.lastError = error.localizedDescription
             }
         }
+    }
+
+    /// A plan's coins as "txid:index" (`PendingRegistration.commitInputs`).
+    private static func inputKeys(_ plan: KachatNames.Plan) -> [String] {
+        plan.inputs.map { "\(KachatNames.hex($0.utxo.outpoint.txid)):\($0.utxo.outpoint.index)" }
     }
 
     /// Frees a lapsed old record of `p`'s name (a reclaim) and notes the gap it reopens.
@@ -1421,8 +1457,10 @@ final class KachatNamesActions: ObservableObject {
 
     /// This wallet holds `name` as a live registration (a lapsed old record of it doesn't count:
     /// that is what claiming an expired name registers over).
-    private func ownsName(_ name: String) async -> Bool {
-        guard case .registered(let n)? = try? await registry.lookup(name) else { return false }
+    /// Nil when the registry can't say.
+    private func ownsName(_ name: String) async -> Bool? {
+        guard let found = try? await registry.lookup(name) else { return nil }
+        guard case .registered(let n) = found else { return false }
         return ownAddress(of: n.owner) != nil && n.status(graceMs: registry.graceMs) != .lapsed
     }
 
@@ -1440,7 +1478,7 @@ final class KachatNamesActions: ObservableObject {
                 return
             }
             let gap: KachatNames.GapInfo
-            switch try await registry.lookup(p.name) {
+            switch try await registry.lookupForCommit(p.name) {
             case .registered(let n) where n.status(graceMs: registry.graceMs) == .lapsed:
                 // An expired name is free to claim: this registration frees the old record first
                 // (anyone may; its bond goes back to the old owner and the freed deposit comes to
@@ -1488,10 +1526,23 @@ final class KachatNamesActions: ObservableObject {
                 try await combineCoins(s)
                 set(p) { $0.lastError = nil }
                 return
+            } catch let error as KachatNames.Failure where error.message.contains("insufficient funds") {
+                // Coins a send still in flight holds come back within two minutes: not "out of
+                // funds" (which fails the claim below) while any are on hold.
+                guard await hasHeldCoins(s) else { throw error }
+                set(p) { $0.lastError = error.localizedDescription }
+                return
             }
             // Never pay more than the person confirmed (the fixed prices make this a safeguard).
             if let cap = p.maxPrice, plan.priceFee > cap { throw ActionError.priceChanged(plan.priceFee) }
-            let txId = try await service.signAndSubmit(plan, privateKey: s.privateKey, env: env)
+            let txId: String
+            do {
+                txId = try await service.signAndSubmit(plan, privateKey: s.privateKey, env: env)
+            } catch let unknown as SendOutcomeUnknownError {
+                // It may yet land, and its coins are on hold: followed as sent. `.registering`
+                // sends it again once two minutes have passed with the commit still there.
+                txId = unknown.txId
+            }
             set(p) { $0.stage = .registering; $0.registerTxId = txId; $0.lastError = nil }
             registry.refreshAfter(txId: txId)
         } catch {
@@ -1505,6 +1556,12 @@ final class KachatNamesActions: ObservableObject {
                 if fatal { $0.stage = .failed }
             }
         }
+    }
+
+    /// Whether a send still in flight holds any of this address's coins.
+    private func hasHeldCoins(_ s: Signer) async -> Bool {
+        guard let utxos = try? await NodePoolService.shared.getUtxosByAddresses([s.address]) else { return false }
+        return ChatService.shared.unreservedUtxos(utxos).count < utxos.count
     }
 
     /// Registrations this session already combined coins for (`combineCoins`).

@@ -90,7 +90,7 @@ final class PublicChatService: ObservableObject {
     @Published private(set) var channels: [PublicChatChannel] = []
     @Published private(set) var messagesByChannel: [String: [PublicChatMessage]] = [:]
     /// This wallet's public chat reactions, keyed by channel then by targetTxId - mirrors
-    /// `GroupChatService.reactionsByGroupId`'s shape (and reuses `GroupStore.ReactionSnapshot`,
+    /// KaChat's `GroupChatService.reactionsByGroupId`'s shape (and reuses `GroupStore.ReactionSnapshot`,
     /// see `PublicChatStore.fetchReactions`). Loaded per channel on open (`acquire`) and kept
     /// live afterward by `sendPublicChatReaction` / the incoming-reaction interception in
     /// `processPublicChatHits` and `fetchFromIndexerAndMerge`.
@@ -101,6 +101,9 @@ final class PublicChatService: ObservableObject {
     @Published var editingMessage: PublicChatMessage?
     @Published var lastSendError: KasiaError?
     @Published var replyingTo: PublicChatMessage?
+    /// Room edits whose send failed, by channel then target txId: the text, for Retry. The row
+    /// itself goes back to what it read before, since that text never reached the chain.
+    @Published private(set) var failedEditsByChannel: [String: [String: String]] = [:]
     /// Set when a public chat-room notification is tapped, so the chat list can navigate to that
     /// room - mirrors `ChatService.pendingChatNavigation`'s cold-start handling.
     @Published var pendingPublicChatNavigation: String?
@@ -189,6 +192,7 @@ final class PublicChatService: ObservableObject {
             settledPendingChannels = []
             deepBackfilledChannels = []
             deepBackfillResume = [:]
+            deepBackfillFloor = [:]
             indexerFetchedChannels = []
         }
         // A room can already be on screen when the wallet lands: a cold launch from a room's
@@ -204,9 +208,14 @@ final class PublicChatService: ObservableObject {
         if !sameWallet {
             messagesByChannel = [:]
             reactionsByChannel = [:]
+            editsByChannel = [:]
+            failedEditsByChannel = [:]
+            editingMessage = nil
+            replyingTo = nil
             sweptChannels = []
             // Each wallet has its own store: what one applied says nothing about the other's.
             appliedIndexerRows = [:]
+            indexerNewestSeen = [:]
         }
         if tearingDownOtherWallet { liveViewRefCounts = [:] }
         loadReadState()
@@ -306,6 +315,7 @@ final class PublicChatService: ObservableObject {
         guard !base.isEmpty else { return false }
         do {
             let page = try await PublicChatIndexerClient.fetchHistoryPage(baseURL: base, channel: channel, limit: 40)
+            noteIndexerResult(base: base, failed: nil)
             // Guarded: inserting an element that is already there still publishes, which
             // re-rendered an open room on every sweep for nothing.
             if !indexerFetchedChannels.contains(channel) { indexerFetchedChannels.insert(channel) }
@@ -344,6 +354,7 @@ final class PublicChatService: ObservableObject {
             return true
         } catch {
             // Best-effort; the next sweep tries again.
+            noteIndexerResult(base: base, failed: error)
             AppLog.log("%@", "[PublicChat] Sweep fetch failed for #\(channel): \(error.localizedDescription)")
             return false
         }
@@ -695,6 +706,9 @@ final class PublicChatService: ObservableObject {
     /// Call when a public chat channel screen appears; pairs with `release`.
     func acquire(_ name: String) {
         let normalized = PublicChatChannelName.normalize(name)
+        // The composer's targets are one per app: those left over from another room go.
+        if let editing = editingMessage, editing.channelName != normalized { editingMessage = nil }
+        if let reply = replyingTo, reply.channelName != normalized { replyingTo = nil }
         ChatService.clearDeliveredNotifications(threadIdentifier: "broadcast:\(normalized)")
         liveViewRefCounts[normalized, default: 0] += 1
         Task { await store.pruneExpiredMessages() }
@@ -715,7 +729,7 @@ final class PublicChatService: ObservableObject {
     /// the newest page to stay fresh.
     private var deepBackfilledChannels: Set<String> = []
     /// Channels the indexer has answered at least once this session - the chess arena waits
-    /// for this before letting a player pick a room (`ChessTournamentService.historyReady`).
+    /// for this before letting a player pick a room (KaChat's `ChessTournamentService.historyReady`).
     @Published private(set) var indexerFetchedChannels: Set<String> = []
 
     /// Indexer rows already applied this session, per channel: reaction and edit txids that
@@ -737,6 +751,9 @@ final class PublicChatService: ObservableObject {
         set.insert(key)
         appliedIndexerRows[channel] = set
     }
+    /// The newest block time the indexer has shown for each room this session. A steady poll
+    /// whose whole page is newer than this has a gap behind it.
+    private var indexerNewestSeen: [String: Int64] = [:]
     /// Where an interrupted deep backfill picks up: the `before` cursor of the next page to
     /// ask for, and how many pages of the safety valve are left. Session-only, like the
     /// completed set above. Without this a single thrown page - one timeout on page 30 of a
@@ -778,12 +795,12 @@ final class PublicChatService: ObservableObject {
             // the store, txid-deduped); re-fetching 200 rows every 8s was pure re-download. The
             // one-shot deep backfill below keeps the full 200-row pages. The indexer's `before`
             // parameter pages OLDER history, so it cannot act as a newest-side floor - the
-            // small limit is the mechanism. A burst larger than 30 between two polls is
-            // recovered on the next room open (deep backfill re-runs per session).
+            // small limit is the mechanism. A burst larger than the page is paged back below.
             let steadyStateLimit = deepBackfilledChannels.contains(channel) ? 30 : 200
             let messages = try await PublicChatIndexerClient.fetchHistoryPage(
                 baseURL: baseURL, channel: channel, limit: steadyStateLimit
             )
+            noteIndexerResult(base: baseURL, failed: nil)
             // Guarded: a no-op insert still publishes, re-rendering the open room every poll.
             if !indexerFetchedChannels.contains(channel) { indexerFetchedChannels.insert(channel) }
             // The newest page goes in FIRST, before any history is paged. It used to wait for
@@ -791,6 +808,18 @@ final class PublicChatService: ObservableObject {
             // the message a notification had just announced showed up seconds after the room
             // opened, not with it.
             await mergeIndexerRows(messages.messages, channel: channel, prune: true)
+            // More arrived since the last poll than the page holds (a busy room, or the app
+            // away for a while): page back to the rows already seen, through the backfill below
+            // and its limit, resume and floor. It used to stay missing until the next launch.
+            if deepBackfilledChannels.contains(channel), messages.hasMore,
+               let seen = indexerNewestSeen[channel],
+               let oldest = messages.messages.map(\.blockTime).min(), oldest > seen {
+                deepBackfilledChannels.remove(channel)
+                deepBackfillFloor[channel] = seen
+            }
+            if let newest = messages.messages.map(\.blockTime).max() {
+                indexerNewestSeen[channel] = max(newest, indexerNewestSeen[channel] ?? newest)
+            }
             // One-shot deep backfill per room per session: page older history with `before`
             // until the indexer runs out or we reach its 30-day window. Without this, rooms
             // only ever showed the newest single page (200 rows) — busy rooms like
@@ -812,7 +841,8 @@ final class PublicChatService: ObservableObject {
                     pagesLeft = 50 // safety valve: 50 × 200 = 10k rows, far beyond any real room
                 }
                 var interrupted = false
-                while hasMore, let before = oldest, before > cutoff, pagesLeft > 0 {
+                let floor = max(cutoff, deepBackfillFloor[channel] ?? cutoff)
+                while hasMore, let before = oldest, before > floor, pagesLeft > 0 {
                     pagesLeft -= 1
                     let page: (messages: [PublicChatIndexerClient.IndexedPublicChat], hasMore: Bool)
                     do {
@@ -841,12 +871,14 @@ final class PublicChatService: ObservableObject {
                 if !interrupted {
                     deepBackfilledChannels.insert(channel)
                     deepBackfillResume[channel] = nil
+                    deepBackfillFloor[channel] = nil
                     // The whole history is in, so a send that did land has its copy to match.
                     settlePendingSendsFromBeforeThisRun(channel: channel)
                 }
             }
         } catch {
             // Best-effort on top of live scanning - the loop just tries again next tick.
+            noteIndexerResult(base: baseURL, failed: error)
             AppLog.log("%@", "[PublicChat] Indexer fetch failed for #\(channel): \(error.localizedDescription)")
         }
     }
@@ -910,7 +942,10 @@ final class PublicChatService: ObservableObject {
                 if store.updateBlockTime(id: row.id, blockTime: row.blockTime) {
                     insertedCount += 1
                 }
-                if store.isReady { markApplied(key, channel: channel) }
+                if store.isReady {
+                    markApplied(key, channel: channel)
+                    markApplied(Self.indexerTimedKey(row.id), channel: channel)
+                }
             }
         }
         if insertedCount > 0 {
@@ -918,6 +953,10 @@ final class PublicChatService: ObservableObject {
             loadMessages(for: channel)
         }
     }
+
+    /// Marks a row whose block time came from the indexer, which then has the last word: the
+    /// stream can see a transaction in a different block, with a different time.
+    private static func indexerTimedKey(_ txId: String) -> String { "\(txId)@indexer" }
 
     /// Sends started in this run, by pending id. A row still pending that isn't one of these was left
     /// by a run that ended mid-send, and nothing is working on it.
@@ -1023,6 +1062,28 @@ final class PublicChatService: ObservableObject {
         editingMessage = nil
     }
 
+    /// The message this room's composer is editing. Nil when the one in progress is another room's.
+    func editTarget(inChannel name: String) -> PublicChatMessage? {
+        guard let editing = editingMessage, editing.channelName == PublicChatChannelName.normalize(name) else { return nil }
+        return editing
+    }
+
+    /// The message this room's composer is replying to. Nil when it's another room's.
+    func replyTarget(inChannel name: String) -> PublicChatMessage? {
+        guard let reply = replyingTo, reply.channelName == PublicChatChannelName.normalize(name) else { return nil }
+        return reply
+    }
+
+    /// The text of this message's failed edit, when there is one to retry.
+    func failedEditText(forChannel name: String, targetTxId: String) -> String? {
+        failedEditsByChannel[PublicChatChannelName.normalize(name)]?[targetTxId]
+    }
+
+    func retryFailedEdit(channel: String, targetTxId: String) async throws {
+        guard let text = failedEditText(forChannel: channel, targetTxId: targetTxId) else { return }
+        try await sendPublicChatEdit(channel: channel, targetTxId: targetTxId, text: text)
+    }
+
     /// Edits one of this wallet's own text messages in a room: applied locally at once
     /// (pending), then sent as an edit envelope exactly like a reaction - one transaction, no
     /// message row of its own. Sent or failed follow.
@@ -1032,7 +1093,10 @@ final class PublicChatService: ObservableObject {
         guard !clean.isEmpty else { return }
         guard let wallet = WalletManager.shared.currentWallet else { throw KasiaError.walletNotFound }
         guard let privateKey = WalletManager.shared.getPrivateKey() else { throw KasiaError.keychainError("Could not get private key") }
-        editingMessage = nil
+        if editingMessage?.id == targetTxId { editingMessage = nil }
+        failedEditsByChannel[channel]?[targetTxId] = nil
+        // What the message reads now, to go back to if this never leaves the phone.
+        let previous = editsByChannel[channel]?[targetTxId]
         let payload = MessageEditCodec.encode(targetTxId: targetTxId, text: clean)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         store.upsertEdit(targetTxId: targetTxId, channel: channel, text: clean, editTxId: nil, blockTime: now, deliveryStatus: "pending")
@@ -1046,8 +1110,16 @@ final class PublicChatService: ObservableObject {
             }
             store.upsertEdit(targetTxId: targetTxId, channel: channel, text: clean, editTxId: realTxId, blockTime: now, deliveryStatus: nil)
             loadEdits(for: channel)
+        } catch let unknown as SendOutcomeUnknownError {
+            // It may have landed: "Not confirmed" with no Retry, which could pay twice. Its
+            // delivered copy turns it into a normal edit.
+            store.upsertEdit(targetTxId: targetTxId, channel: channel, text: clean, editTxId: unknown.txId.isEmpty ? nil : unknown.txId, blockTime: now, deliveryStatus: "unconfirmed")
+            loadEdits(for: channel)
+            throw unknown
         } catch {
-            store.upsertEdit(targetTxId: targetTxId, channel: channel, text: clean, editTxId: nil, blockTime: now, deliveryStatus: "failed")
+            // Never sent: the message goes back to what it read, and the text waits for Retry.
+            store.restoreEdit(targetTxId: targetTxId, to: previous)
+            failedEditsByChannel[channel, default: [:]][targetTxId] = clean
             loadEdits(for: channel)
             throw error
         }
@@ -1197,7 +1269,7 @@ final class PublicChatService: ObservableObject {
     // MARK: - Reactions
 
     /// Reacts to `targetTxId` with `emoji` ("add"), or removes this wallet's existing reaction
-    /// on it ("remove") - mirroring `GroupChatService.sendGroupReaction`'s optimistic-apply/
+    /// on it ("remove") - mirroring KaChat's `GroupChatService.sendGroupReaction`'s optimistic-apply/
     /// status-flip flow. The wire format is a NORMAL public chat whose content is the shared
     /// `MessageReactionCodec` JSON ({"type":"reaction","targetTxId":...,"emoji":...,"action":
     /// "add"|"remove"}), sent through the exact same tx pipeline as a text public chat (no reply
@@ -1299,7 +1371,7 @@ final class PublicChatService: ObservableObject {
         }
 
         let payloadText: String
-        if let reply = replyingTo {
+        if let reply = replyTarget(inChannel: channel) {
             let preview = MessageReplyCodec.previewText(for: reply.content)
             payloadText = MessageReplyCodec.encode(
                 replyToId: reply.id,
@@ -1379,8 +1451,9 @@ final class PublicChatService: ObservableObject {
         // If replying, wrap the content in the shared reply envelope (matches Android's
         // PublicChatViewModel.sendPublicChat) so the quote survives even if the original message is
         // later pruned or its sender hidden.
+        let usedReply = replyTarget(inChannel: channel)
         let payload: String
-        if let reply = replyingTo {
+        if let reply = usedReply {
             let preview = MessageReplyCodec.previewText(for: reply.content)
             payload = MessageReplyCodec.encode(
                 replyToId: reply.id,
@@ -1416,7 +1489,6 @@ final class PublicChatService: ObservableObject {
                     feeOverride: feeOverride
                 )
             }
-            replyingTo = nil
         } catch {
             try await handleSendFailure(
                 error,
@@ -1427,6 +1499,10 @@ final class PublicChatService: ObservableObject {
                 pendingId: pendingId
             )
         }
+        // Reached when it was sent and when it's held for a deferred retry: either way this
+        // reply has been used, and the next message isn't one. Only this reply: another may
+        // have been started while the send was out.
+        if let usedReply, replyingTo?.id == usedReply.id { replyingTo = nil }
     }
 
     /// If sending too quickly back-to-back races the previous public chat's not-yet-confirmed
@@ -1623,9 +1699,9 @@ final class PublicChatService: ObservableObject {
             loadMessages(for: channel)
             return txId
         } catch let unknown as SendOutcomeUnknownError {
-            // It may land, so its coins stay held: a send right after can't spend them again.
-            chatService.reserveMessageOutpoints(spentUtxos)
-            chatService.consumePendingUtxos(spentUtxos)
+            // Not held (see `recordPlainSend`), so another message picks the same coins if this
+            // one never lands, and is refused rather than doubling up if it did.
+            chatService.invalidateUtxoCache()
             throw unknown
         } catch {
             chatService.releaseMessageOutpoints()
@@ -1666,9 +1742,66 @@ final class PublicChatService: ObservableObject {
         var wanted = wantedChannels
         guard NetworkEpochMonitor.shared.isExpensivePath else { return wanted }
         // Per room, since each can point at its own indexer now: a curated room whose override
-        // is blank still counts as indexed via the app-wide setting.
-        wanted.subtract(Self.indexerTrackedChannels.filter { !Self.indexerBaseURL(forChannel: $0).isEmpty })
+        // is blank still counts as indexed via the app-wide setting. An indexer that isn't
+        // answering covers nothing: its rooms keep the stream until it does.
+        wanted.subtract(Self.indexerTrackedChannels.filter {
+            let base = Self.indexerBaseURL(forChannel: $0)
+            return !base.isEmpty && unreachableIndexers[base] == nil
+        })
         return wanted
+    }
+
+    /// Indexers confirmed down (the same rule as KaPost's: three failures in a row inside two
+    /// minutes), and since when. Their rooms go back on the block stream on cellular.
+    private var unreachableIndexers: [String: Date] = [:]
+    private var indexerFailureRuns: [String: (count: Int, last: Date)] = [:]
+    /// Oldest a room's next backfill needs to reach after an outage (ms): the indexer gets the
+    /// last word on that stretch, without paging its whole 30 days again.
+    private var deepBackfillFloor: [String: Int64] = [:]
+
+    private func noteIndexerResult(base: String, failed: Error?) {
+        // A 4xx is the indexer answering, whatever it thinks of this request.
+        guard let failed, !Self.isClientRejection(failed) else {
+            indexerFailureRuns[base] = nil
+            guard let since = unreachableIndexers.removeValue(forKey: base) else { return }
+            AppLog.log("[PublicChat] Room indexer is answering again")
+            rewindRoomsAfterOutage(base: base, since: since)
+            updateScanningStateIfNeeded()
+            return
+        }
+        guard KaPostsIndexerHealth.meansDown(failed) || Self.isServerFailure(failed) else { return }
+        let now = Date()
+        var run = indexerFailureRuns[base] ?? (count: 0, last: .distantPast)
+        // A handoff fails every open room's poll at the same moment, and that is one failure.
+        if now.timeIntervalSince(run.last) < 5 { return }
+        if now.timeIntervalSince(run.last) > 120 { run.count = 0 }
+        run.count += 1
+        run.last = now
+        indexerFailureRuns[base] = run
+        guard run.count >= 3, unreachableIndexers[base] == nil else { return }
+        unreachableIndexers[base] = now
+        AppLog.log("[PublicChat] Room indexer isn't answering: rooms stay on the block stream")
+        updateScanningStateIfNeeded()
+    }
+
+    private nonisolated static func isClientRejection(_ error: Error) -> Bool {
+        guard case PublicChatIndexerClient.ClientError.badResponse(let code) = error else { return false }
+        return (400..<500).contains(code) && !KaPostsIndexerHealth.meansDown(statusCode: code)
+    }
+
+    private nonisolated static func isServerFailure(_ error: Error) -> Bool {
+        guard case PublicChatIndexerClient.ClientError.badResponse(let code) = error else { return false }
+        return KaPostsIndexerHealth.meansDown(statusCode: code)
+    }
+
+    /// Rooms this indexer serves read that stretch from it again, from ten minutes before it went
+    /// away: what the block stream missed comes in, and the indexer has the final word.
+    private func rewindRoomsAfterOutage(base: String, since: Date) {
+        let floor = Int64((since.timeIntervalSince1970 - 600) * 1000)
+        for channel in deepBackfilledChannels where Self.indexerBaseURL(forChannel: channel) == base {
+            deepBackfilledChannels.remove(channel)
+            deepBackfillFloor[channel] = floor
+        }
     }
 
     private func updateScanningStateIfNeeded() {
@@ -1697,7 +1830,7 @@ final class PublicChatService: ObservableObject {
     }
 
     /// OFF-MAIN block scan over the stream's once-parsed `ScannedBlock` (the old path decoded
-    /// the whole protobuf block again here, and again in GroupChatService). Pure extraction,
+    /// the whole protobuf block again here, and again in KaChat's GroupChatService). Pure extraction,
     /// no state: wanted/hidden filtering happens on the main hop, which only fires for actual
     /// hits (almost every block has zero).
     private nonisolated static func extractPublicChatHits(_ block: ScannedBlock, hrp: String) -> [BlockScanHit] {
@@ -1813,6 +1946,7 @@ final class PublicChatService: ObservableObject {
         var reactionChannels = Set<String>()
         var editChannels = Set<String>()
         var messageHits: [BlockScanHit] = []
+        var editHits: [(hit: BlockScanHit, edit: MessageEditContent)] = []
 
         for hit in hits {
             guard wanted.contains(hit.channel) else { continue }
@@ -1823,9 +1957,7 @@ final class PublicChatService: ObservableObject {
             // ever becomes a message row. Our own outgoing reactions already applied their local
             // update at send time (sendPublicChatReaction); newest-blockTime-wins dedupes the echo.
             if let edit = MessageEditCodec.parse(hit.content) {
-                if applyIncomingEdit(edit, channel: hit.channel, senderAddress: hit.senderAddress, editTxId: hit.txId, blockTime: hit.blockTime) {
-                    editChannels.insert(hit.channel)
-                }
+                editHits.append((hit, edit))
                 continue
             }
             if let reaction = MessageReactionCodec.parse(hit.content) {
@@ -1852,12 +1984,20 @@ final class PublicChatService: ObservableObject {
                     touchedChannels.insert(hit.channel)
                     notifyIfEnabled(channel: hit.channel, senderAddress: hit.senderAddress, content: hit.content, txId: hit.txId)
                 } else if Self.serviceChannels.contains(hit.channel),
+                          !wasApplied(Self.indexerTimedKey(hit.txId), channel: hit.channel),
                           store.updateBlockTime(id: hit.txId, blockTime: hit.blockTime) {
                     // Our own arena row, stamped with this phone's clock when it was submitted:
                     // the block's time is what every other phone sees, so take it (the reducer
                     // orders joins and runs the clocks by it).
                     touchedChannels.insert(hit.channel)
                 }
+            }
+        }
+
+        // After the batch's messages are in: an edit can arrive in the same batch as its target.
+        for (hit, edit) in editHits {
+            if applyIncomingEdit(edit, channel: hit.channel, senderAddress: hit.senderAddress, editTxId: hit.txId, blockTime: hit.blockTime) {
+                editChannels.insert(hit.channel)
             }
         }
 

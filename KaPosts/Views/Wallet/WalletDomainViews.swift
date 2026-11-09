@@ -481,6 +481,9 @@ struct KNSDomainSendView: View {
     @State private var isSubmitting = false
     @State private var errorMessage: String?
     @State private var result: KNSDomainTransferResult?
+    /// The transfer got no answer (`SendOutcomeUnknownError`): it may have gone through, so the
+    /// screen offers only Done.
+    @State private var outcomeUnknown = false
     /// Where the transfer has got to. A commit, a wait, then a reveal is most of a minute, and a
     /// toolbar spinner through all of it is indistinguishable from being stuck.
     @State private var transferStage: KNSDomainTransferService.TransferStage?
@@ -671,10 +674,15 @@ struct KNSDomainSendView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    if !outcomeUnknown {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if isSubmitting {
+                    if outcomeUnknown {
+                        // It may have gone through: sending again could spend twice.
+                        Button("Done") { dismiss() }
+                    } else if isSubmitting {
                         ProgressView()
                     } else {
                         Button("Send") {
@@ -836,6 +844,7 @@ struct KNSDomainSendView: View {
                     isSubmitting = false
                     transferStage = nil
                     errorMessage = UserFacingError.message(for: error)
+                    if error is SendOutcomeUnknownError { outcomeUnknown = true }
                     Haptics.impact(.medium)
                 }
             }
@@ -1064,7 +1073,11 @@ struct WalletAccountSections: View {
                 settingPrimaryDomainId: settingPrimaryDomainId,
                 setPrimaryError: $setPrimaryMessage,
                 onSetPrimary: { domain in
-                    Task { await setPrimaryDomain(domain) }
+                    // It signs with this account's key and changes the name everyone sees: the
+                    // phone's lock comes first. Declining leaves everything as it was.
+                    DeviceAuth.authenticate(reason: AppLocalization.string("Confirm setting your primary domain")) {
+                        Task { await setPrimaryDomain(domain) }
+                    }
                 },
                 onInscribeComplete: { result in
                     Haptics.success()
@@ -1258,7 +1271,8 @@ struct ReceiveKaspaQRView: View {
             // Warmed on the Wallet screen's appear - when it is there this screen draws immediately,
             // and the check below is a no-op re-confirmation rather than something the user
             // waits behind.
-            if let warmed = ReceiveAddressWarmCache.address {
+            let account = walletManager.currentWallet?.publicAddress
+            if let warmed = ReceiveAddressWarmCache.address(for: account) {
                 address = warmed
                 resolving = false
             }
@@ -1268,7 +1282,7 @@ struct ReceiveKaspaQRView: View {
             // scanned the instant it appears, so it must not change under a pointed camera
             // for any lesser reason.
             if resolved != address { address = resolved }
-            ReceiveAddressWarmCache.address = resolved
+            ReceiveAddressWarmCache.store(resolved, for: account)
             resolving = false
             guard let resolved else { return }
             // A failed lookup leaves the balance unknown (nothing shown) rather than 0 KAS.

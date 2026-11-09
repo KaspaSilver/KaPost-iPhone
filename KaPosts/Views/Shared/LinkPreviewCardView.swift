@@ -6,7 +6,7 @@ import PDFKit
 /// Rich link-preview card shown below a chat bubble's text when the message contains a link -
 /// mirrors iMessage. Renders nothing while the fetch is in flight and nothing if no preview data
 /// was found and no [fallbackText] was given, rather than a placeholder that could flash or look
-/// broken. Used by 1:1 (`MessageBubbleView`), group (`GroupChatDetailView`), and public chat
+/// broken. Used by 1:1 (`MessageBubbleView`), group (KaChat's `GroupChatDetailView`), and public chat
 /// (`PublicChatChannelView`) bubbles.
 struct LinkPreviewCardView: View {
     let url: URL
@@ -456,16 +456,17 @@ private struct NextcloudPosterImage: View {
 
             if let previewURL,
                let data = await LinkPreviewService.shared.imageData(previewURL, referer: referer),
-               let image = UIImage(data: data) {
+               let image = await ImageThumbnail.decode(data, maxPixelSize: 640) {
                 uiImage = image
                 return
             }
             guard let downloadURL else { return }
             switch kind {
             case .image:
-                if let data = await LinkPreviewService.shared.imageData(downloadURL, referer: referer, maxBytes: 25_000_000),
-                   let original = UIImage(data: data) {
-                    uiImage = await original.byPreparingThumbnail(ofSize: CGSize(width: 640, height: 640)) ?? original
+                // The default cap: this runs by itself for any link shaped like a share.
+                if let data = await LinkPreviewService.shared.imageData(downloadURL, referer: referer),
+                   let image = await ImageThumbnail.decode(data, maxPixelSize: 640) {
+                    uiImage = image
                 }
             case .video:
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: downloadURL))
@@ -512,8 +513,8 @@ private struct NextcloudMediaViewerView: View {
     @State private var player: AVPlayer?
     @State private var isZoomed = false
 
-    /// Original-quality photos are the point of this viewer — far above the card cap.
-    private static let fullImageMaxBytes = 50_000_000
+    /// Above the card cap, since someone tapped to see this; the server is still a stranger's.
+    private static let fullImageMaxBytes = 15_000_000
 
     var body: some View {
         NavigationStack {
@@ -590,7 +591,7 @@ private struct NextcloudMediaViewerView: View {
                         target.downloadURL,
                         referer: target.shareURL,
                         maxBytes: Self.fullImageMaxBytes
-                    ), let loaded = UIImage(data: data) {
+                    ), let loaded = await ImageThumbnail.decode(data, maxPixelSize: 4096) {
                         image = loaded
                     } else {
                         loadFailed = true
@@ -654,7 +655,7 @@ private struct LinkPreviewImage: View {
         .task(id: imageURL) {
             guard !finished else { return }
             if let data = await LinkPreviewService.shared.imageData(imageURL, referer: referer),
-               let image = UIImage(data: data) {
+               let image = await ImageThumbnail.decode(data, maxPixelSize: 1024) {
                 uiImage = image
             }
             finished = true

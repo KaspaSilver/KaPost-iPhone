@@ -75,6 +75,12 @@ final class KaPostsScheduledStore: ObservableObject {
 
     private let baseKey = "kachat_kaposts_scheduled"
     private var loadedWallet: String?
+    /// Posts being handed to the indexer, submitted or cancelled right now. Whichever started
+    /// first decides, so a cancel can't race a submit and a second pass can't submit again.
+    private var inFlight: Set<String> = []
+    /// How long past its time a post is left to the indexer (it ticks once a minute, §5.10)
+    /// before this phone sends it.
+    private static let indexerGrace: TimeInterval = 150
     /// The reserved outpoints, readable from any thread (the transaction builders are not
     /// on the main actor).
     nonisolated private static let reservedLock = NSLock()
@@ -153,6 +159,8 @@ final class KaPostsScheduledStore: ObservableObject {
         entries.append(entry)
         entries.sort { $0.notBefore < $1.notBefore }
         persist()
+        inFlight.insert(entry.id)
+        defer { inFlight.remove(entry.id) }
         do {
             try await KaPostsAPIClient.shared.scheduleOnServer(scheduled, notBefore: notBefore)
             entry.onServer = true
@@ -164,25 +172,36 @@ final class KaPostsScheduledStore: ObservableObject {
         return entry
     }
 
+    /// Only for an entry still here: one that left while this was away stays gone.
     private func update(_ entry: KaPostScheduledEntry) {
-        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
-            entries[index] = entry
-        } else {
-            entries.append(entry)
-        }
+        guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
+        entries[index] = entry
         entries.sort { $0.notBefore < $1.notBefore }
         persist()
     }
 
-    /// Cancels a post that has not gone out: told to the indexer if it holds it, dropped here,
-    /// its coins released.
-    func cancel(_ entry: KaPostScheduledEntry) async {
-        if entry.onServer, entry.status == .scheduled {
-            try? await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: entry.id)
+    /// Cancels a post that has not gone out: told to the indexer if it holds it, then dropped
+    /// here and its coins released. Returns what to tell the person when it couldn't be, with
+    /// the post still scheduled: an indexer that didn't answer will still send it.
+    func cancel(_ entry: KaPostScheduledEntry) async -> String? {
+        guard !inFlight.contains(entry.id) else {
+            return AppLocalization.string("This post is on its way right now, so it can't be cancelled.")
+        }
+        inFlight.insert(entry.id)
+        defer { inFlight.remove(entry.id) }
+        let current = entries.first { $0.id == entry.id } ?? entry
+        if current.onServer, current.status == .scheduled {
+            do {
+                try await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: entry.id)
+            } catch {
+                AppLog.log("[KaPosts] Cancelling a scheduled post failed: %@", error.localizedDescription)
+                return AppLocalization.string("Couldn't reach the server, so this post is still scheduled. Try again in a moment.")
+            }
         }
         entries.removeAll { $0.id == entry.id }
         persist()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.reminderId(entry.id)])
+        return nil
     }
 
     func remove(_ entry: KaPostScheduledEntry) {
@@ -190,11 +209,29 @@ final class KaPostsScheduledStore: ObservableObject {
         persist()
     }
 
-    /// Submits, from this phone, every local (not-on-server) post whose time has come, and
-    /// retries handing still-local future ones to the indexer.
+    /// Submits, from this phone, every post whose time has come and that the indexer isn't going
+    /// to send, and retries handing still-local future ones to the indexer.
     func sendDueLocally() async {
+        // What the indexer did with posts past their time comes first; with no answer from it,
+        // the phone sends them.
         let now = Date()
-        for entry in entries where entry.status == .scheduled && !entry.onServer {
+        if entries.contains(where: { $0.onServer && $0.status == .scheduled && $0.notBefore <= now }) {
+            await pullServerOutcomes()
+        }
+        await submitDue()
+    }
+
+    private func submitDue() async {
+        let now = Date()
+        for id in entries.map(\.id) {
+            // Read afresh: an earlier turn of this loop may have waited on the network.
+            guard let entry = entries.first(where: { $0.id == id }), entry.status == .scheduled,
+                  !inFlight.contains(id) else { continue }
+            // The indexer's to send until it has had its tick. After that an indexer that's
+            // down would strand the post, so the phone sends the same signed transaction.
+            if entry.onServer, entry.notBefore.addingTimeInterval(Self.indexerGrace) > now { continue }
+            inFlight.insert(id)
+            defer { inFlight.remove(id) }
             if entry.notBefore <= now {
                 var updated = entry
                 do {
@@ -202,10 +239,15 @@ final class KaPostsScheduledStore: ObservableObject {
                     updated.status = .submitted
                     updated.submittedAt = Date()
                     AppLog.log("[KaPosts] Scheduled post submitted from the phone: %@", String(txId.prefix(12)))
-                } catch {
+                } catch let rejection as NodePoolService.NodeRejectedTransactionError {
                     updated.status = .failed
-                    updated.error = error.localizedDescription
-                    AppLog.log("[KaPosts] Scheduled post failed to submit: %@", error.localizedDescription)
+                    updated.error = rejection.localizedDescription
+                    AppLog.log("[KaPosts] Scheduled post rejected: %@", rejection.localizedDescription)
+                } catch {
+                    // Offline, still connecting, or no answer: it stays scheduled, its coins
+                    // held, and goes again next time. The same signed transaction can't pay twice.
+                    AppLog.log("[KaPosts] Scheduled post not sent yet: %@", error.localizedDescription)
+                    continue
                 }
                 update(updated)
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.reminderId(entry.id)])
@@ -226,16 +268,29 @@ final class KaPostsScheduledStore: ObservableObject {
         }
     }
 
-    /// Pulls the indexer's view of this wallet's scheduled posts: submitted / failed outcomes
-    /// land here, and a post the server no longer knows (cancelled elsewhere) is dropped.
+    /// The indexer's view of this wallet's scheduled posts, then whatever is left for the phone.
     func refreshFromServer() async {
+        await pullServerOutcomes()
+        await submitDue()
+    }
+
+    /// Submitted and failed outcomes land here. A post past its time that the indexer no longer
+    /// knows turns local, so `submitDue` settles it: on chain, or rejected and its coins freed.
+    private func pullServerOutcomes() async {
         // Only posts the server holds have anything to learn from it.
         guard entries.contains(where: { $0.onServer }) else { return }
         guard let remote = try? await KaPostsAPIClient.shared.fetchScheduledPosts() else { return }
         let byId = Dictionary(remote.map { ($0.txId, $0) }, uniquingKeysWith: { a, _ in a })
+        let now = Date()
         var changed = false
-        for index in entries.indices where entries[index].onServer {
-            guard let server = byId[entries[index].id] else { continue }
+        for index in entries.indices where entries[index].onServer && !inFlight.contains(entries[index].id) {
+            guard let server = byId[entries[index].id] else {
+                if entries[index].status == .scheduled, entries[index].notBefore <= now {
+                    entries[index].onServer = false
+                    changed = true
+                }
+                continue
+            }
             let status = KaPostScheduledEntry.Status(rawValue: server.status) ?? entries[index].status
             if status != entries[index].status || server.error != entries[index].error {
                 entries[index].status = status
@@ -256,7 +311,7 @@ final class KaPostsScheduledStore: ObservableObject {
     private func scheduleReminder(for entry: KaPostScheduledEntry) {
         let content = UNMutableNotificationContent()
         content.title = "Scheduled post"
-        content.body = "Your post is ready to go out. Open KaChat to send it."
+        content.body = "Your post is ready to go out. Open KaPost to send it."
         content.sound = .default
         content.threadIdentifier = "kaposts-scheduled"
         let seconds = max(1, entry.notBefore.timeIntervalSinceNow)

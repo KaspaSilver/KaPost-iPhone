@@ -308,20 +308,120 @@ final class KaPostsAPIClient: ObservableObject {
     }
 
     private func get<T: Decodable>(_ path: String, query: [String: String]) async throws -> T {
-        var components = URLComponents(url: try baseURL().appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        let base = try baseURL()
+        var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
         components?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = components?.url else { throw KaPostsAPIError.badURL }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let pageKey = KaPostsPageCache.key(base: base, path: path, query: query)
+        let health = KaPostsIndexerHealth.shared
+        // Confirmed down: the saved page at once, not after a timeout. The probe looks for its
+        // return. With nothing saved it's still asked, briefly: any answer ends the outage.
+        if health.isDown {
+            if let saved: T = await savedPage(pageKey) { return saved }
+            request.timeoutInterval = 6
+        }
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            health.note(error)
+            // A saved page only for a confirmed outage or a phone with no connection. Any other
+            // failure throws as it always did, so the caller asks the indexer again.
+            if health.isDown || KaPostsIndexerHealth.meansOffline(error), let saved: T = await savedPage(pageKey) { return saved }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else { throw KaPostsAPIError.badResponse }
         guard http.statusCode == 200 else {
+            if KaPostsIndexerHealth.meansDown(statusCode: http.statusCode) {
+                health.noteFailure()
+                if health.isDown, let saved: T = await savedPage(pageKey) { return saved }
+            } else {
+                health.noteAnswered()
+            }
             if let body = try? JSONDecoder().decode(APIErrorBody.self, from: data) {
                 throw KaPostsAPIError.api(code: body.code, message: body.error)
             }
             throw KaPostsAPIError.badResponse
         }
-        return try await Self.decodeOffMain(T.self, from: data)
+        do {
+            let decoded = try await Self.decodeOffMain(T.self, from: data)
+            health.noteAnswered()
+            if let pageKey { KaPostsPageCache.save(data, key: pageKey) }
+            return decoded
+        } catch {
+            // The indexer answered, with something this build can't read: no outage.
+            health.noteUnreadableAnswer()
+            throw error
+        }
+    }
+
+    private func savedPage<T: Decodable>(_ key: String?) async -> T? {
+        guard let key, let data = await KaPostsPageCache.load(key: key) else { return nil }
+        return try? await Self.decodeOffMain(T.self, from: data)
+    }
+
+    /// Whether the indexer answers. A placeholder key, since the answer isn't read for anyone.
+    func probeIndexer() async -> Bool {
+        guard let base = try? baseURL(),
+              var components = URLComponents(url: base.appendingPathComponent("get-posts-watching"), resolvingAgainstBaseURL: false) else { return false }
+        components.queryItems = [
+            URLQueryItem(name: "requesterPubkey", value: "02" + String(repeating: "0", count: 64)),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        guard let url = components.url else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        // Any answer of its own ends the outage: a 4xx is an answer, about this request.
+        return !KaPostsIndexerHealth.meansDown(statusCode: http.statusCode)
+    }
+
+    /// A first page while the indexer is down: what the read saved (or nothing), with what `chain`
+    /// adds. No cursor, since one is only good with the indexer. Any other time, just the read.
+    private func withChain(
+        before: String?,
+        read: () async throws -> (posts: [KPost], pagination: KPagination?),
+        chain: () async -> [KPost]
+    ) async throws -> (posts: [KPost], pagination: KPagination?) {
+        do {
+            let page = try await read()
+            guard before == nil, KaPostsIndexerHealth.shared.isDown else { return page }
+            return (Self.mergedNewestFirst(page.posts, await chain()), nil)
+        } catch {
+            guard before == nil, KaPostsIndexerHealth.shared.isDown else { throw error }
+            let rows = await chain()
+            if rows.isEmpty { throw error }
+            return (Self.mergedNewestFirst([], rows), nil)
+        }
+    }
+
+    /// The indexer's copy wins a tie: it has the counts and the viewer's own votes.
+    private static func mergedNewestFirst(_ saved: [KPost], _ chain: [KPost]) -> [KPost] {
+        let known = Set(saved.map(\.id))
+        return (saved + chain.filter { !known.contains($0.id) }).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// The people this account follows, as their posts on chain: the first 20, a few at a time.
+    private func followedPostsFromChain() async -> [KPost] {
+        let pubkeys = KaPostsFollowStore.shared.following.sorted().prefix(20).compactMap { Self.kapostPubkey(fromAddress: $0) }
+        var found: [KPost] = []
+        for start in stride(from: 0, to: pubkeys.count, by: 4) {
+            await withTaskGroup(of: [KPost]?.self) { group in
+                for pubkey in pubkeys[start..<min(start + 4, pubkeys.count)] {
+                    group.addTask { await KaPostsChainPosts.posts(ofPubkey: pubkey) }
+                }
+                for await posts in group { found += posts ?? [] }
+            }
+        }
+        // On x-only: `pubkeys` is built from addresses as "02" + x, and a real post carries true parity.
+        let live = Set(pubkeys.map(KaPostsChainPosts.xOnly))
+        var seen = Set<String>()
+        return (found + KaPostsLiveChainFeed.shared.posts.filter { live.contains(KaPostsChainPosts.xOnly($0.userPublicKey)) })
+            .filter { seen.insert($0.id).inserted }
     }
 
     /// The feed decode, off the main actor. This client is `@MainActor`, so the plain
@@ -339,17 +439,26 @@ final class KaPostsAPIClient: ObservableObject {
     func fetchGlobalFeed(limit: Int = 50, before: String? = nil) async throws -> (posts: [KPost], pagination: KPagination?) {
         var query = ["requesterPubkey": try requesterPubkey(), "limit": "\(limit)"]
         if let before { query["before"] = before }
-        let response: PostsResponse = try await get("get-posts-watching", query: query)
-        return (Self.filterKaChat(response.posts), response.pagination)
+        return try await withChain(before: before) {
+            let response: PostsResponse = try await get("get-posts-watching", query: query)
+            return (Self.filterKaChat(response.posts), response.pagination)
+        } chain: {
+            // nothing lists every post but the indexer: what's new since it went away
+            KaPostsLiveChainFeed.shared.posts.filter { $0.parentPostId == nil }
+        }
     }
 
     /// Content (posts+replies+quotes) from accounts the requester follows on K.
     func fetchFollowingFeed(limit: Int = 50, before: String? = nil) async throws -> (posts: [KPost], pagination: KPagination?) {
         var query = ["requesterPubkey": try requesterPubkey(), "limit": "\(limit)"]
         if let before { query["before"] = before }
-        let response: PostsResponse = try await get("get-contents-following", query: query)
-        // Top-level content only in the feed - replies live under their post's thread.
-        return (Self.filterKaChat(response.posts).filter { ($0.contentType ?? "post") != "reply" }, response.pagination)
+        return try await withChain(before: before) {
+            let response: PostsResponse = try await get("get-contents-following", query: query)
+            // Top-level content only in the feed - replies live under their post's thread.
+            return (Self.filterKaChat(response.posts).filter { ($0.contentType ?? "post") != "reply" }, response.pagination)
+        } chain: {
+            await followedPostsFromChain().filter { $0.parentPostId == nil }
+        }
     }
 
     /// One user's posts (by K pubkey). NOTE: the deployed indexer ignores includeReplies
@@ -358,8 +467,13 @@ final class KaPostsAPIClient: ObservableObject {
         var query = ["user": pubkey, "requesterPubkey": try requesterPubkey(), "limit": "\(limit)"]
         if includeReplies { query["includeReplies"] = "true" }
         if let before { query["before"] = before }
-        let response: PostsResponse = try await get("get-posts", query: query)
-        return (Self.filterKaChat(response.posts), response.pagination)
+        return try await withChain(before: before) {
+            let response: PostsResponse = try await get("get-posts", query: query)
+            return (Self.filterKaChat(response.posts), response.pagination)
+        } chain: {
+            let posts = await KaPostsChainPosts.posts(ofPubkey: pubkey) ?? []
+            return includeReplies ? posts : posts.filter { $0.parentPostId == nil }
+        }
     }
 
     /// One user's replies across ALL threads: get-replies with `user` instead of `post`
@@ -369,16 +483,24 @@ final class KaPostsAPIClient: ObservableObject {
     func fetchUserReplies(pubkey: String, limit: Int = 50, before: String? = nil) async throws -> (posts: [KPost], pagination: KPagination?) {
         var query = ["user": pubkey, "requesterPubkey": try requesterPubkey(), "limit": "\(limit)"]
         if let before { query["before"] = before }
-        let response: RepliesResponse = try await get("get-replies", query: query)
-        return (Self.filterKaChat(response.replies), response.pagination)
+        return try await withChain(before: before) {
+            let response: RepliesResponse = try await get("get-replies", query: query)
+            return (Self.filterKaChat(response.replies), response.pagination)
+        } chain: {
+            (await KaPostsChainPosts.posts(ofPubkey: pubkey) ?? []).filter { $0.parentPostId != nil }
+        }
     }
 
     /// Replies to a post. KaChat-filtered like everything else.
     func fetchReplies(postId: String, limit: Int = 100, before: String? = nil) async throws -> (posts: [KPost], pagination: KPagination?) {
         var query = ["post": postId, "requesterPubkey": try requesterPubkey(), "limit": "\(limit)"]
         if let before { query["before"] = before }
-        let response: RepliesResponse = try await get("get-replies", query: query)
-        return (Self.filterKaChat(response.replies), response.pagination)
+        return try await withChain(before: before) {
+            let response: RepliesResponse = try await get("get-replies", query: query)
+            return (Self.filterKaChat(response.replies), response.pagination)
+        } chain: {
+            KaPostsLiveChainFeed.shared.posts.filter { $0.parentPostId == postId }
+        }
     }
 
     /// One post by id, any age, any author (`get-post?id=`).
@@ -1003,8 +1125,20 @@ extension KaPostsAPIClient {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            KaPostsIndexerHealth.shared.note(error)
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else { throw KaPostsAPIError.badResponse }
+        if KaPostsIndexerHealth.meansDown(statusCode: http.statusCode) {
+            KaPostsIndexerHealth.shared.noteFailure()
+        } else {
+            KaPostsIndexerHealth.shared.noteAnswered()
+        }
         guard (200..<300).contains(http.statusCode) else {
             if let body = try? JSONDecoder().decode(APIErrorBody.self, from: data) {
                 throw KaPostsAPIError.api(code: body.code, message: body.error)
@@ -1083,8 +1217,7 @@ extension KaPostsAPIClient {
         )
     }
 
-    /// Casts an upvote/downvote on a post. (K has no un-vote action in the spec - local unlike
-    /// stays client-side only for now.)
+    /// Casts an upvote/downvote on a post. `submitUnvote` withdraws one.
     func submitVote(postId: String, upvote: Bool, authorPubkey: String) async throws -> String {
         try await submitVoteAction(postId: postId, vote: upvote ? "upvote" : "downvote", authorPubkey: authorPubkey)
     }
@@ -1177,43 +1310,52 @@ extension KaPostsAPIClient {
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
         }
-        // The coins rooms and sends draw from too: ones a scheduled post is waiting for (§5.10),
-        // or that a send still in flight spent, are left out, and the change of the last post
-        // or room message is offered, so two quick likes don't pick the same coin.
         let chatService = ChatService.shared
-        let utxos = chatService.prepareMessageUtxos(
-            confirmed: try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
-        )
-        let signedTx = try KasiaTransactionBuilder.buildPayloadSelfSendTx(
-            from: wallet.publicAddress,
-            senderPrivateKey: privateKey,
-            utxos: utxos,
-            payload: Data(payload.utf8)
-        )
-        let usesUnconfirmedInputs = chatService.spentMessageUtxos(from: signedTx, candidates: utxos)
-            .contains { $0.blockDaaScore == 0 }
-        let txId: String
-        do {
-            (txId, _) = try await NodePoolService.shared.submitTransaction(signedTx, allowOrphan: usesUnconfirmedInputs)
-        } catch let unknown as SendOutcomeUnknownError {
-            // It may land: its coins stay held.
-            chatService.recordPlainSend(signedTx, spent: utxos, txId: nil, changeScriptPubKey: nil)
-            throw unknown
+        // One outgoing transaction at a time, in line with rooms and sends: picking coins and
+        // recording what was spent can't interleave with another action's.
+        let txId: String = try await chatService.enqueueOutgoingTxOperation {
+            // The wait may have outlasted the account that signed this payload.
+            guard WalletManager.shared.currentWallet?.publicAddress == wallet.publicAddress else {
+                throw KaPostsAPIError.missingWallet
+            }
+            // The coins rooms and sends draw from too: ones a scheduled post is waiting for (§5.10),
+            // or that a send still in flight spent, are left out, and the change of the last post
+            // or room message is offered, so two quick likes don't pick the same coin.
+            let utxos = chatService.prepareMessageUtxos(
+                confirmed: try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
+            )
+            let signedTx = try KasiaTransactionBuilder.buildPayloadSelfSendTx(
+                from: wallet.publicAddress,
+                senderPrivateKey: privateKey,
+                utxos: utxos,
+                payload: Data(payload.utf8)
+            )
+            let usesUnconfirmedInputs = chatService.spentMessageUtxos(from: signedTx, candidates: utxos)
+                .contains { $0.blockDaaScore == 0 }
+            let submitted: String
+            do {
+                (submitted, _) = try await NodePoolService.shared.submitTransaction(signedTx, allowOrphan: usesUnconfirmedInputs)
+            } catch let unknown as SendOutcomeUnknownError {
+                // It may land: its coins stay held.
+                chatService.recordPlainSend(signedTx, spent: utxos, txId: nil, changeScriptPubKey: nil)
+                throw unknown
+            }
+            chatService.recordPlainSend(signedTx, spent: utxos, txId: submitted,
+                                        changeScriptPubKey: KaspaAddress.scriptPublicKey(from: wallet.publicAddress))
+            // The id a scheduled post is keyed on (§5.10) is computed before submission; every real
+            // submit is a free check that the computation still agrees with the node.
+            let computed = KasiaTransactionBuilder.computeTransactionId(signedTx)
+            if computed != submitted {
+                AppLog.log("[KaPosts] computeTransactionId MISMATCH: computed %@, node %@", computed, submitted)
+            }
+            return submitted
         }
-        chatService.recordPlainSend(signedTx, spent: utxos, txId: txId,
-                                    changeScriptPubKey: KaspaAddress.scriptPublicKey(from: wallet.publicAddress))
         // Only what shows on your profile: a post, reply, quote, edit, delete or poll.
         let action = payload.split(separator: ":", maxSplits: 4).dropFirst(2).first.map(String.init)
         if let action, ["post", "reply", "quote", "unquote", "edit", "delete", "poll"].contains(action) {
             Self.ownActivityAt = Date()
         }
         AppLog.log("[KaPosts] Submitted %@ action tx %@", String(payload.prefix(12)), String(txId.prefix(12)))
-        // The id a scheduled post is keyed on (§5.10) is computed before submission; every real
-        // submit is a free check that the computation still agrees with the node.
-        let computed = KasiaTransactionBuilder.computeTransactionId(signedTx)
-        if computed != txId {
-            AppLog.log("[KaPosts] computeTransactionId MISMATCH: computed %@, node %@", computed, txId)
-        }
         // Refresh the wallet balance so the header updates live with the fee just spent - once
         // immediately, once after the UTXO change settles (Kaspa blocks are ~1s, so the second
         // pass reliably catches it).
@@ -1229,28 +1371,17 @@ extension KaPostsAPIClient {
 
 // MARK: - KaPosts local notification pings
 
-/// In-app notification pings for KaPosts, mirroring how 1:1/group chats notify: while the app
-/// is running it polls the indexer's notification stream (30s) and posts local iOS
-/// notifications for new actions on your content ("alice liked your post"). Needs no indexer
-/// changes; push while the app is CLOSED arrives with the KaChat-owned indexer fork
-/// (KAPOSTS_INDEXER.md).
-///
-/// This poller is THE foreground banner source for KaPosts: `AppDelegate.willPresent` drops
-/// remote kaposts pushes while the app is active and this poller is running, because only
-/// this side knows the per-type Settings toggles (the push payload carries no action type).
-/// The displayed-action ledger below dedupes across the two sources at their boundary.
+/// While the app runs this polls the indexer's notification stream (30s) and keeps the bell's
+/// unseen count. Banners come from remote pushes alone (`ChatService.localBannersEnabled` is
+/// false), so the local-banner path below stays behind that switch, unused.
 @MainActor
 final class KaPostsNotificationService {
     static let shared = KaPostsNotificationService()
 
     private var pollTask: Task<Void, Never>?
     private static let pollIntervalNanos: UInt64 = 30 * 1_000_000_000
-
-    /// True while the poll loop is alive - `AppDelegate.willPresent` consults this: with the
-    /// poller running it is the foreground banner source and kaposts pushes are dropped; with
-    /// it stopped (in-app browser powers it down) the push presents instead, matching the
-    /// browser's "closed-app path" design.
-    var isPolling: Bool { pollTask != nil }
+    /// How far back one poll follows the bell's count (50 a page).
+    private static let maxUnseenCountPages = 10
 
     /// True while KaPostsNotificationsView is on screen - mirrors the open-conversation rule:
     /// no banner for the very stream the user is looking at (set from that view's
@@ -1261,9 +1392,9 @@ final class KaPostsNotificationService {
 
     // MARK: Displayed-action ledger (App Group)
 
-    /// Ledger of KaPosts ACTION txids already shown as a banner, by EITHER source: this
-    /// poller's local banners (claimed before posting) or a remote push `willPresent`
-    /// presented / the user tapped. The kaposts push carries no `tx_id` in userInfo, but its
+    /// Ledger of KaPosts ACTION txids already shown as a banner: a remote push the user tapped,
+    /// and this poller's local banners while `ChatService.localBannersEnabled` allows them. The
+    /// kaposts push carries no `tx_id` in userInfo, but its
     /// `apns-collapse-id` IS the action's txid (PUSH_EXTENSIONS.md) and iOS surfaces that as
     /// `UNNotificationRequest.identifier` - the stable key both sides share. Bounded FIFO,
     /// mirroring `ChatService.localPostedTxIdsKey`.
@@ -1330,13 +1461,22 @@ final class KaPostsNotificationService {
         // Notifications off: nothing here would be shown, so the indexer isn't asked.
         guard settings.notificationsEnabled else { return }
         do {
-            let notifications = try await KaPostsAPIClient.shared.fetchNotifications(limit: 50).notifications
-            // OS banner gates apply only from here down. Remote-push mode: the push service
-            // delivers KaPosts pings (registered via kaposts_pubkey) while the app is
-            // backgrounded or closed - local pings there would double-notify, mirroring the
-            // broadcast guard. While the app is ACTIVE this poll is the notification source
-            // whatever the mode (AppDelegate.willPresent drops REMOTE kaposts pushes while
-            // this poller is running - the poller's own local banners present).
+            var page = try await KaPostsAPIClient.shared.fetchNotifications(limit: 50)
+            var notifications = page.notifications
+            // A long absence runs past the first page: the bell counts all of it, within reason.
+            if let seenUpTo = (UserDefaults.standard.object(forKey: key) as? NSNumber)?.int64Value {
+                var pages = 1
+                while pages < Self.maxUnseenCountPages,
+                      page.pagination?.hasMore == true, let cursor = page.pagination?.nextCursor, !cursor.isEmpty,
+                      let oldest = notifications.map(\.timestamp).min(), oldest > seenUpTo,
+                      let next = try? await KaPostsAPIClient.shared.fetchNotifications(limit: 50, before: cursor) {
+                    page = next
+                    notifications += next.notifications
+                    pages += 1
+                }
+            }
+            // Remote-push mode: the push service delivers KaPosts pings (registered via
+            // kaposts_pubkey) while the app is backgrounded or closed.
             guard settings.notificationsEnabled else { return }
             if settings.notificationMode == .remotePush,
                UIApplication.shared.applicationState != .active { return }
@@ -1399,20 +1539,14 @@ final class KaPostsNotificationService {
         }
     }
 
-    /// Does the reader still want to hear about this kind of activity?
-    ///
-    /// Settings > Notifications > KaPosts has had these switches since the feature shipped,
-    /// and NOTHING read them - they wrote a setting nobody consulted, so turning Likes off
-    /// changed nothing and the banners kept coming. This is the gate they were always meant to
-    /// drive, and it now gates the in-app bell as well as the banner: a kind you switched off
-    /// should not be waiting for you in a list either.
+    /// Does the reader still want to hear about this kind of activity (Settings > Notifications)?
     static func notificationsEnabled(for contentType: String?, voteType: String?) -> Bool {
         AppSettings.load().shouldNotifyKaPostsAction(contentType: contentType, voteType: voteType)
     }
 
     private func postLocal(_ notification: KaPostsAPIClient.KNotification) async {
         // The remote push is the only banner source - see `ChatService.localBannersEnabled`.
-        // The in-app bell is fed separately (GlobalNotificationCenter) and is unaffected.
+        // The bell's count is fed by `pollOnce` (KaPostsNotificationCenter) and is unaffected.
         guard ChatService.localBannersEnabled else { return }
         guard let address = KaPostsAPIClient.kaspaAddress(fromPubkey: notification.userPublicKey),
               address != WalletManager.shared.currentWallet?.publicAddress,

@@ -2104,7 +2104,8 @@ final class KNSDomainTransferService: ObservableObject {
         log("PAYLOAD domain=\(domain) jsonBytes=\(payloadJSON.count)")
 
         let fetchedUtxos = try await nodePool.getUtxosByAddresses([fundingAddress])
-        let utxos = fetchedUtxos.filter { !$0.isCoinbase && $0.blockDaaScore > 0 }
+        // not the coins a send still in flight spent: the node lists them until it is in a block
+        let utxos = ChatService.shared.unreservedUtxos(fetchedUtxos.filter { !$0.isCoinbase && $0.blockDaaScore > 0 })
         guard !utxos.isEmpty else {
             throw KasiaError.networkError(
                 fromSpendingAddressIndex == nil

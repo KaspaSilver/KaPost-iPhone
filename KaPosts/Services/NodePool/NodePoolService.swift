@@ -628,15 +628,16 @@ final class NodePoolService: ObservableObject {
     /// `SendOutcomeUnknownError` rather than a failure: it may yet land.
     ///
     /// Whatever it spends is held back from the next send (`ChatService.reserveOutpointKeys`), here
-    /// rather than at each caller, so no path (KNS, .kachat names, posts, combines) can skip it: on
-    /// success, and on an unknown outcome, which may yet land. The same as KaPay.
+    /// rather than at each caller, so no path (KNS, .kachat names, posts, combines) can skip it, on
+    /// success. An unknown outcome is deliberately not held: the same as KaPay.
     func submitTransaction(_ transaction: KaspaRpcTransaction, allowOrphan: Bool = false) async throws -> (txId: String, endpoint: String) {
         do {
             let sent = try await submitTransactionUnrecorded(transaction, allowOrphan: allowOrphan)
             reserveInputs(of: transaction.toProtobuf())
             return sent
         } catch let unknown as SendOutcomeUnknownError {
-            reserveInputs(of: transaction.toProtobuf())
+            // Not held, so a resend picks these same coins and only one of the two can land.
+            ChatService.shared.invalidateUtxoCache()
             throw unknown
         }
     }
@@ -702,7 +703,8 @@ final class NodePoolService: ObservableObject {
             reserveInputs(of: rpcTransaction)
             return sent
         } catch let unknown as SendOutcomeUnknownError {
-            reserveInputs(of: rpcTransaction)
+            // Not held, so a resend picks these same coins and only one of the two can land.
+            ChatService.shared.invalidateUtxoCache()
             throw unknown
         }
     }
@@ -872,8 +874,8 @@ final class NodePoolService: ObservableObject {
     /// instead of a failure. Counting these as failures used to trip breakers on the three
     /// hedged nodes every time a doomed transaction was retried, until the pool had no
     /// eligible node left and every send met "No suitable endpoints" for the next 30s.
-    /// Callers see the same `KasiaError.networkError(message)` they always did.
-    private struct NodeRejectedTransactionError: LocalizedError {
+    /// Callers read the node's message from it, the same text as ever.
+    struct NodeRejectedTransactionError: LocalizedError {
         let message: String
         var errorDescription: String? { message }
     }
@@ -1024,6 +1026,13 @@ final class NodePoolService: ObservableObject {
             throw KasiaError.networkError(utxoResponse.error.message)
         }
 
+        // Responses are matched by type alone, so coins for addresses not asked about are a crossed
+        // or broken answer: refused, and the next node asked. The same as KaChat.
+        let requested = Set(addresses.map { $0.lowercased() })
+        guard utxoResponse.entries.allSatisfy({ $0.address.isEmpty || requested.contains($0.address.lowercased()) }) else {
+            throw KasiaError.networkError("UTXO response for addresses not requested")
+        }
+
         return try utxoResponse.entries.compactMap { entry -> UTXO? in
             guard entry.hasUtxoEntry, entry.hasOutpoint else { return nil }
 
@@ -1064,7 +1073,7 @@ final class NodePoolService: ObservableObject {
     }
 
     /// Subscribe to block-added notifications (piggybacks on the primary UTXO connection).
-    /// Tracked per client token: GroupChatService and PublicChatService gate their block scans
+    /// Tracked per client token: KaChat's GroupChatService and PublicChatService gate their block scans
     /// independently (group count, open rooms, expensive-path state), and the underlying
     /// wanted-flag is a single bool - without the token set, one client unsubscribing would
     /// silently stop re-registration for the other on the next reconnect.
@@ -1297,7 +1306,9 @@ final class NodePoolService: ObservableObject {
                             isError: false
                         )
                         AppLog.log("[NodePool] %@ rejected the transaction: %@", endpoint.key, rejection.message)
-                        return .failure(KasiaError.networkError(rejection.message))
+                        // Passed on as itself, so a caller can tell a verdict from a failed network
+                        // (the scheduled posts do). It reads the same as ever.
+                        return .failure(rejection)
                     } catch {
                         let isTimeout = error.localizedDescription.lowercased().contains("timeout")
                         await self.registry.recordResult(

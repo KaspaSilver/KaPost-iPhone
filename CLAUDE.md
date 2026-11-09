@@ -43,9 +43,9 @@ What is still KaChat-shaped underneath:
 |---|---|
 | Feed | `KaPostsPageView` (`Views/KaPosts/KaPostsView.swift`) |
 | Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once. Rows swipe (left: Delete, Mute, Pin; right: read state), and a pinned room moves into the circles row above the list, saved per account |
-| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`; Wallet pushes `KaPostWalletView`, KaChat's and KaPay's Wallet tab: the total (chatting plus spending), Send, Receive and More (Compound UTXOs, dimmed until the chatting address holds two or more coins, Request Payment, View Private Key, View Public Key, as in KaPlay), the Backup Hygiene card, then the chatting address's transaction history (`AddressTransactionRow`, shared with `ChattingAddressManageView`) |
+| Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Edit Profile opens `KaChatProfileEditorSheet`; Log Out (red, beside Wallet); Wallet pushes `KaPostWalletView`, KaChat's and KaPay's Wallet tab: the total (chatting plus spending), Send, Receive and Request (Compound UTXOs and an address's keys are in Manage Addresses, under that address), the Backup Hygiene card, then `WalletAccountSections` |
 | Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (post notifications only - no wallet ones) |
-| Settings | `SettingsView`, alphabetical like KaChat and KaPay: About (version, website, support email, Terms of Use, Privacy Policy, licenses), Account Name, Back Up Account (Complete Your Backup, View 12 or 24 Words, Back Up to NFC Card), Connection, Customization, Diagnostics, KaPost, Notifications, Security, Storage; then Delete Account (`DeleteAccountSheet`, the warning the opening screen's Delete also shows; `WalletManager.deleteCurrentAccount`), Log Out |
+| Settings | `SettingsView`, alphabetical like KaChat and KaPay: About (version, website, support email, Terms of Use, Privacy Policy, licenses), Account Name, Back Up Account (Complete Your Backup, View 12 or 24 Words, Back Up to NFC Card), Connection, Customization, Diagnostics, KaPost, Notifications, Security, Storage; then Delete Account. Log Out is on the Profile |
 
 The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
 Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,
@@ -82,20 +82,22 @@ NFC Card (`NFCCardRestoreView`). The App ID needs Near Field Communication Tag R
 
 Every KaChat app has KaPay's full wallet (owner's call, 2026-11-07; it replaced "chatting address only"
 from 2026-11-05). Profile > Wallet (`KaPostWalletView`) is KaPay's Wallet tab: the total split into
-chatting and spending, Send, Receive and More (Compound UTXOs, Request Payment, the chatting address's
-keys), Backup Hygiene when due, then `WalletAccountSections` (`Views/Wallet/WalletDomainViews.swift`):
+chatting and spending, Send, Receive and Request (Compound UTXOs and an address's keys are under that address in Manage
+Addresses), Backup Hygiene when due, then `WalletAccountSections` (`Views/Wallet/WalletDomainViews.swift`):
 the Manage Addresses (`ManageAddressesView`) and Chatting Address squares, Your Domains
-(`KNSDomainsListView`, no Customize Profile: profiles are edited on KaPost's Profile) and Help; then
-the history. No Contacts (saved addresses): people use KaChat or KaPay for that (owner's call,
+(`KNSDomainsListView`, no Customize Profile: profiles are edited on KaPost's Profile) and Help. No transaction
+history on this screen (owner's call, 2026-11-09). No Contacts (saved addresses): people use KaChat or KaPay for that (owner's call,
 2026-11-07), so `AddressBookManager` isn't in KaPost.
 Send has the From step (`WithdrawKaspaView.lockedSource` is nil unless an address's own Send opens it),
 Receive shows a fresh address (`ReceiveKaspaQRView`), and Request Payment offers Fresh Address or Choose
-an Address. Ported from KaPay: keep these in unison with it, and port KaPay changes here. Spending
+an Address. Each single-address page has one options icon at the top right (`AddressOptionsButton`), opening
+`AddressActionsSheet`: View Private Key, View Public Key (not for a quantum address, whose key stays hidden
+until it spends) and View in Explorer. Ported from KaPay: keep these in unison with it, and port KaPay changes here. Spending
 addresses number from #1 (`WalletManager.addressNumber`).
 
 Tips: only one from the chatting address is a tip (KAPOSTS_INDEXER.md 5.11): it names the post,
 counts on it and lists the tipper. The tip sheet opens on From, and KaPosts > Settings > Tips From
-(`kaPostsDefaultTipSourceIndex`, `SendSource.defaultTip`) picks the instant tip's address and the
+(`KaPostsTipSourceStore`, per account, `SendSource.defaultTip`) picks the instant tip's address and the
 sheet's first choice. From another address a tip is private (owner's call, 2026-11-07):
 `ChatService.sendPayment` drops the tip and sends a plain payment with the chat notice, so the author
 gets it in your chat but it names no post, isn't counted and doesn't list you.
@@ -113,7 +115,9 @@ blocks the lost-answer check only when it is about the transaction itself (`isVe
 
 Coins: posts, likes, room messages, tips, Send and .kachat combining all draw from one ledger in
 `ChatService` (`prepareMessageUtxos`, `unreservedUtxos`, `recordPlainSend`). What a send spent stays
-reserved until it is in a block, also when its outcome is unknown, so the next action never picks it again.
+reserved until it is in a block, so the next action never picks it again. An unknown outcome is deliberately
+not held (`recordPlainSend` with a nil `txId`): a send made after "Not confirmed" picks the same coins, so only
+one of the two can land.
 `NodePoolService.submitTransaction` and `submitRpcTransaction(_:expectedTxId:)` reserve every submitted
 transaction's inputs themselves (`ChatService.reserveOutpointKeys`), so KNS, .kachat and any new path are
 covered too.
@@ -148,6 +152,42 @@ there. Held 5-second actions belong to the account they were made as (`KaPostsAc
 a switch), a thread chain stops if the account changes, and Reply is off on a post not on chain yet. People read "12 or 24 words", never "seed
 phrase". `AppLog.log` shortens any Kaspa address to its last 8 characters, so logs
 (and URLs in them) name no account.
+
+.kachat names with the indexer down (`KachatNamesRegistry`, the same as KaChat): after 3 failures in a row
+inside 120 s (`indexerOutageConfirmed`; an undecodable body doesn't count) the registry moves to its chain
+copy (`fromIndexer`, `failOverToChain`), and a refresh goes back when it recovers. One missed status check
+doesn't drop a working indexer; a wrong covenant id, `synced == false` or too much lag still do. A chain copy answers only if this session's walk reached the tip in the last 10 minutes
+(`chainTipAt`, `readChainState`), so saved names keep showing and a name never reads as free from a stale or
+partial copy. After a failover the indexer isn't asked for 60 s (`chainHoldUntil`). That covers the market reads and name gaps too. A failed read keeps what's on screen and
+never marks a pending claim failed. `confirmOnChain` always checks the live UTXO, whatever the source: no record is
+trusted to pay on its own. A commit from the chain copy forces a walk first (`lookupForCommit`), and a commit
+resend reuses its own coins (`PendingRegistration.commitInputs`), so it can't land twice. A walk repeats until the tip
+(`walkToTip`), the standby copy is walked every 30 minutes, and without an indexer a person's profile is
+read from their own chain record (`chainProfile`).
+
+## With the indexer down
+
+The owner's rule across the iOS apps (2026-11-08): what relies on the indexer keeps working from the node
+where it can, shows what it saved where it can't, and recovers by itself (`Services/KaPostsChainFallback.swift`).
+
+- The indexer is the source whenever it's online. `KaPostsIndexerHealth`: every KaPost read and write reports.
+  Confirmed down only after 3 failures in a row inside 120 s (a network failure that isn't cancelled or
+  offline, 429 or 5xx), and any answer resets the count; a body that won't decode is an answer. Until then a
+  failed request throws as before. One small request a minute looks for its return.
+- Saved pages: `get` keeps each read's first page on disk (`KaPostsPageCache`, per account, cleared by Delete
+  Account) and serves it only while confirmed down or with the phone offline.
+- From the chain, first pages only: a person's posts and replies from Kaspa REST (`KaPostsChainPosts`), the
+  Following feed from the people followed (the first 20), and new posts and replies from the block stream
+  (`KaPostsLiveChainFeed`, only while down). Every one must pass its Schnorr signature, since a payload can
+  name anyone. Nothing but the indexer lists every post, or who reacted to yours, so the global feed is the
+  saved page plus what's new, and notifications are the saved page until it returns.
+- The feed says so while it lasts. When the indexer answers, the feed, your profile and notifications reload,
+  and every load gate is cleared, so it has the final word.
+- Rooms: the same 3-failure rule per indexer (`unreachableIndexers`); while down a room stays on the block
+  stream on cellular too. On recovery each backfilled room pages that indexer again from ten minutes before
+  the outage (`rewindRoomsAfterOutage`, `deepBackfillFloor`). Older room history has no other source; saved
+  rows stay.
+- KaChat's 1:1 catch-up work doesn't apply: KaPost's 1:1 sync is off. Push can't work without the indexer.
 
 ## KaPost links in rooms
 
@@ -207,7 +247,8 @@ is cleared on decode. The protocol and server docs live in KaChat-iPhone
 Push registration and updates send `apns_topic` = the bundle id (`com.kachat.kaposts`,
 `PushNotificationManager.apnsTopic`), like KaChat Wallet, so the shared push service sends
 KaPosts pushes on KaPosts' topic. Without it Apple rejects them with `DeviceTokenNotForTopic`;
-while the service doesn't honour it, KaPosts notifies through its in-app poller only.
+while the service doesn't honour it, KaPosts gets no pushes. The in-app poller only updates the unseen count,
+since `ChatService.localBannersEnabled` is off.
 
 KaPosts has no notification service extension, so a chat push would show as a bare "New
 message" banner. KaPosts registers with `watched_addresses: []` (main address only), and

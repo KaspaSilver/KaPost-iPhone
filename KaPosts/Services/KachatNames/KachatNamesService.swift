@@ -211,11 +211,18 @@ final class KachatNamesService: ObservableObject {
     /// The wallet's spendable funding UTXOs for the builders: the signer's own Schnorr P2PK
     /// outputs only, mature, and never one carrying a covenant id (spending that would drag a
     /// covenant into the transaction and change its storage mass).
-    nonisolated static func fundingUtxos(_ utxos: [UTXO], me: Data, virtualDaaScore: UInt64) -> [KachatNames.Utxo] {
+    ///
+    /// `respending` ("txid:index") rebuilds a transaction that already spends those coins: only
+    /// they are offered, though the two-minute hold on them hasn't run out.
+    static func fundingUtxos(_ utxos: [UTXO], me: Data, virtualDaaScore: UInt64, respending: Set<String>? = nil) -> [KachatNames.Utxo] {
         let mine = KachatNames.Codec.p2pkScript(me)
         // never a coin a scheduled KaPost will spend (IOS-064): quotes, plans and submits all
         // fund from here, so they see the same coins
-        let free = KaPostsScheduledStore.filterReserved(utxos)
+        let unscheduled = KaPostsScheduledStore.filterReserved(utxos)
+        // nor one a send still in flight spent: a node lists it until that send is in a block
+        let free = respending.map { keep in
+            unscheduled.filter { keep.contains("\($0.outpoint.transactionId.lowercased()):\($0.outpoint.index)") }
+        } ?? ChatService.shared.unreservedUtxos(unscheduled)
         return KasiaTransactionBuilder.spendableForBuild(free, virtualDaaScore: virtualDaaScore).compactMap { u in
             guard u.covenantId == nil, u.scriptPublicKey == mine else { return nil }
             return try? convert(u)

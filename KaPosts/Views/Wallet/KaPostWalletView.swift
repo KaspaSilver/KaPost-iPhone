@@ -2,14 +2,12 @@ import SwiftUI
 import UIKit
 
 /// Profile > Wallet, KaChat's and KaPay's Wallet tab in KaPost: the total up top, split into the
-/// chatting and spending addresses, then Send, Receive and More (Compound UTXOs, Request Payment and
-/// the chatting address's keys), then its history. KaPost only uses the chatting address: Send leaves from it and Receive and Request are
-/// paid to it. Other addresses count in the total and are managed in KaChat and KaPay. Pushed, so
-/// the dock stays under it.
+/// chatting and spending addresses, then Send, Receive and Request, then the sections from KaPay's
+/// Wallet tab (`WalletAccountSections`). An address's own actions (Compound UTXOs, its keys) are in
+/// Manage Addresses.
+/// Pushed, so the dock stays under it.
 struct KaPostWalletView: View {
     @EnvironmentObject private var walletManager: WalletManager
-    @EnvironmentObject private var chatService: ChatService
-    @EnvironmentObject private var settingsViewModel: SettingsViewModel
     @ObservedObject private var backupStatus = AccountBackupStatus.shared
     @ObservedObject private var priceService = KaspaPriceService.shared
 
@@ -22,32 +20,11 @@ struct KaPostWalletView: View {
     @State private var showBackupHygiene = false
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
-    /// The chatting address's history, newest first, under the buttons.
-    @State private var transactions: [KaspaFullTransactionResponse] = []
-    @State private var isLoadingHistory = false
-    /// The last fetch gave up partway: a failed read isn't an empty history.
-    @State private var historyIncomplete = false
-    @State private var transactionActionTarget: KaspaFullTransactionResponse?
-    /// More: Request Payment and the chatting address's keys, as in KaPlay.
-    @State private var showMore = false
-    @State private var showPrivateKey = false
-    @State private var showPublicKey = false
-    @State private var showCompound = false
-    /// The More row picked: opened once More has finished closing (`presentMoreChoice`). Opening a
-    /// sheet while another is still going away is dropped by iOS.
-    @State private var moreChoice: MoreChoice?
-
-    private enum MoreChoice { case compound, request, privateKey, publicKey }
-    /// How many coins the chatting address holds: Compound UTXOs works once there are two.
-    @State private var chattingUtxoCount = 0
 
     /// What the screen last showed for an account, so coming back to it (a fresh view each push)
     /// shows it at once, and asks the network again only once it's 30 s old.
     private struct Snapshot {
         var spendingTotalSompi: UInt64?
-        var transactions: [KaspaFullTransactionResponse]
-        var historyIncomplete: Bool
-        var chattingUtxoCount: Int
         var loadedAt: Date
     }
     @MainActor private static var snapshots: [String: Snapshot] = [:]
@@ -97,41 +74,12 @@ struct KaPostWalletView: View {
         .sheet(isPresented: $showBackupHygiene) {
             BackupHygieneView()
         }
-        .sheet(isPresented: $showMore, onDismiss: presentMoreChoice) {
-            moreSheet
-                .presentationDetents([.height(410)])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showPrivateKey) {
-            if let address = walletManager.currentWallet?.publicAddress {
-                ChattingAddressPrivateKeyView(address: address)
-            }
-        }
-        .sheet(isPresented: $showPublicKey) {
-            if let address = walletManager.currentWallet?.publicAddress {
-                ChattingAddressPublicKeyView(address: address)
-            }
-        }
-        .sheet(isPresented: $showCompound) {
-            if let wallet = walletManager.currentWallet {
-                WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi,
-                                  isCompoundMode: true) {
-                    scheduleRefresh()
-                }
-            }
-        }
-        .sheet(item: $transactionActionTarget) { tx in
-            TransactionActionsSheet(transaction: tx, onOpenExplorer: { openInExplorer(tx) })
-        }
         .onAppear {
             // The network part at most every 30 s: going in and out of this screen would start
             // these requests each time. Arriving funds still refresh at once, below.
             if appearRefreshedAt == nil, let address = walletManager.currentWallet?.publicAddress,
                let snapshot = Self.snapshots[address] {
                 spendingTotalSompi = snapshot.spendingTotalSompi
-                transactions = snapshot.transactions
-                historyIncomplete = snapshot.historyIncomplete
-                chattingUtxoCount = snapshot.chattingUtxoCount
                 appearRefreshedAt = snapshot.loadedAt
             }
             if let at = appearRefreshedAt, Date().timeIntervalSince(at) < 30 { return }
@@ -139,8 +87,9 @@ struct KaPostWalletView: View {
             Task { await refresh(force: false) }
             // Receive's address decided ahead of the tap, so the QR opens without a wait.
             Task {
+                let account = walletManager.currentWallet?.publicAddress
                 guard let address = await walletManager.freshReceiveAddress() else { return }
-                ReceiveAddressWarmCache.address = address
+                ReceiveAddressWarmCache.store(address, for: account)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ownAddressUtxoActivity)) { _ in
@@ -149,7 +98,6 @@ struct KaPostWalletView: View {
         .onChange(of: walletManager.currentWallet?.publicAddress) { _ in
             // The total belongs to the account it was read for: a dash until the new one's lands.
             spendingTotalSompi = nil
-            transactions = []
             scheduleRefresh()
         }
     }
@@ -163,7 +111,6 @@ struct KaPostWalletView: View {
             }
             // KaPay's Wallet tab: addresses, domains, contacts and help.
             WalletAccountSections(wallet: wallet, onMessage: showToast)
-            history(for: wallet.publicAddress)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -255,7 +202,7 @@ struct KaPostWalletView: View {
         HStack(alignment: .top, spacing: 12) {
             actionButton(title: "Send", icon: "arrow.up") { action = .send }
             actionButton(title: "Receive", icon: "arrow.down") { action = .receive }
-            actionButton(title: "More", icon: "ellipsis") { showMore = true }
+            actionButton(title: "Request", icon: "doc.text") { action = .request }
         }
     }
 
@@ -280,149 +227,6 @@ struct KaPostWalletView: View {
         .buttonStyle(.plain)
     }
 
-    /// The More button's half sheet. A sheet presented straight from one that is closing is dropped,
-    /// so each row opens its screen a turn later.
-    private var moreSheet: some View {
-        VStack(spacing: 0) {
-            Text("Chatting Address")
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
-            VStack(spacing: 12) {
-                // Always listed, so people know it exists; dimmed until there is something to combine.
-                ActionSheetRow(
-                    title: "Compound UTXOs",
-                    subtitle: chattingUtxoCount > 1
-                        ? "Combines this address's coins into one, so later sends need fewer inputs."
-                        : "Needs two or more coins on this address to combine.",
-                    systemImage: "arrow.triangle.merge",
-                    isDisabled: chattingUtxoCount < 2
-                ) {
-                    moreChoice = .compound
-                    showMore = false
-                }
-                ActionSheetRow(
-                    title: "Request Payment",
-                    subtitle: "A link asking for an exact amount, with what it's for.",
-                    systemImage: "doc.text"
-                ) {
-                    moreChoice = .request
-                    showMore = false
-                }
-                ActionSheetRow(
-                    title: "View Private Key",
-                    subtitle: "The key that spends this address. Never share it.",
-                    systemImage: "key.fill"
-                ) {
-                    moreChoice = .privateKey
-                    showMore = false
-                }
-                ActionSheetRow(
-                    title: "View Public Key",
-                    subtitle: "The public half of this address, for anyone who asks for it.",
-                    systemImage: "number"
-                ) {
-                    moreChoice = .publicKey
-                    showMore = false
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, 20)
-    }
-
-    private func presentMoreChoice() {
-        guard let choice = moreChoice else { return }
-        moreChoice = nil
-        switch choice {
-        case .compound: showCompound = true
-        case .request: action = .request
-        case .publicKey: showPublicKey = true
-        case .privateKey:
-            if settingsViewModel.settings.biometricSpendingKeyEnabled {
-                DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
-                    showPrivateKey = true
-                }
-            } else {
-                showPrivateKey = true
-            }
-        }
-    }
-
-    // MARK: - History
-
-    private func history(for address: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Transaction History")
-                .font(.headline)
-            if isLoadingHistory && transactions.isEmpty {
-                HStack { Spacer(); ProgressView(); Spacer() }
-                    .padding(.vertical, 18)
-            } else if transactions.isEmpty && historyIncomplete {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Could not load transactions.")
-                        .foregroundColor(.secondary)
-                    Button("Try Again") {
-                        Task { await loadHistory() }
-                    }
-                    .font(.subheadline.weight(.semibold))
-                }
-            } else if transactions.isEmpty {
-                Text("No transactions yet.")
-                    .foregroundColor(.secondary)
-            } else {
-                if historyIncomplete {
-                    Text("Some transactions could not be loaded. Pull to refresh to try again.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
-                VStack(spacing: 0) {
-                    ForEach(transactions, id: \.transactionId) { tx in
-                        Button {
-                            Haptics.impact(.light)
-                            transactionActionTarget = tx
-                        } label: {
-                            AddressTransactionRow(transaction: tx, address: address)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 6)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if tx.transactionId != transactions.last?.transactionId {
-                            Divider().padding(.leading, 14)
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func loadHistory() async {
-        guard let address = walletManager.currentWallet?.publicAddress else { return }
-        isLoadingHistory = true
-        let result = await chatService.fetchFullTransactionsResult(for: address, pageSize: 200, maxTransactions: 200)
-        // A read that finishes after an account switch belongs to the old account: dropped.
-        guard walletManager.currentWallet?.publicAddress == address else { return }
-        // block rewards the chain never accepted paid nothing: not history
-        transactions = result.transactions.filter(\.belongsInHistory)
-        historyIncomplete = !result.complete
-        isLoadingHistory = false
-    }
-
-    private func openInExplorer(_ tx: KaspaFullTransactionResponse) {
-        guard let url = settingsViewModel.settings.kaspaExplorer.txURL(for: tx.transactionId) else { return }
-        UIApplication.shared.open(url)
-    }
-
     // MARK: - Loading
 
     /// Coalesces the bursts `.ownAddressUtxoActivity` arrives in.
@@ -437,24 +241,9 @@ struct KaPostWalletView: View {
 
     private func refresh(force: Bool) async {
         _ = try? await walletManager.refreshBalance(force: force)
-        async let spending: Void = loadSpendingTotal()
-        async let history: Void = loadHistory()
-        async let coins: Void = loadChattingUtxoCount()
-        _ = await (spending, history, coins)
-        guard let address = walletManager.currentWallet?.publicAddress, !historyIncomplete || !transactions.isEmpty else { return }
-        Self.snapshots[address] = Snapshot(spendingTotalSompi: spendingTotalSompi, transactions: transactions,
-                                           historyIncomplete: historyIncomplete, chattingUtxoCount: chattingUtxoCount,
-                                           loadedAt: Date())
-    }
-
-    private func loadChattingUtxoCount() async {
+        await loadSpendingTotal()
         guard let address = walletManager.currentWallet?.publicAddress else { return }
-        // A failed read keeps what it last knew; one for another account is dropped.
-        if let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address]),
-           walletManager.currentWallet?.publicAddress == address {
-            // the coins Compound can combine: the ones a send may spend
-            chattingUtxoCount = chatService.withdrawalSpendable(utxos).count
-        }
+        Self.snapshots[address] = Snapshot(spendingTotalSompi: spendingTotalSompi, loadedAt: Date())
     }
 
     private func loadSpendingTotal() async {

@@ -122,10 +122,9 @@ func kaPostsPrefetchTriggerId<T: Identifiable>(_ items: [T]) -> T.ID? {
     return items[items.count - 5].id
 }
 
-/// KaPosts main screen - UI ONLY for now (nothing is wired to K/K-indexer yet; posts live in
-/// memory for this session purely so the composer flow is demoable). Three feeds along the top
-/// (Following | Feed | Popular - Popular will rank by likes, reposts and dislikes once wired),
-/// and a floating create-post button mirroring the chat list's create-chat button.
+/// KaPosts main screen: three feeds along the top (Following | Feed | Popular, ranked by likes,
+/// reposts, dislikes and comments), and a floating create-post button mirroring the chat list's
+/// create-chat button.
 ///
 /// Deliberately has NO NavigationStack of its own - same reason as the old coming-soon page:
 /// when shown in the Chats slot (full-dock re-tap mode) it overlays ChatListView, which already
@@ -252,16 +251,19 @@ struct KaPostsView: View {
             var posterPubkey: String? = nil
         }
         var quoted: QuotedRef? = nil
-        /// Set for replies fetched from the indexer - splits profile feeds into Posts/Replies.
+        /// Set for replies fetched from the indexer - splits profile feeds into Posts/Replies -
+        /// and for this session's: what a Retry answers even if the parent has left memory.
         var parentRemoteId: String? = nil
+        /// The parent's author, for a retried reply's mention of them.
+        var parentPosterPubkey: String? = nil
         /// Set when this post is a poll: its options, the current counts, our vote, and when
         /// voting closes (KAPOSTS_INDEXER.md §5.9).
         var poll: KaPostPoll? = nil
     }
 
     @State private var selectedFeed: FeedTab = .feed
-    /// Local session posts (composer output) - overlaid on top of remote posts until on-chain
-    /// posting lands (Phase B), at which point composing will submit a real K transaction.
+    /// This session's posts (composer output), merged into the feed by time. A card still held,
+    /// going out or failed exists only here; its words are kept by `KaPostsHeldPostStore`.
     @State private var posts: [DraftPost] = []
     /// Posts fetched from the K indexer (already KaChat-marker-filtered by the client).
     @State private var remotePosts: [DraftPost] = []
@@ -281,6 +283,8 @@ struct KaPostsView: View {
     /// A KaPosts action that failed after its countdown (delete, edit), shown as an alert. Its
     /// predecessor `feedError` was set and never displayed, so these failures were silent.
     @State private var actionError: String?
+    /// The thread behind the alert offering what's left of it as a draft (`continueThread`).
+    @State private var unconfirmedThreadId: UUID?
     /// True while the Popular tab is pulling its deep ranking window (see `deepenPopularRanking`).
     @State private var isDeepeningPopular = false
     /// Posts that arrived since the feed was last loaded, held back rather than inserted.
@@ -289,6 +293,9 @@ struct KaPostsView: View {
     /// hold them and offer them - is better: nothing shifts until the reader asks for it, and the
     /// count tells them whether it is worth asking.
     @State private var pendingNewPosts: [DraftPost] = []
+    /// More than a page arrived, so splicing `pendingNewPosts` in would leave a hole below them:
+    /// the pill refreshes the feed instead.
+    @State private var pendingNewPostsHaveGap = false
     /// Guards the check so a slow poll and a manual one cannot run together.
     @State private var isCheckingForNewPosts = false
     /// Set when the pill is tapped; the feed's ScrollViewReader consumes it to jump to the top.
@@ -303,8 +310,6 @@ struct KaPostsView: View {
     @State private var restoredPollOptions: [String] = []
     /// Poster being tipped via the quick-tip sheet (amount + direct send).
     @State private var tipTarget: TipTarget?
-    /// Posts whose instant tip is going out now (`sendDefaultTip`), by post id.
-    @State private var tipsInFlight: Set<UUID> = []
     /// Zero-balance interception for the new-post entry point: with a CONFIRMED 0 KAS chatting
     /// balance (never on unknown/still-loading - see
     /// `WalletManager.hasConfirmedZeroChattingBalance`) the pencil button presents the shared
@@ -455,38 +460,32 @@ struct KaPostsView: View {
 
     /// Left slide-out menu entries - all coming-soon placeholders for now.
     enum SideMenuItem: String, CaseIterable, Identifiable {
-        case profile = "Profile"
         case search = "Search"
-        case notifications = "Notifications"
         case drafts = "Drafts"
         case bookmarks = "Bookmarks"
         case muted = "Muted"
         case blocked = "Blocked"
         case scheduled = "Scheduled"
-        case settings = "Settings"
 
         var id: String { rawValue }
         var icon: String {
             switch self {
-            case .profile: return "person.crop.circle"
             case .search: return "magnifyingglass"
-            case .notifications: return "bell"
             case .drafts: return "square.and.pencil"
             case .bookmarks: return "bookmark"
             case .muted: return "speaker.slash"
             case .blocked: return "hand.raised"
             case .scheduled: return "clock"
-            case .settings: return "gearshape"
             }
         }
 
         /// What the feed's hamburger menu lists. Profile, Notifications and Settings are dock
-        /// tabs in KaPosts, so they are not repeated here (their sheets still open from other
-        /// routes).
+        /// tabs in KaPosts, so they are not repeated here.
         static let feedMenu: [SideMenuItem] = [.search, .drafts, .bookmarks, .muted, .blocked, .scheduled]
     }
 
     @State private var menuSheet: SideMenuItem?
+    @State private var showLogoutConfirmation = false
     /// The hamburger's slide-out card (`KaPostsFeedDrawer`).
     @State private var showFeedDrawer = false
     /// The row picked in the card, opened once the card has gone.
@@ -495,6 +494,10 @@ struct KaPostsView: View {
     @State private var editingDraft: KaPostSavedDraft?
     /// The post a reopened draft was replying to or quoting, once resolved from its stored id.
     @State private var draftSourcePost: DraftPost?
+    /// The stored id that could not be resolved, so Post stays off and the composer says why.
+    @State private var draftSourceFailedId: String?
+    /// Why the Scheduled screen's Cancel didn't, with the post still scheduled.
+    @State private var scheduledCancelError: String?
     @ObservedObject private var draftStore = KaPostsDraftStore.shared
     @ObservedObject private var scheduledStore = KaPostsScheduledStore.shared
     @ObservedObject private var knsService = KNSService.shared
@@ -509,6 +512,8 @@ struct KaPostsView: View {
         let id = UUID()
         let message: String
         let txId: String
+        /// Something didn't go through: the warning mark instead of the check.
+        var isFailure = false
     }
     @State private var actionToast: ActionToast?
 
@@ -536,9 +541,14 @@ struct KaPostsView: View {
         var draftSegments: [String]? = nil
         /// An undone new poll's options, so its composer reopens as the poll it was.
         var pollOptions: [String]? = nil
+        /// The post a reply answers, so Undo reopens the composer still pointed at it.
+        var replyParent: DraftPost? = nil
     }
-    @State private var undoToast: UndoPostToast?
+    /// One per held action, each with its own Undo, oldest first.
+    @State private var undoToasts: [UndoPostToast] = []
+    private static let visibleUndoToasts = 4
     @ObservedObject private var scheduler = KaPostsActionScheduler.shared
+    @ObservedObject private var indexerHealth = KaPostsIndexerHealth.shared
 
     struct PosterProfileTarget: Identifiable {
         let id = UUID()
@@ -585,8 +595,6 @@ struct KaPostsView: View {
                     moderationSheet(kind: .muted)
                 case .blocked:
                     moderationSheet(kind: .blocked)
-                case .profile:
-                    myProfileSheet
                 case .search:
                     KaPostsSearchView(
                         onOpenPost: { txId in
@@ -601,23 +609,16 @@ struct KaPostsView: View {
                             kaPostsPresent { profileTarget = PosterProfileTarget(address: address, pubkey: pubkey) }
                         }
                     )
-                case .notifications:
-                    KaPostsNotificationsView()
-                        // Opening the list IS seeing them - clearing on appear rather than on
-                        // dismiss so the badge does not sit there while you read.
-                        .onAppear { KaPostsNotificationCenter.shared.markAllSeen() }
                 case .scheduled:
                     scheduledSheet
-                case .settings:
-                    KaPostsSettingsView(onClose: { menuSheet = nil })
                 }
             }
             // Quote from a Bookmarks / my-Profile cell: presented from INSIDE this sheet,
             // since the presenter of this sheet is already busy presenting it.
-            .fullScreenCover(item: $menuQuoteComposerTarget) { target in
+            .fullScreenCover(item: $menuQuoteComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 quoteComposerSheet(for: target)
             }
-            .fullScreenCover(item: $menuReplyComposerTarget) { target in
+            .fullScreenCover(item: $menuReplyComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 replyComposerSheet(for: target)
             }
             .kaPostsSlideCover { menuSheet = nil }
@@ -680,6 +681,7 @@ struct KaPostsView: View {
                 KaPostsFeedPager(pageCount: FeedTab.allCases.count, selection: selectedFeedIndex) {
                     ForEach(FeedTab.allCases, id: \.self) { tab in
                         feedContent(for: tab)
+                            .safeAreaInset(edge: .top, spacing: 0) { indexerDownNotice }
                     }
                 }
             }
@@ -720,7 +722,12 @@ struct KaPostsView: View {
                            initialError: target.failure, onTipped: { countTip(target.tip) })
         }
         .alert("KaPost", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
-            Button("OK", role: .cancel) { actionError = nil }
+            if unconfirmedThreadId != nil {
+                Button("Save as Draft") { settleUnconfirmedThread(saveDraft: true) }
+                Button("Not Now", role: .cancel) { settleUnconfirmedThread(saveDraft: false) }
+            } else {
+                Button("OK", role: .cancel) { actionError = nil }
+            }
         } message: {
             Text(actionError ?? "")
         }
@@ -796,6 +803,8 @@ struct KaPostsView: View {
             // The profile tab loads its own posts (myProfileSheet's tasks); the feed, the
             // scheduled posts and the deep links are the Feed tab's.
             guard rootMode == .feed else { return }
+            // Posts a kill left unfinished are drafts now.
+            heldPosts.recover()
             // Cold-start compose link: first, so the composer doesn't wait on the feed loading.
             presentPendingComposeLink()
             if let myAddress = WalletManager.shared.currentWallet?.publicAddress {
@@ -867,6 +876,17 @@ struct KaPostsView: View {
                 if tab == .popular { await deepenPopularRanking() }
             }
         }
+        .onReceive(KaPostsLiveChainFeed.shared.$posts) { mergeLivePosts($0) }
+        // The indexer's back: the real feed, with counts and everything it missed.
+        .onReceive(NotificationCenter.default.publisher(for: .kaPostsIndexerAvailabilityChanged)) { _ in
+            guard !indexerHealth.isDown else { return }
+            // Everything loaded during the outage counts as stale, so each screen asks again.
+            loadGates.reset()
+            Task {
+                await loadFeed()
+                if !myProfileRemotePosts.isEmpty { await reloadMyProfileIfStale() }
+            }
+        }
         .onChange(of: walletManager.currentWallet?.publicAddress) { _ in
             // Account switch: every surface's cursor belongs to the old identity (K responses
             // are decorated per requesterPubkey), so drop the lot and start over. The epoch
@@ -874,7 +894,8 @@ struct KaPostsView: View {
             PostTranslationService.shared.reset()
             // Held 5-second actions were the old account's: dropped, with their Undo toast.
             scheduler.cancelAll()
-            undoToast = nil
+            undoToasts = []
+            if rootMode == .feed { heldPosts.recover() }
             loadGates.reset()
             pendingNewPosts = []
             chainResolvedPosts = []
@@ -971,6 +992,34 @@ struct KaPostsView: View {
     }
 
     // MARK: - Feed content
+
+    /// The indexer is what lists posts: while it's away the feed says why it isn't complete.
+    @ViewBuilder
+    private var indexerDownNotice: some View {
+        if indexerHealth.isDown {
+            Text("KaPost's server isn't answering. Showing saved posts and new ones from the network.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color(UIColor.systemBackground))
+        }
+    }
+
+    /// New posts off the block stream while the indexer is down, into whichever feed is showing.
+    private func mergeLivePosts(_ live: [KaPostsAPIClient.KPost]) {
+        let known = Set(remotePosts.compactMap(\.remoteId))
+        let following = KaPostsFollowStore.shared.following
+        let fresh = live.filter { $0.parentPostId == nil && !known.contains($0.id) }.compactMap { post -> DraftPost? in
+            guard let mapped = Self.mapRemotePost(post), !moderationStore.isHidden(mapped.posterAddress),
+                  loadedFeedSource != .following || following.contains(mapped.posterAddress) else { return nil }
+            return mapped
+        }
+        guard !fresh.isEmpty else { return }
+        remotePosts.insert(contentsOf: fresh.sorted { $0.timestamp > $1.timestamp }, at: 0)
+    }
 
     @ViewBuilder
     private func feedContent(for tab: FeedTab) -> some View {
@@ -1195,6 +1244,7 @@ struct KaPostsView: View {
                 .compactMap { Self.mapRemotePost($0) }
                 .filter { !moderationStore.isHidden($0.posterAddress) }
             guard !fresh.isEmpty else { return }
+            pendingNewPostsHaveGap = page.pagination?.hasMore == true && !page.posts.contains { known.contains($0.id) }
             withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
                 pendingNewPosts = fresh
             }
@@ -1208,6 +1258,13 @@ struct KaPostsView: View {
     /// Splices the held posts in at the top, on request.
     private func showPendingNewPosts() {
         guard !pendingNewPosts.isEmpty else { return }
+        // The whole page was new: posts between it and the feed were never fetched.
+        if pendingNewPostsHaveGap {
+            pendingNewPostsHaveGap = false
+            pendingScrollToFeedTop = true
+            Task { await loadFeedPage(reset: true) }
+            return
+        }
         let known = Set(remotePosts.compactMap(\.remoteId))
         let additions = pendingNewPosts.filter { post in
             guard let id = post.remoteId else { return true }
@@ -1579,10 +1636,11 @@ struct KaPostsView: View {
             // rather than appending to a list the user has moved on from.
             guard feedPage.epoch == epoch else { return }
             if reset {
-                remotePosts = batch.items
+                remotePosts = Self.carryingUnsentComments(from: remotePosts, into: batch.items)
                 // A refresh just delivered whatever the pill was offering; leaving it up would
                 // promise posts that are already on screen.
                 pendingNewPosts = []
+                pendingNewPostsHaveGap = false
                 // Page one is fresh again, and a refresh re-arms Popular's deep sweep: the
                 // window it ranked was just thrown away.
                 loadGates.feedLoadedAt = Date()
@@ -1598,6 +1656,31 @@ struct KaPostsView: View {
             // shown in the feed's footer, with a retry
             feedPage.errorMessage = UserFacingError.message(for: error)
             AppLog.log("[KaPosts] Feed fetch failed: %@", error.localizedDescription)
+        }
+    }
+
+    /// A page-one reset replaces its rows, whose comment trees only this device has: this carries
+    /// over the replies that aren't on chain yet, pending or failed, with the replies above them.
+    private static func carryingUnsentComments(from old: [DraftPost], into fresh: [DraftPost]) -> [DraftPost] {
+        let previous = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return fresh.map { post in
+            guard let prior = previous[post.id] else { return post }
+            let unsent = unsentComments(of: prior)
+            guard !unsent.isEmpty else { return post }
+            var merged = post
+            merged.comments = unsent + post.comments
+            return merged
+        }
+    }
+
+    private static func unsentComments(of post: DraftPost) -> [DraftPost] {
+        post.comments.compactMap { comment in
+            if comment.remoteId == nil { return comment }
+            let below = unsentComments(of: comment)
+            guard !below.isEmpty else { return nil }
+            var kept = comment
+            kept.comments = below
+            return kept
         }
     }
 
@@ -1716,7 +1799,7 @@ struct KaPostsView: View {
             let batch = try await fetchProfileBatch(pubkey: pubkey, replies: false, cursor: cursor, knownIds: known)
             guard myPostsPage.epoch == epoch else { return }
             if reset {
-                myProfileRemotePosts = batch.items
+                myProfileRemotePosts = Self.carryingUnsentComments(from: myProfileRemotePosts, into: batch.items)
                 loadGates.myProfileLoadedAt = Date()
             } else {
                 myProfileRemotePosts.append(contentsOf: batch.items)
@@ -1745,7 +1828,7 @@ struct KaPostsView: View {
             let batch = try await fetchProfileBatch(pubkey: pubkey, replies: true, cursor: cursor, knownIds: known)
             guard myRepliesPage.epoch == epoch else { return }
             if reset {
-                myProfileRemoteReplies = batch.items
+                myProfileRemoteReplies = Self.carryingUnsentComments(from: myProfileRemoteReplies, into: batch.items)
             } else {
                 myProfileRemoteReplies.append(contentsOf: batch.items)
             }
@@ -1806,7 +1889,7 @@ struct KaPostsView: View {
             let batch = try await fetchProfileBatch(pubkey: pubkey, replies: false, cursor: cursor, knownIds: known)
             guard posterPostsPage.epoch == epoch else { return }
             if reset {
-                posterProfilePosts = batch.items
+                posterProfilePosts = Self.carryingUnsentComments(from: posterProfilePosts, into: batch.items)
                 loadGates.posterProfileLoaded = (pubkey, Date())
             } else {
                 posterProfilePosts.append(contentsOf: batch.items)
@@ -1835,7 +1918,7 @@ struct KaPostsView: View {
             let batch = try await fetchProfileBatch(pubkey: pubkey, replies: true, cursor: cursor, knownIds: known)
             guard posterRepliesPage.epoch == epoch else { return }
             if reset {
-                posterProfileReplies = batch.items
+                posterProfileReplies = Self.carryingUnsentComments(from: posterProfileReplies, into: batch.items)
             } else {
                 posterProfileReplies.append(contentsOf: batch.items)
             }
@@ -2007,12 +2090,9 @@ struct KaPostsView: View {
         // beyond the first exist ONLY there), so keep them in step too - otherwise an action
         // on a chain segment never renders while the thread stays open.
         for (rootId, chain) in threadChains {
-            guard chain.contains(where: { $0.id == id }) else { continue }
             var updated = chain
-            for index in updated.indices where updated[index].id == id {
-                transform(&updated[index])
-            }
-            threadChains[rootId] = updated
+            mutate(&updated)
+            if updated != chain { threadChains[rootId] = updated }
         }
     }
 
@@ -2063,7 +2143,7 @@ struct KaPostsView: View {
     /// on-chain confirmation capsule.
     private var toastOverlay: some View {
         VStack(spacing: 8) {
-            if let undo = undoToast {
+            ForEach(undoToasts.suffix(Self.visibleUndoToasts)) { undo in
                 HStack(spacing: 8) {
                     TimelineView(.periodic(from: .now, by: 0.25)) { context in
                         let remaining = max(0, Int(ceil(undo.deadline.timeIntervalSince(context.date))))
@@ -2089,8 +2169,8 @@ struct KaPostsView: View {
             }
             if let toast = actionToast {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                    Image(systemName: toast.isFailure ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundColor(toast.isFailure ? .red : .green)
                     Text(toast.message)
                         .font(.footnote.weight(.semibold))
                     if !toast.txId.isEmpty {
@@ -2294,6 +2374,7 @@ struct KaPostsView: View {
         rootPost.isLocalThreadRoot = true
         let localId = rootPost.id
         posts.insert(rootPost, at: 0)
+        heldPosts.holdThread(localId, segments: segments)
         // A thread used to submit the instant it was composed - the one compose action with no
         // undo window at all, and the one where a mistake costs the most to fix, since every
         // segment is its own transaction. Same 5s hold as a single post now.
@@ -2337,6 +2418,7 @@ struct KaPostsView: View {
                     mutatePost(id: localId) { $0.remoteId = rootTxId }
                     threadRemainders[localId]?.rootText = nil
                     threadRemainders[localId]?.parentTxId = rootTxId
+                    holdThreadRemainder(localId)
                 }
                 while let remainder = threadRemainders[localId],
                       let segment = remainder.segments.first,
@@ -2356,15 +2438,42 @@ struct KaPostsView: View {
                     }
                     threadRemainders[localId]?.segments.removeFirst()
                     threadRemainders[localId]?.parentTxId = txId
+                    holdThreadRemainder(localId)
                 }
                 threadRemainders[localId] = nil
+                heldPosts.release(localId)
                 mutatePost(id: localId) { $0.deliveryStatus = .sent }
             } catch {
-                mutatePost(id: localId) { $0.deliveryStatus = Self.failureStatus(for: error) }
+                let status = Self.failureStatus(for: error)
+                mutatePost(id: localId) { $0.deliveryStatus = status }
                 AppLog.log("[KaPosts] Thread submit failed (resumable): %@", error.localizedDescription)
+                // Not confirmed has no Retry, so nothing would ever send the rest.
+                if status == .unconfirmed, threadRemainders[localId] != nil {
+                    unconfirmedThreadId = localId
+                    actionError = AppLocalization.string("The network didn't confirm part of your thread, so the rest wasn't sent. Save what's left as a draft? Its first post may have gone through, so check before posting it again.")
+                }
             }
         }
     }
+
+    /// What's left of a thread going out: all a kill would lose. A single reply left keeps its
+    /// link to the post before it; several go back as a thread of their own.
+    private func holdThreadRemainder(_ localId: UUID) {
+        guard let remainder = threadRemainders[localId] else { return }
+        let rest = (remainder.rootText.map { [$0] } ?? []) + remainder.segments
+        guard !rest.isEmpty else { return }
+        heldPosts.holdThread(localId, segments: rest, replyRemoteId: rest.count == 1 ? remainder.parentTxId : nil)
+    }
+
+    private func settleUnconfirmedThread(saveDraft: Bool) {
+        if let id = unconfirmedThreadId {
+            if saveDraft { heldPosts.saveAsDraft(id) } else { heldPosts.release(id) }
+        }
+        unconfirmedThreadId = nil
+        actionError = nil
+    }
+
+    private var heldPosts: KaPostsHeldPostStore { .shared }
 
     // MARK: - Thread reading (X-style "View thread")
 
@@ -2572,6 +2681,7 @@ struct KaPostsView: View {
         newPost.deliveryStatus = .pending
         let localId = newPost.id
         posts.insert(newPost, at: 0)
+        heldPosts.hold(localId, text: text)
         let key = "post:\(localId)"
         showUndoToast(key: key, postId: localId, label: "Posting", draftText: text)
         scheduler.schedule(key: key) {
@@ -2581,6 +2691,7 @@ struct KaPostsView: View {
             Task {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitPost(text: text, mentionedPubkeys: await mentionedPubkeys(in: text))
+                    heldPosts.release(localId)
                     mutatePost(id: localId) {
                         $0.remoteId = txId
                         $0.deliveryStatus = .sent
@@ -2613,8 +2724,11 @@ struct KaPostsView: View {
         var reply = DraftPost(text: trimmed, timestamp: Date(), posterAddress: myAddress)
         reply.posterPubkey = try? KaPostsAPIClient.shared.requesterPubkey()
         reply.deliveryStatus = .pending
+        reply.parentRemoteId = parentRemoteId
+        reply.parentPosterPubkey = post.posterPubkey
         let localReplyId = reply.id
         sessionReplyIds.insert(localReplyId)
+        heldPosts.hold(localReplyId, text: trimmed, replyRemoteId: parentRemoteId)
         // Newest first, like the indexer orders replies - so the comment appears right under
         // the post, not at the far end of a long thread.
         mutatePost(id: post.id) { target in
@@ -2630,7 +2744,7 @@ struct KaPostsView: View {
         }
         let parentAuthor = post.posterPubkey
         let key = "comment:\(localReplyId)"
-        showUndoToast(key: key, postId: localReplyId, label: "Posting comment", draftText: trimmed)
+        showUndoToast(key: key, postId: localReplyId, label: "Posting comment", draftText: trimmed, replyParent: post)
         scheduler.schedule(key: key) {
             clearUndoToast(key: key)
             Task {
@@ -2640,6 +2754,7 @@ struct KaPostsView: View {
                         text: trimmed, postId: parentRemoteId, parentAuthorPubkey: parentAuthor,
                         mentionedPubkeys: await mentionedPubkeys(in: trimmed)
                     )
+                    heldPosts.release(localReplyId)
                     mutatePost(id: localReplyId) {
                         $0.remoteId = txId
                         $0.deliveryStatus = .sent
@@ -2669,12 +2784,17 @@ struct KaPostsView: View {
                 do {
                     _ = try await KaPostsAPIClient.shared.submitDelete(postId: remoteId)
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        removePostEverywhere(id: post.id)
+                        removePostEverywhere(id: post.id, remoteId: remoteId)
                     }
                     // Deleted the post the open thread is about: nothing left to read there.
                     if threadStack.last == post.id || profileThreadStack.last == post.id {
                         closeThread()
                     }
+                } catch is SendOutcomeUnknownError {
+                    // It may have landed: the card stays dimmed, with no second Delete on offer.
+                    mutatePost(id: post.id) { $0.deliveryStatus = .unconfirmed }
+                    actionError = SendOutcomeUnknownError.message
+                    AppLog.log("[KaPosts] Delete outcome unknown")
                 } catch {
                     mutatePost(id: post.id) { $0.pendingDeletion = false }
                     actionError = "Couldn't delete the post: \(UserFacingError.message(for: error))"
@@ -2685,10 +2805,12 @@ struct KaPostsView: View {
     }
 
     /// Drops every node with this id from every list and every comment tree (a post can be a
-    /// feed card and a comment node at once - see `mutatePost`).
-    private func removePostEverywhere(id: UUID) {
+    /// feed card and a comment node at once - see `mutatePost`). With `remoteId`, every copy of
+    /// that transaction too: a local card was hiding its feed twin, which has an id of its own.
+    private func removePostEverywhere(id: UUID, remoteId: String? = nil) {
+        let twinId = remoteId.map { Self.stableId(forTxId: $0) }
         func strip(_ list: inout [DraftPost]) {
-            list.removeAll { $0.id == id }
+            list.removeAll { $0.id == id || $0.id == twinId || (remoteId != nil && $0.remoteId == remoteId) }
             for index in list.indices { strip(&list[index].comments) }
         }
         strip(&posts)
@@ -2699,9 +2821,11 @@ struct KaPostsView: View {
         strip(&myProfileRemoteReplies)
         strip(&chainResolvedPosts)
         for (rootId, chain) in threadChains {
-            threadChains[rootId] = chain.filter { $0.id != id }
+            var updated = chain
+            strip(&updated)
+            if updated != chain { threadChains[rootId] = updated }
         }
-        pendingNewPosts.removeAll { $0.id == id }
+        strip(&pendingNewPosts)
     }
 
     /// Replaces the text of one of our posts (or comments): shown at once, behind the same 5s
@@ -2731,6 +2855,11 @@ struct KaPostsView: View {
                         $0.deliveryStatus = .sent
                         $0.sentAt = Date()
                     }
+                } catch is SendOutcomeUnknownError {
+                    // It may have landed, so the new text stays up, marked as unconfirmed.
+                    mutatePost(id: post.id) { $0.deliveryStatus = .unconfirmed }
+                    actionError = SendOutcomeUnknownError.message
+                    AppLog.log("[KaPosts] Edit outcome unknown")
                 } catch {
                     mutatePost(id: post.id) {
                         $0.text = original?.text ?? post.text
@@ -2758,6 +2887,7 @@ struct KaPostsView: View {
         )
         let localId = quotePost.id
         posts.insert(quotePost, at: 0)
+        heldPosts.hold(localId, text: text, quotedRemoteId: target.remoteId)
         let key = "post:\(localId)"
         showUndoToast(key: key, postId: localId, label: "Posting quote", draftText: text, quoteTarget: target)
         scheduler.schedule(key: key) {
@@ -2773,27 +2903,29 @@ struct KaPostsView: View {
         draftText: String? = nil,
         quoteTarget: DraftPost? = nil,
         draftSegments: [String]? = nil,
-        pollOptions: [String]? = nil
+        pollOptions: [String]? = nil,
+        replyParent: DraftPost? = nil
     ) {
         // No cool down: the action goes at once, so there is nothing to undo.
         guard KaPostsActionScheduler.cooldownEnabled else { return }
         withAnimation(.easeOut(duration: 0.25)) {
-            undoToast = UndoPostToast(
+            undoToasts.removeAll { $0.key == key }
+            undoToasts.append(UndoPostToast(
                 key: key, postId: postId,
                 deadline: Date().addingTimeInterval(KaPostsActionScheduler.undoDelay),
                 label: label,
                 draftText: draftText,
                 quoteTarget: quoteTarget,
                 draftSegments: draftSegments,
-                pollOptions: pollOptions
-            )
+                pollOptions: pollOptions,
+                replyParent: replyParent
+            ))
         }
     }
 
     private func clearUndoToast(key: String) {
-        if undoToast?.key == key {
-            withAnimation(.easeIn(duration: 0.25)) { undoToast = nil }
-        }
+        guard undoToasts.contains(where: { $0.key == key }) else { return }
+        withAnimation(.easeIn(duration: 0.25)) { undoToasts.removeAll { $0.key == key } }
     }
 
     private func undoPendingPost(_ toast: UndoPostToast) {
@@ -2818,7 +2950,11 @@ struct KaPostsView: View {
                     $0.deliveryStatus = .sent
                 }
             }
-            undoToast = nil
+            undoToasts.removeAll { $0.key == toast.key }
+        }
+        // A composed post taken back: its text is the composer's again.
+        if toast.key.hasPrefix("post:") || toast.key.hasPrefix("poll:") || toast.key.hasPrefix("comment:") {
+            heldPosts.release(toast.postId)
         }
         restoreDraft(from: toast)
     }
@@ -2862,12 +2998,20 @@ struct KaPostsView: View {
     private func restoreDraft(from toast: UndoPostToast) {
         guard let text = toast.draftText, !text.isEmpty else { return }
         if toast.key.hasPrefix("comment:") {
-            // An undone reply reopens the reply composer with its parent attached. It used to go
-            // back into the thread's reply bar, which no longer exists.
-            guard let parent = findParent(ofCommentId: toast.postId) else { return }
+            // An undone reply reopens the reply composer with its parent attached, on whichever
+            // screen it was written from. The parent comes from the toast: the reply has already
+            // left its tree by now.
+            guard let parent = toast.replyParent else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 restoredComposerText = text
-                threadReplyComposerTarget = parent
+                restoredComposerSegments = []
+                restoredPollOptions = []
+                switch composerLevelOnScreen {
+                case .feed: replyComposerTarget = parent
+                case .profile: profileReplyComposerTarget = parent
+                case .thread: threadReplyComposerTarget = parent
+                case .menu: menuReplyComposerTarget = parent
+                }
             }
             return
         }
@@ -2890,36 +3034,37 @@ struct KaPostsView: View {
             restoredComposerText = text
             restoredComposerSegments = stacked
             if let target = toast.quoteTarget {
-                quoteComposerTarget = target
+                switch composerLevelOnScreen {
+                case .feed: quoteComposerTarget = target
+                case .profile: profileQuoteComposerTarget = target
+                case .thread: threadQuoteComposerTarget = target
+                case .menu: menuQuoteComposerTarget = target
+                }
             } else {
                 showComposer = true
             }
         }
     }
 
-    /// Removes an optimistic comment from whichever post's comment tree holds it —
-    /// the same collections mutatePost() searches.
-    private func removeReply(withId id: UUID) {
-        func strip(_ list: inout [DraftPost]) -> Bool {
-            for index in list.indices {
-                let before = list[index].comments.count
-                list[index].comments.removeAll { $0.id == id }
-                if list[index].comments.count != before { return true }
-                if strip(&list[index].comments) { return true }
-            }
-            return false
-        }
-        if strip(&posts) { return }
-        if strip(&remotePosts) { return }
-        if strip(&posterProfilePosts) { return }
-        if strip(&posterProfileReplies) { return }
-        if strip(&myProfileRemotePosts) { return }
-        _ = strip(&myProfileRemoteReplies)
+    /// The screen on top, which is the only one that can present a composer: where an action was
+    /// taken, unless the person has since moved on in its five seconds.
+    private var composerLevelOnScreen: QuoteComposerLevel {
+        if detailTarget != nil || profileDetailTarget != nil { return .thread }
+        if menuSheet != nil { return .menu }
+        if profileTarget != nil || rootMode == .myProfile { return .profile }
+        return .feed
     }
 
-    /// Shows the on-chain confirmation toast for ~4s with a tappable explorer link.
-    private func showActionToast(_ message: String, txId: String) {
-        let toast = ActionToast(message: message, txId: txId)
+    /// Removes an optimistic comment from every tree holding a copy of its parent: a reply is
+    /// inserted into each twin (`mutatePost`), thread chains included.
+    private func removeReply(withId id: UUID) {
+        removePostEverywhere(id: id)
+    }
+
+    /// Shows the on-chain confirmation toast for ~4s with a tappable explorer link, or what
+    /// didn't go through.
+    private func showActionToast(_ message: String, txId: String, isFailure: Bool = false) {
+        let toast = ActionToast(message: message, txId: txId, isFailure: isFailure)
         withAnimation(.easeOut(duration: 0.25)) { actionToast = toast }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
             if actionToast?.id == toast.id {
@@ -2951,14 +3096,14 @@ struct KaPostsView: View {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: true, authorPubkey: author)
                     showActionToast("Like posted to the network", txId: txId)
-                } catch { AppLog.log("[KaPosts] Upvote submit failed: %@", error.localizedDescription) }
+                } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your like")) }
             }
         } else if post.likedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
             Task {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
                     showActionToast("Like removed on the network", txId: txId)
-                } catch { AppLog.log("[KaPosts] Unvote submit failed: %@", error.localizedDescription) }
+                } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your like")) }
             }
         }
         mutatePost(id: post.id) { target in
@@ -2974,6 +3119,24 @@ struct KaPostsView: View {
                 }
             }
         }
+    }
+
+    /// A vote that didn't go through: `before` (the post as it was when tapped) comes back, and
+    /// the person is told. Not after an unknown outcome, which may have landed.
+    private func voteFailed(_ before: DraftPost, _ error: Error, message: String) {
+        AppLog.log("[KaPosts] Vote submit failed: %@", error.localizedDescription)
+        guard !(error is SendOutcomeUnknownError) else { return }
+        mutatePost(id: before.id) { target in
+            if target.likedByMe != before.likedByMe {
+                target.likes += before.likedByMe ? 1 : -1
+                target.likedByMe = before.likedByMe
+            }
+            if target.dislikedByMe != before.dislikedByMe {
+                target.dislikes += before.dislikedByMe ? 1 : -1
+                target.dislikedByMe = before.dislikedByMe
+            }
+        }
+        showActionToast("\(message): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
     }
 
     /// Same 5s countdown-then-submit as toggleLike, un-dislike included.
@@ -2996,14 +3159,14 @@ struct KaPostsView: View {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: false, authorPubkey: author)
                     showActionToast("Dislike posted to the network", txId: txId)
-                } catch { AppLog.log("[KaPosts] Downvote submit failed: %@", error.localizedDescription) }
+                } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your dislike")) }
             }
         } else if post.dislikedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
             Task {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
                     showActionToast("Dislike removed on the network", txId: txId)
-                } catch { AppLog.log("[KaPosts] Unvote submit failed: %@", error.localizedDescription) }
+                } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your dislike")) }
             }
         }
         mutatePost(id: post.id) { target in
@@ -3071,33 +3234,46 @@ struct KaPostsView: View {
     private func draftComposer(for draft: KaPostSavedDraft) -> some View {
         let sourceId = draft.replyRemoteId ?? draft.quotedRemoteId
         let isReplyDraft = draft.replyRemoteId != nil
+        let hasSource = sourceId?.isEmpty == false
+        // Only the post this draft names: the previous draft's can linger for a moment.
+        let source = hasSource && draftSourcePost?.remoteId == sourceId ? draftSourcePost : nil
+        // A reply or quote is never posted as a plain post: Post stays off until its source loads.
+        let sourceNotice: String? = !hasSource || source != nil ? nil
+            : (draftSourceFailedId == sourceId
+               ? AppLocalization.string("The post this draft is about couldn't be found right now, so it can't be posted yet. It stays in your drafts.")
+               : AppLocalization.string("Loading the post this draft is about..."))
+        let postThread: (([String]) -> Void)? = hasSource ? nil : { segments in
+            draftStore.delete(draft.id)
+            scheduleThread(segments)
+        }
         KaPostComposerView(
-            quotedPost: isReplyDraft ? nil : draftSourcePost,
-            quotedDisplayName: draftSourcePost.map { posterDisplayName($0.posterAddress) } ?? "",
-            quotedAvatarURL: draftSourcePost.flatMap { knsService.profileCache[$0.posterAddress]?.avatarURL },
-            replyTarget: isReplyDraft ? draftSourcePost : nil,
+            quotedPost: isReplyDraft ? nil : source,
+            quotedDisplayName: source.map { posterDisplayName($0.posterAddress) } ?? "",
+            quotedAvatarURL: source.flatMap { knsService.profileCache[$0.posterAddress]?.avatarURL },
+            replyTarget: isReplyDraft ? source : nil,
             onPost: { text in
-                draftStore.delete(draft.id)
-                if let source = draftSourcePost, isReplyDraft {
+                if let source, isReplyDraft {
+                    draftStore.delete(draft.id)
                     scheduleReply(to: source, text: text)
-                } else if let source = draftSourcePost, draft.quotedRemoteId != nil {
+                } else if let source, draft.quotedRemoteId != nil {
+                    draftStore.delete(draft.id)
                     scheduleQuote(target: source, text: text)
-                } else {
-                    // The post it referred to could not be resolved - post the text rather than
-                    // discard what was written.
+                } else if !hasSource {
+                    draftStore.delete(draft.id)
                     schedulePost(text: text)
                 }
             },
-            onPostThread: { segments in
-                draftStore.delete(draft.id)
-                scheduleThread(segments)
-            },
+            onPostThread: postThread,
             editingDraftId: draft.id,
             initialText: draft.text,
-            initialThreadSegments: draft.threadSegments
+            initialThreadSegments: draft.threadSegments,
+            sourceNotice: sourceNotice,
+            keptQuotedRemoteId: draft.quotedRemoteId,
+            keptReplyRemoteId: draft.replyRemoteId
         )
         .task(id: sourceId) {
             draftSourcePost = nil
+            draftSourceFailedId = nil
             guard let sourceId, !sourceId.isEmpty else { return }
             // Stepwise, not a `??` chain: the right-hand side of `??` is an autoclosure and
             // cannot contain `await`.
@@ -3105,6 +3281,7 @@ struct KaPostsView: View {
             if resolved == nil { resolved = await indexerPost(txId: sourceId) }
             if resolved == nil { resolved = await chainPost(txId: sourceId) }
             draftSourcePost = resolved
+            if resolved == nil { draftSourceFailedId = sourceId }
         }
     }
 
@@ -3148,6 +3325,7 @@ struct KaPostsView: View {
                 let txId = try await KaPostsAPIClient.shared.submitQuote(text: text, contentId: contentId, quotedAuthorPubkey: author)
                 showActionToast(text?.isEmpty == false ? "Quote posted to the network" : "Repost posted to the network", txId: txId)
                 if let localQuoteId {
+                    heldPosts.release(localQuoteId)
                     mutatePost(id: localQuoteId) {
                         $0.remoteId = txId
                         $0.deliveryStatus = .sent
@@ -3158,6 +3336,18 @@ struct KaPostsView: View {
                     mutatePost(id: localQuoteId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                 }
                 AppLog.log("[KaPosts] Quote/repost submit failed: %@", error.localizedDescription)
+                guard !(error is SendOutcomeUnknownError) else { return }
+                if !target.repostedByMe {
+                    mutatePost(id: target.id) { post in
+                        guard post.repostedByMe else { return }
+                        post.repostedByMe = false
+                        post.reposts = max(0, post.reposts - 1)
+                    }
+                }
+                // A failed quote says so on its own card, with Retry.
+                if localQuoteId == nil {
+                    showActionToast("\(AppLocalization.string("Couldn't repost")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+                }
             }
         }
     }
@@ -3177,6 +3367,15 @@ struct KaPostsView: View {
                 showActionToast("Repost removed on the network", txId: txId)
             } catch {
                 AppLog.log("[KaPosts] Unquote submit failed: %@", error.localizedDescription)
+                guard !(error is SendOutcomeUnknownError) else { return }
+                if target.repostedByMe {
+                    mutatePost(id: target.id) { post in
+                        guard !post.repostedByMe else { return }
+                        post.repostedByMe = true
+                        post.reposts += 1
+                    }
+                }
+                showActionToast("\(AppLocalization.string("Couldn't remove your repost")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
             }
         }
     }
@@ -3197,8 +3396,15 @@ struct KaPostsView: View {
             }
             return nil
         }
-        return search(posts) ?? search(remotePosts) ?? search(posterProfilePosts)
+        if let hit = search(posts) ?? search(remotePosts) ?? search(posterProfilePosts)
             ?? search(posterProfileReplies) ?? search(myProfileRemotePosts) ?? search(myProfileRemoteReplies)
+            ?? search(chainResolvedPosts) {
+            return hit
+        }
+        for chain in threadChains.values {
+            if let hit = search(chain) { return hit }
+        }
+        return nil
     }
 
     /// Re-submits a failed post or reply (found by id; replies resolve their parent for the
@@ -3238,9 +3444,18 @@ struct KaPostsView: View {
                         text: post.text, postId: parentRemoteId, parentAuthorPubkey: parent.posterPubkey,
                         mentionedPubkeys: await mentionedPubkeys(in: post.text)
                     )
+                } else if let parentRemoteId = post.parentRemoteId {
+                    // A comment whose parent has left memory is still a comment.
+                    txId = try await KaPostsAPIClient.shared.submitReply(
+                        text: post.text, postId: parentRemoteId, parentAuthorPubkey: post.parentPosterPubkey,
+                        mentionedPubkeys: await mentionedPubkeys(in: post.text)
+                    )
+                } else if sessionReplyIds.contains(post.id) {
+                    throw KaPostsAPIClient.KaPostsAPIError.badResponse
                 } else {
                     txId = try await KaPostsAPIClient.shared.submitPost(text: post.text, mentionedPubkeys: await mentionedPubkeys(in: post.text))
                 }
+                heldPosts.release(post.id)
                 mutatePost(id: post.id) {
                     $0.remoteId = txId
                     $0.deliveryStatus = .sent
@@ -3263,8 +3478,13 @@ struct KaPostsView: View {
             do {
                 let txId = try await KaPostsAPIClient.shared.submitFollow(willFollow, followedPubkey: pubkey)
                 showActionToast(willFollow ? "Follow posted to the network" : "Unfollow posted to the network", txId: txId)
+            } catch {
+                AppLog.log("[KaPosts] Follow submit failed: %@", error.localizedDescription)
+                guard !(error is SendOutcomeUnknownError) else { return }
+                if followStore.isFollowing(address) == willFollow { followStore.toggle(address) }
+                let action = AppLocalization.string(willFollow ? "Couldn't follow" : "Couldn't unfollow")
+                showActionToast("\(action): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
             }
-            catch { AppLog.log("[KaPosts] Follow submit failed: %@", error.localizedDescription) }
         }
     }
 
@@ -3918,16 +4138,19 @@ struct KaPostsView: View {
     /// counts, then the feed of your own posts. Followers is a placeholder 0 until follows are
     /// wired on-chain; Following is the live local follow count.
     /// The teal capsule the buttons under your own profile's name share.
-    private func profileHeaderButtonLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    private func profileHeaderButtonLabel(_ title: LocalizedStringKey, systemImage: String, tint: Color = .accentColor) -> some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage)
             Text(title)
+                // three buttons share the row: a long translation shrinks rather than wraps
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundColor(.accentColor)
+        .foregroundColor(tint)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+        .background(Capsule().fill(tint.opacity(0.15)))
     }
 
     private var myProfileSheet: some View {
@@ -4070,6 +4293,13 @@ struct KaPostsView: View {
                                     profileHeaderButtonLabel("Wallet", systemImage: "wallet.bifold")
                                 }
                                 .buttonStyle(.plain)
+                                // Log Out lives here, not in Settings (owner's call, 2026-11-09).
+                                Button {
+                                    showLogoutConfirmation = true
+                                } label: {
+                                    profileHeaderButtonLabel("Log Out", systemImage: "rectangle.portrait.and.arrow.right", tint: .red)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.top, 8)
@@ -4090,6 +4320,16 @@ struct KaPostsView: View {
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
+            .sheet(isPresented: $showLogoutConfirmation) {
+                ConfirmActionSheet(
+                    title: "Log Out",
+                    confirmTitle: "Log Out",
+                    confirmSubtitle: "Signs out of this account. Its data stays on this device.",
+                    confirmSystemImage: "rectangle.portrait.and.arrow.right"
+                ) {
+                    Task { await walletManager.logout() }
+                }
+            }
             // Comment thread for a post tapped here - presented from this profile's OWN
             // NavigationStack so it stacks above the profile sheet, exactly as the poster
             // profile does it (the top-level $detailTarget cannot present from inside a sheet).
@@ -4099,10 +4339,10 @@ struct KaPostsView: View {
                 postDetailSheet(postId: profileThreadStack.last ?? target.id)
                     .kaPostsSlideCover { popThread() }
             }
-            .fullScreenCover(item: $profileQuoteComposerTarget) { target in
+            .fullScreenCover(item: $profileQuoteComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 quoteComposerSheet(for: target)
             }
-            .fullScreenCover(item: $profileReplyComposerTarget) { target in
+            .fullScreenCover(item: $profileReplyComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 replyComposerSheet(for: target)
             }
             .task(id: myAddress) {
@@ -4332,12 +4572,14 @@ struct KaPostsView: View {
                 postDetailSheet(postId: profileThreadStack.last ?? target.id)
                     .kaPostsSlideCover { popThread() }
             }
+            // The feed's toast layer sits behind this cover, Undo included.
+            .overlay(alignment: .bottom) { toastOverlay }
             // Quote tapped on a post in this profile - presented from the profile's OWN
             // NavigationStack for the same reason as the thread sheet above it.
-            .fullScreenCover(item: $profileQuoteComposerTarget) { target in
+            .fullScreenCover(item: $profileQuoteComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 quoteComposerSheet(for: target)
             }
-            .fullScreenCover(item: $profileReplyComposerTarget) { target in
+            .fullScreenCover(item: $profileReplyComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                 replyComposerSheet(for: target)
             }
             .task(id: target.id) {
@@ -4411,8 +4653,13 @@ struct KaPostsView: View {
     private func tip(_ post: DraftPost) {
         let address = post.posterAddress
         guard address != WalletManager.shared.currentWallet?.publicAddress else { return }
-        // A second tap while this post's instant tip is going out would send a second tip.
-        guard !tipsInFlight.contains(post.id) else { return }
+        // A second tap while this post's instant tip is going out would send a second tip, and
+        // so would one while a tip that was put off or got no answer can still land.
+        guard !KaPostsTipHolds.shared.isSending(post.id) else { return }
+        if let held = KaPostsTipHolds.shared.heldMessage(post.id) {
+            showActionToast(held, txId: "", isFailure: true)
+            return
+        }
         // A tip names the post it is for, so the post counts it (KAPOSTS_INDEXER.md 5.11).
         let target = post.remoteId.flatMap { id in post.posterPubkey.map { KaPostTip(postId: id, authorPubkey: $0) } }
         let settings = settingsViewModel.settings
@@ -4451,6 +4698,14 @@ struct KaPostsView: View {
     /// falls back to the amount screen so the tip can still be sent by hand. `fiatText` is the
     /// currency amount the KAS was worked out from, for a tip set in a currency.
     private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?, postId: UUID, fiatText: String? = nil) {
+        // Tips From (KaPosts > Settings): another address than the chatting one tips privately,
+        // so the payment names no post and nothing is counted. One that can't be read must not
+        // quietly become a public tip from the chatting address: the person picks instead.
+        guard let source = SendSource.defaultTip() else {
+            tipTarget = TipTarget(address: address, tip: tip,
+                                  failure: AppLocalization.string("Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from."))
+            return
+        }
         let recipient: Contact
         if let existing = ContactsManager.shared.getContact(byAddress: address) {
             recipient = existing
@@ -4467,13 +4722,11 @@ struct KaPostsView: View {
         var kasText = String(format: "%.8f", kas)
         while kasText.hasSuffix("0") { kasText.removeLast() }
         if kasText.hasSuffix(".") { kasText.removeLast() }
-        // Tips From (KaPosts > Settings): another address than the chatting one tips privately,
-        // so the payment names no post and nothing is counted.
-        let sourceIndex = SendSource.defaultTip(settingsViewModel.settings).spendingIndex
+        let sourceIndex = source.spendingIndex
         let countsOnPost = sourceIndex == nil
-        tipsInFlight.insert(postId)
+        let holds = KaPostsTipHolds.shared
+        holds.beginSending(postId)
         Task {
-            defer { tipsInFlight.remove(postId) }
             do {
                 let txId = try await ChatService.shared.sendPayment(
                     to: recipient, amountSompi: amountSompi, extraFeeSompi: 0,
@@ -4482,9 +4735,11 @@ struct KaPostsView: View {
                 guard let txId else {
                     // Put off until the coins confirm: the retry timer sends it. Not sent yet, so
                     // not counted, and no amount screen, which would invite a second tip.
+                    holds.hold(postId, message: SendDeferredError.message)
                     showActionToast(SendDeferredError.message, txId: "")
                     return
                 }
+                holds.finish(postId)
                 Haptics.success()
                 if countsOnPost { countTip(tip) }
                 let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
@@ -4492,8 +4747,10 @@ struct KaPostsView: View {
             } catch is SendOutcomeUnknownError {
                 // It may have gone through: no amount screen, which would invite a second tip.
                 AppLog.log("[KaPosts] Instant tip outcome unknown")
+                holds.hold(postId, message: SendOutcomeUnknownError.message)
                 showActionToast(SendOutcomeUnknownError.message, txId: "")
             } catch {
+                holds.finish(postId)
                 AppLog.log("[KaPosts] Instant tip failed: %@", error.localizedDescription)
                 // the amount screen opens with the reason, so the tip can be sent by hand
                 tipTarget = TipTarget(address: address, tip: tip,
@@ -4776,7 +5033,10 @@ struct KaPostsView: View {
                     }
                     showActionToast("Vote posted to the network", txId: txId)
                 } catch {
+                    // The card only moves once the vote has gone out, so there's nothing to undo.
                     AppLog.log("[KaPosts] Poll vote failed: %@", error.localizedDescription)
+                    guard !(error is SendOutcomeUnknownError) else { return }
+                    showActionToast("\(AppLocalization.string("Couldn't post your vote")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
                 }
             }
         }
@@ -4793,6 +5053,8 @@ struct KaPostsView: View {
                                   length: closesAt.timeIntervalSince(newPost.timestamp))
         let localId = newPost.id
         posts.insert(newPost, at: 0)
+        // A draft has no poll, so the options are kept as lines of its text.
+        heldPosts.hold(localId, text: ([question] + options.map { "- \($0)" }).joined(separator: "\n"))
         let key = "poll:\(localId)"
         showUndoToast(key: key, postId: localId, label: "Posting poll", draftText: question, pollOptions: options)
         scheduler.schedule(key: key) {
@@ -4803,6 +5065,7 @@ struct KaPostsView: View {
                         question: question, options: options, closesAt: closesAt,
                         mentionedPubkeys: await mentionedPubkeys(in: question)
                     )
+                    heldPosts.release(localId)
                     mutatePost(id: localId) {
                         $0.remoteId = txId
                         $0.deliveryStatus = .sent
@@ -4875,7 +5138,7 @@ struct KaPostsView: View {
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if entry.status == .scheduled {
                                     Button(role: .destructive) {
-                                        Task { await scheduledStore.cancel(entry) }
+                                        Task { scheduledCancelError = await scheduledStore.cancel(entry) }
                                     } label: {
                                         Label("Cancel", systemImage: "xmark")
                                     }
@@ -4899,6 +5162,11 @@ struct KaPostsView: View {
             .navigationTitle("Scheduled")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
+            .alert("KaPost", isPresented: Binding(get: { scheduledCancelError != nil }, set: { if !$0 { scheduledCancelError = nil } })) {
+                Button("OK", role: .cancel) { scheduledCancelError = nil }
+            } message: {
+                Text(scheduledCancelError ?? "")
+            }
             .task {
                 await scheduledStore.sendDueLocally()
                 await scheduledStore.refreshFromServer()
@@ -4927,7 +5195,10 @@ struct KaPostsView: View {
     private func scheduledLine(_ entry: KaPostScheduledEntry) -> String {
         let when = DateFormatter.localizedString(from: entry.notBefore, dateStyle: .medium, timeStyle: .short)
         switch entry.status {
-        case .scheduled: return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaPost around then"
+        case .scheduled:
+            // Past its time and not out yet: on its way as soon as the network answers.
+            if entry.notBefore <= Date() { return "Sending as soon as the network answers" }
+            return entry.onServer ? "Goes out \(when)" : "Goes out \(when) - from this phone, so open KaPost around then"
         case .submitted: return "Posted \(entry.submittedAt.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? when)"
         case .failed: return "Failed to post at \(when)"
         case .cancelled: return "Cancelled"
@@ -5055,6 +5326,8 @@ struct KaPostsView: View {
             .navigationTitle("Bookmarks")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
+            // The feed's toast layer sits behind this cover, Undo included.
+            .overlay(alignment: .bottom) { toastOverlay }
         }
     }
 
@@ -5289,14 +5562,14 @@ struct KaPostsView: View {
                     // present while this thread sheet is up, so it presents from in here.
                     KaPostEngagementView(post: target)
                 }
-                .fullScreenCover(item: $threadQuoteComposerTarget) { target in
+                .fullScreenCover(item: $threadQuoteComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                     // Quote on the open post OR on one of its comments. Exactly the same
                     // nested-sheet rule: feedLayer's $quoteComposerTarget sheet cannot come
                     // up while this thread sheet is, which is why the composer used to appear
                     // only after the post was dismissed.
                     quoteComposerSheet(for: target)
                 }
-                .fullScreenCover(item: $threadReplyComposerTarget) { target in
+                .fullScreenCover(item: $threadReplyComposerTarget, onDismiss: { clearRestoredComposerDraft() }) { target in
                     // Reply from inside the open thread - the Reply button on this post, or on
                     // any comment in it. Same nested-sheet rule as the quote composer above.
                     replyComposerSheet(for: target)
@@ -6666,6 +6939,44 @@ extension KaPostCellView: Equatable {
 
 // MARK: - Quick tip
 
+/// Posts an instant tip is out on, by post id. Shared by every KaPostsView (the Feed and Profile
+/// tabs each have one), so no screen can start a second tip on the same post.
+@MainActor
+final class KaPostsTipHolds {
+    static let shared = KaPostsTipHolds()
+
+    /// A tip put off or with no answer can still land for at least this long.
+    private static let holdSeconds: TimeInterval = 2 * 60
+
+    private var sending: Set<UUID> = []
+    private var held: [UUID: (until: Date, message: String)] = [:]
+
+    private init() {}
+
+    func isSending(_ postId: UUID) -> Bool { sending.contains(postId) }
+
+    /// What to say while `postId` is still held; nil once it can be tipped again.
+    func heldMessage(_ postId: UUID) -> String? {
+        guard let entry = held[postId] else { return nil }
+        guard entry.until > Date() else {
+            held[postId] = nil
+            return nil
+        }
+        return entry.message
+    }
+
+    func beginSending(_ postId: UUID) { sending.insert(postId) }
+
+    /// Settled either way: sent, or failed with nothing on the network.
+    func finish(_ postId: UUID) { sending.remove(postId) }
+
+    /// Not settled: the post stays blocked after the send has returned.
+    func hold(_ postId: UUID, message: String) {
+        sending.remove(postId)
+        held[postId] = (until: Date().addingTimeInterval(Self.holdSeconds), message: message)
+    }
+}
+
 /// Quick tip sheet: the same steps as every send (SendKaspaComponents), without To since the
 /// recipient is the post's author: From (only when it can change - a tip on a post always comes
 /// from your address), the amount on the app's keypad, then a review with the encrypted memo, the
@@ -6833,8 +7144,14 @@ private struct KaPostTipSheet: View {
             if errorMessage == nil, let initialError { errorMessage = initialError }
             // Starts on Tips From (KaPosts > Settings); the From step can change it.
             if step == nil {
-                source = SendSource.defaultTip(AppSettings.load())
-                choosingFrom = source != .chatting
+                if let chosen = SendSource.defaultTip() {
+                    source = chosen
+                    choosingFrom = chosen != .chatting
+                } else {
+                    // Tips From can't be read: the From step waits for a real choice.
+                    source = .chatting
+                    choosingFrom = true
+                }
             }
         }
         // coins picked on one address can't pay from another
@@ -7296,12 +7613,14 @@ private struct KaPostTipSheet: View {
         let tipSource = source.spendingIndex
         let countsOnPost = postTip != nil
         let sentTip = postTip
+        let expectedFee = totalFeeSompi
         Task {
             do {
                 try await SendFailureSimulation.failIfEnabled()
                 let txId = try await ChatService.shared.sendPayment(
                     to: recipient, amountSompi: amountSompi, note: tipMemo, extraFeeSompi: tipExtraFee,
-                    sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: sentTip
+                    sourceSpendingIndex: tipSource, manualUtxos: tipUtxos, tip: sentTip,
+                    expectedFeeSompi: expectedFee
                 )
                 await MainActor.run {
                     guard let txId else {
@@ -7325,6 +7644,8 @@ private struct KaPostTipSheet: View {
                 await MainActor.run {
                     isSending = false
                     errorMessage = UserFacingError.message(for: error)
+                    // The coins changed since the Review: show the fee it would pay now.
+                    if error is SendFeeChangedError { feeRetry += 1 }
                 }
             }
         }
@@ -7531,6 +7852,11 @@ private struct KaPostComposerView: View {
     var initialThreadSegments: [String] = []
     /// An undone poll's options: the composer reopens with Poll on and these filled in.
     var initialPollOptions: [String] = []
+    /// A draft's source post hasn't loaded: why, and Post is off until it has.
+    var sourceNotice: String? = nil
+    /// What a reopened draft points at, for saving it again while its source hasn't loaded.
+    var keptQuotedRemoteId: String? = nil
+    var keptReplyRemoteId: String? = nil
     @State private var showCloseOptions = false
     @ObservedObject private var draftStore = KaPostsDraftStore.shared
     // Poll: two to four options and how long voting stays open.
@@ -7587,8 +7913,8 @@ private struct KaPostComposerView: View {
             id: editingDraftId,
             text: text,
             threadSegments: threadSegments,
-            quotedRemoteId: quotedPost?.remoteId,
-            replyRemoteId: replyTarget?.remoteId
+            quotedRemoteId: quotedPost?.remoteId ?? keptQuotedRemoteId,
+            replyRemoteId: replyTarget?.remoteId ?? keptReplyRemoteId
         )
     }
 
@@ -7604,6 +7930,7 @@ private struct KaPostComposerView: View {
     }
 
     private var canPost: Bool {
+        if sourceNotice != nil { return false }
         if pollEnabled { return !trimmed.isEmpty && pollIsValid }
         return !allSegments.isEmpty
     }
@@ -7715,6 +8042,14 @@ private struct KaPostComposerView: View {
                         // are answering.
                         if let sourcePost {
                             quotedPostCard(sourcePost)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 10)
+                        }
+                        if let sourceNotice {
+                            Text(verbatim: sourceNotice)
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 16)
                                 .padding(.top, 10)
                         }
@@ -7943,6 +8278,7 @@ private struct KaPostComposerView: View {
     }
 
     private func postAll() {
+        guard sourceNotice == nil else { return }
         if pollEnabled, let onPostPoll {
             guard !trimmed.isEmpty, pollIsValid else { return }
             // The indexer accepts a close at most 7 days after the block time; a phone clock a few
@@ -8341,11 +8677,11 @@ final class KaPostsActionScheduler: ObservableObject {
     }
 }
 
-// MARK: - Follow store (local-only persistence; on-chain follow wiring comes later)
+// MARK: - Follow store
 
-/// Followed poster addresses, persisted locally in UserDefaults. This is deliberately NOT wired
-/// to anything on-chain yet - it exists so Follow/Following state survives relaunch and the
-/// Following feed has something real to filter on once posts are wired.
+/// Followed poster addresses, persisted locally in UserDefaults: what every Follow button and the
+/// Following feed read. `toggleFollowSubmitting` puts a change on chain, and `syncFromChain`
+/// rebuilds the set from the chain's follow graph.
 ///
 /// Scoped per account: follows belong to the identity that made them, and every saved
 /// account is a different identity on KaPosts. One shared list used to follow the device
@@ -8397,6 +8733,16 @@ final class KaPostsFollowStore: ObservableObject {
     private func persist() {
         guard let defaultsKey else { return }
         UserDefaults.standard.set(Array(following), forKey: defaultsKey)
+    }
+
+    /// Delete Account: one wallet's follows, from this device, with its Tips From and any post
+    /// text still held for it.
+    static func removeAllData(forWalletAddress walletAddress: String) {
+        let normalized = walletAddress.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        UserDefaults.standard.removeObject(forKey: "kachat_kaposts_following_\(normalized)")
+        KaPostsTipSourceStore.removeAllData(forWalletAddress: walletAddress)
+        KaPostsHeldPostStore.removeAllData(forWalletAddress: walletAddress)
+        if shared.walletAddress == normalized { shared.following = [] }
     }
 
     func isFollowing(_ address: String) -> Bool {
@@ -8610,6 +8956,17 @@ final class KaPostsModerationStore: ObservableObject {
         guard let mutedKey, let blockedKey else { return }
         UserDefaults.standard.set(Array(muted), forKey: mutedKey)
         UserDefaults.standard.set(Array(blocked), forKey: blockedKey)
+    }
+
+    /// Delete Account: one wallet's mutes and blocks, from this device.
+    static func removeAllData(forWalletAddress walletAddress: String) {
+        let normalized = walletAddress.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        UserDefaults.standard.removeObject(forKey: "kachat_kaposts_muted_\(normalized)")
+        UserDefaults.standard.removeObject(forKey: "kachat_kaposts_blocked_\(normalized)")
+        if shared.walletAddress == normalized {
+            shared.muted = []
+            shared.blocked = []
+        }
     }
 }
 
@@ -9554,6 +9911,11 @@ struct KaPostsNotificationsView: View {
             // AppDelegate.willPresent suppresses kaposts banners (local and push alike).
             .onAppear { KaPostsNotificationService.shared.isNotificationsScreenVisible = true }
             .onDisappear { KaPostsNotificationService.shared.isNotificationsScreenVisible = false }
+            // the indexer's back: the real list, not the saved one
+            .onReceive(NotificationCenter.default.publisher(for: .kaPostsIndexerAvailabilityChanged)) { _ in
+                guard !KaPostsIndexerHealth.shared.isDown else { return }
+                Task { if await load() { lastLoadedAt = Date() } }
+            }
         }
     }
 

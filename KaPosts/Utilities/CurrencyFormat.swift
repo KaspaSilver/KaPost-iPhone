@@ -2,7 +2,7 @@ import Foundation
 
 /// Resolves an `AppCurrency` to its display symbol (e.g. "$", "€") - Bitcoin isn't ISO 4217, so
 /// it's spelled out rather than trusted to `NumberFormatter`'s fallback behavior for an
-/// unrecognized code. Mirrors `PortfolioView.currencySymbol(for:)`, kept separate since that one
+/// unrecognized code. Mirrors KaChat's `PortfolioView.currencySymbol(for:)`, kept separate since that one
 /// stays `private` to its file - shared here for callers outside Portfolio (see
 /// `KaspaFiatAmountState`).
 func currencySymbol(for currency: AppCurrency) -> String {

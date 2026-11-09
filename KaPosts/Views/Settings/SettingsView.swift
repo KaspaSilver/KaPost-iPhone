@@ -15,7 +15,6 @@ struct SettingsView: View {
     /// Whether each account has a passphrase, read once (see the `.task`).
     private static var passphraseByAccount: [String: Bool] = [:]
     @State private var accountHasPassphrase = false
-    @State private var showLogoutConfirmation = false
     @State private var showDeleteAccountConfirmation = false
     /// The seed phrase over the Delete Account warning, which it closes back to.
     @State private var showSeedPhraseOverDeleteWarning = false
@@ -29,7 +28,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // Alphabetical. Delete Account and Log Out stay apart below.
+                // Alphabetical. Delete Account stays apart below; Log Out is on the Profile.
                 settingsCategoryRow("About", icon: "info.circle", tint: .accentColor) {
                     AccountAboutPage()
                 }
@@ -74,17 +73,6 @@ struct SettingsView: View {
                                 .foregroundColor(.red)
                         }
                     }
-                    Button(role: .destructive) {
-                        showLogoutConfirmation = true
-                    } label: {
-                        Label {
-                            Text("Log Out")
-                                .foregroundColor(.red)
-                        } icon: {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .foregroundColor(.red)
-                        }
-                    }
                 }
             }
             .kaPostsFixedTitle("Settings")
@@ -123,18 +111,6 @@ struct SettingsView: View {
                 #if canImport(CoreNFC) && !targetEnvironment(macCatalyst)
                 NFCCardBackupView()
                 #endif
-            }
-            // Half sheet rather than a confirmation dialog, matching every other chooser in the
-            // app - and it gives the consequence a row of its own beside the action.
-            .sheet(isPresented: $showLogoutConfirmation) {
-                ConfirmActionSheet(
-                    title: "Log Out",
-                    confirmTitle: "Log Out",
-                    confirmSubtitle: "Signs out of this account. Its data stays on this device.",
-                    confirmSystemImage: "rectangle.portrait.and.arrow.right"
-                ) {
-                    Task { await walletManager.logout() }
-                }
             }
             .sheet(isPresented: $showDeleteAccountConfirmation) {
                 DeleteAccountSheet(

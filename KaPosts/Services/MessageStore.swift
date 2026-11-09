@@ -86,8 +86,9 @@ final class MessageStore {
         }
 
         let url = storeURLForWallet(currentWalletAddress)
-        let walURL = url.appendingPathExtension("-wal")
-        let shmURL = url.appendingPathExtension("-shm")
+        // SQLite's own names: store.sqlite-wal, not store.sqlite.-wal
+        let walURL = URL(fileURLWithPath: url.path + "-wal")
+        let shmURL = URL(fileURLWithPath: url.path + "-shm")
 
         for fileURL in [url, walURL, shmURL] {
             if FileManager.default.fileExists(atPath: fileURL.path) {

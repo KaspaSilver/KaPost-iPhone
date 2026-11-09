@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import P256K
+import UIKit
 
 struct SavedAccountSummary: Identifiable, Equatable, Codable {
     var alias: String
@@ -166,9 +167,9 @@ final class WalletManager: ObservableObject {
     /// `WalletManager.createWallet` itself, which returns well before the seed phrase has actually
     /// been shown/acknowledged - setting it there would let the guide launch before the user has
     /// had a chance to write anything down. The onboarding views set it *before* the commit call
-    /// (see `CreateWalletView`/`ImportWalletView`) so it's already true when `MainTabView` first
+    /// (see `CreateWalletView`/`ImportWalletView`) so it's already true when `KaPostsTabView` first
     /// appears. Transient/in-memory only (not persisted): the first view to notice it
-    /// (`MainTabView`) is expected to flip it back to `false` immediately after presenting the
+    /// (`KaPostsTabView`) is expected to flip it back to `false` immediately after presenting the
     /// guide, so this is a one-shot signal, not a flag.
     @Published var justCreatedNewWallet = false
 
@@ -177,7 +178,7 @@ final class WalletManager: ObservableObject {
     /// written down the seed phrase) - `ContentView`/`LaunchRouter` treat this as "stay on
     /// onboarding" even though `currentWallet` is already non-nil by then, closing the race where
     /// `currentWallet` (set inside `importWallet`, well before the seed-phrase screen is shown or
-    /// confirmed) would otherwise let top-level routing jump straight to `MainTabView` and tear
+    /// confirmed) would otherwise let top-level routing jump straight to `KaPostsTabView` and tear
     /// down the seed-phrase screen before the user ever saw it. Never set for `importWallet`
     /// (typing in an existing phrase needs no review step). Transient/in-memory only, like
     /// `justCreatedNewWallet`.
@@ -319,19 +320,25 @@ final class WalletManager: ObservableObject {
                 // A readable snapshot of this account (filed on this phone) puts its keys back
                 // first: the recovery screen is only for keys that are really gone, and its
                 // Remove would erase a snapshot that could still have restored them.
-                if case .missing = keychainService.keyMaterialStatus(), !restoreKeysFromSnapshot(for: wallet) {
-                    // The record survived but the keys did not (an iPhone restore, typically).
-                    // Opening the app with an address that cannot sign or decrypt looked like a
-                    // working wallet in which everything silently failed.
-                    AppLog.log("%@", "[WalletManager] Wallet record present but no key material on this device; asking for the recovery phrase")
-                    updateSavedAccounts(from: wallet)
-                    walletNeedingKeyRecovery = wallet
-                    currentWallet = nil
-                    isBalanceRefreshing = false
-                    SharedDataManager.setPrivateKeyAvailable(false)
-                    return
+                if case .missing = keychainService.keyMaterialStatus() {
+                    let restored = restoreKeysFromSnapshot(for: wallet)
+                    if restored != .restored {
+                        // The record survived but the keys did not (an iPhone restore, typically).
+                        // Opening the app with an address that cannot sign or decrypt looked like a
+                        // working wallet in which everything silently failed.
+                        AppLog.log("%@", "[WalletManager] Wallet record present but no key material on this device; asking for the recovery phrase")
+                        updateSavedAccounts(from: wallet)
+                        walletNeedingKeyRecovery = wallet
+                        currentWallet = nil
+                        isBalanceRefreshing = false
+                        SharedDataManager.setPrivateKeyAvailable(false)
+                        // Launched with the phone locked: the snapshot says nothing yet.
+                        if restored == .unreadable { reloadOnceUnlocked() }
+                        return
+                    }
                 }
                 walletNeedingKeyRecovery = nil
+                repairSeedMismatchIfNeeded(for: wallet)
                 LaunchTrace.mark("loadWallet: reconcile")
                 let canonicalWallet = walletOnCurrentNetwork(reconcileWalletWithLocalKeyMaterialIfNeeded(wallet))
                 updateSavedAccounts(from: canonicalWallet)
@@ -565,7 +572,7 @@ final class WalletManager: ObservableObject {
         ChatService.shared.ensureSelfConversation()
 
         // Ensure realtime sync/subscription starts even if UI lifecycle hooks
-        // (e.g. MainTabView.onAppear) do not fire immediately after import.
+        // (e.g. KaPostsTabView.onAppear) do not fire immediately after import.
         ChatService.shared.startPolling()
 
         Task { _ = try? await refreshBalance(force: true) }
@@ -592,7 +599,11 @@ final class WalletManager: ObservableObject {
         // sweep as Manage Addresses' Discover Addresses - so balances and change rotation are
         // right without anyone knowing to tap it (owner's call, 2026-10-21). Only this path: a
         // typed-in recovery phrase; creating or switching accounts doesn't scan.
-        Task { await self.discoverSpendingAddresses() }
+        Task {
+            await self.discoverSpendingAddresses()
+            _ = try? await self.refreshBalance(force: true)
+            NotificationCenter.default.post(name: .ownAddressUtxoActivity, object: nil)
+        }
         return wallet
     }
 
@@ -609,13 +620,26 @@ final class WalletManager: ObservableObject {
                 walletNeedingKeyRecovery = nil
                 throw KasiaError.keychainError(AppLocalization.string("This account's keys are on this phone again, so nothing was removed."))
             }
+            // Looked at again now, as this erases the snapshot too: one the locked phone
+            // couldn't read at launch is readable by the time someone taps Remove.
+            switch restoreKeysFromSnapshot(for: stale) {
+            case .restored:
+                walletNeedingKeyRecovery = nil
+                await loadWallet(force: false)
+                throw KasiaError.keychainError(AppLocalization.string("This account's keys are on this phone again, so nothing was removed."))
+            case .unreadable:
+                throw KasiaError.keychainError(AppLocalization.string("This account's saved keys can't be read yet, so nothing was removed. Unlock your iPhone and try again."))
+            case .none:
+                break
+            }
         }
         // the wallet being deleted: the active one, or the one stuck on the recovery screen
         let walletAddressToDelete = (currentWallet ?? walletNeedingKeyRecovery)?.publicAddress
+        KaPostsPageCache.removeAll()
         walletNeedingKeyRecovery = nil
 
         // Unregister from push notifications before clearing wallet
-        await PushNotificationManager.shared.unregister()
+        await unregisterFromPushBriefly()
 
         // Clear shared data (App Group)
         SharedDataManager.clearAllSharedData()
@@ -635,8 +659,7 @@ final class WalletManager: ObservableObject {
                 await MessageStore.shared.setCurrentWallet(address)
                 MessageStore.shared.clearAll()
                 await MessageStore.shared.destroyLocalStoreFiles()
-                PublicChatService.shared.setCurrentWallet(address)
-                PublicChatStore.shared.clearAll()
+                await PublicChatStore.shared.destroyLocalStore(forWallet: address)
             }
         }
         if let walletAddressToDelete {
@@ -644,6 +667,8 @@ final class WalletManager: ObservableObject {
             for address in Self.accountAddressVariants(walletAddressToDelete) {
                 Self.removeSpendingData(forAccount: address)
                 KaPostsNotificationCenter.removeAllData(forWalletAddress: address)
+                KaPostsFollowStore.removeAllData(forWalletAddress: address)
+                KaPostsModerationStore.removeAllData(forWalletAddress: address)
             }
             KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: walletAddressToDelete)
             // its .kachat reminders would keep firing for names this phone no longer holds - on
@@ -705,7 +730,7 @@ final class WalletManager: ObservableObject {
     func logout() async {
         guard let wallet = currentWallet else { return }
 
-        await PushNotificationManager.shared.unregister()
+        await unregisterFromPushBriefly()
         ChatService.shared.stopPolling()
         resetInMemoryChatStateForAccountSwitch()
 
@@ -823,6 +848,7 @@ final class WalletManager: ObservableObject {
     /// and message store data are cleared as well.
     func removeSavedAccount(_ account: SavedAccountSummary) async {
         guard savedAccounts.contains(account) else { return }
+        KaPostsPageCache.removeAll()
 
         let isStoredAccount: Bool
         do {
@@ -837,6 +863,8 @@ final class WalletManager: ObservableObject {
                     await KachatNameReminders.removeAll(forWallet: address)
                     KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: address)
                     KaPostsNotificationCenter.removeAllData(forWalletAddress: address)
+                    KaPostsFollowStore.removeAllData(forWalletAddress: address)
+                    KaPostsModerationStore.removeAllData(forWalletAddress: address)
                 }
                 AccountBackupStatus.shared.forget(account.publicAddress)
                 for address in Self.accountAddressVariants(account.publicAddress) { Self.removeSpendingData(forAccount: address) }
@@ -849,8 +877,7 @@ final class WalletManager: ObservableObject {
                     await MessageStore.shared.setCurrentWallet(address)
                     MessageStore.shared.clearAll()
                     await MessageStore.shared.destroyLocalStoreFiles()
-                    PublicChatService.shared.setCurrentWallet(address)
-                    PublicChatStore.shared.clearAll()
+                    await PublicChatStore.shared.destroyLocalStore(forWallet: address)
                     ChatListSnapshotStore.clear(walletAddress: address)
                 }
                 await MessageStore.shared.setCurrentWallet(currentWallet?.publicAddress)
@@ -864,7 +891,7 @@ final class WalletManager: ObservableObject {
             return
         }
 
-        await PushNotificationManager.shared.unregister()
+        await unregisterFromPushBriefly()
         ChatService.shared.stopPolling()
 
         // Remove local message DB for the stored wallet, then clear local key material - on both
@@ -874,12 +901,13 @@ final class WalletManager: ObservableObject {
             await MessageStore.shared.setCurrentWallet(address)
             MessageStore.shared.clearAll()
             await MessageStore.shared.destroyLocalStoreFiles()
-            PublicChatService.shared.setCurrentWallet(address)
-            PublicChatStore.shared.clearAll()
+            await PublicChatStore.shared.destroyLocalStore(forWallet: address)
             KaPostsFollowStore.shared.setCurrentWallet(address)
             KaPostsModerationStore.shared.setCurrentWallet(address)
             KaPostsDraftStore.shared.deleteDrafts(forWalletAddress: address)
             KaPostsNotificationCenter.removeAllData(forWalletAddress: address)
+            KaPostsFollowStore.removeAllData(forWalletAddress: address)
+            KaPostsModerationStore.removeAllData(forWalletAddress: address)
         }
 
         do {
@@ -1300,11 +1328,68 @@ final class WalletManager: ObservableObject {
             return
         }
         if let newAddress, Self.isSameAccount(wallet.publicAddress, newAddress) { return }
+        if !seedDerivesKey(seedPhrase, privateKey, for: wallet.publicAddress) {
+            // Never over a good snapshot. With none, the key is still worth filing if this slot
+            // is about to be overwritten: it's the only copy, and it signs without the words.
+            if newAddress == nil || hasGoodSnapshot(for: wallet.publicAddress) {
+                AppLog.log("%@", "[WalletManager] Stored words don't match the stored key; not snapshotting them")
+                return
+            }
+        }
         try keychainService.saveAccountSnapshot(wallet: wallet, seedPhrase: seedPhrase, privateKey: privateKey)
         guard let back = try keychainService.loadAccountSnapshot(publicAddress: wallet.publicAddress),
               back.privateKey == privateKey, back.seedPhrase.words == seedPhrase.words,
               back.seedPhrase.passphrase == seedPhrase.passphrase else {
             throw KasiaError.keychainError(AppLocalization.string("The current account's keys couldn't be backed up on this device, so nothing was changed. Try again."))
+        }
+    }
+
+    /// Whether these words derive this key, for the address's chatting index and source family.
+    private func seedDerivesKey(_ seedPhrase: SeedPhrase, _ privateKey: Data, for address: String) -> Bool {
+        let keys = try? deriveKeysFromSeed(
+            seedPhrase,
+            chattingIndex: UInt32(chattingAddressIndex(for: address)),
+            family: walletSourceFamily(for: address)
+        )
+        return keys?.privateKey == privateKey
+    }
+
+    private func hasGoodSnapshot(for address: String) -> Bool {
+        Self.accountAddressVariants(address).contains { variant in
+            guard let snapshot = try? keychainService.loadAccountSnapshot(publicAddress: variant) else { return false }
+            return seedDerivesKey(snapshot.seedPhrase, snapshot.privateKey, for: address)
+        }
+    }
+
+    /// Words are written before the key, and the record last, so an app killed in between leaves
+    /// account A's record and key with account B's words (or no words, killed inside that write).
+    /// A's own snapshot still has the right ones. Only when the key is still this record's: a
+    /// slot already holding B's key is `reconcileWalletWithLocalKeyMaterialIfNeeded`'s case.
+    /// Skipped when the words can't be read (a locked launch): that says nothing either way.
+    private func repairSeedMismatchIfNeeded(for wallet: Wallet) {
+        guard let privateKey = try? keychainService.loadPrivateKey() else { return }
+        let stored: SeedPhrase?
+        do {
+            stored = try keychainService.loadSeedPhrase()
+        } catch {
+            return
+        }
+        if let seedPhrase = stored, seedDerivesKey(seedPhrase, privateKey, for: wallet.publicAddress) { return }
+        guard (try? walletFromPrivateKey(privateKey, alias: wallet.alias, createdAt: wallet.createdAt))?.publicKey == wallet.publicKey else { return }
+        for address in Self.accountAddressVariants(wallet.publicAddress) {
+            guard let snapshot = try? keychainService.loadAccountSnapshot(publicAddress: address),
+                  snapshot.privateKey == privateKey,
+                  seedDerivesKey(snapshot.seedPhrase, privateKey, for: wallet.publicAddress) else { continue }
+            do {
+                try keychainService.saveSeedPhrase(snapshot.seedPhrase)
+                AppLog.log("%@", "[WalletManager] Put this account's words back from its snapshot")
+            } catch {
+                AppLog.log("[WalletManager] Failed to put the words back: %@", error.localizedDescription)
+            }
+            return
+        }
+        if stored != nil {
+            AppLog.log("%@", "[WalletManager] Stored words don't match the stored key and no snapshot can repair them")
         }
     }
 
@@ -1994,27 +2079,102 @@ final class WalletManager: ObservableObject {
         }
     }
 
+    private enum SnapshotRestore {
+        case restored
+        /// Looked, and this phone has none.
+        case none
+        /// The Keychain wouldn't answer (the words are readable only while the phone is unlocked)
+        /// or the write back failed: says nothing about whether a snapshot exists.
+        case unreadable
+    }
+
     /// The stored record has no keys behind it: puts them back from this account's snapshot, when
-    /// one filed on this phone can still be read. False when there is none.
-    private func restoreKeysFromSnapshot(for wallet: Wallet) -> Bool {
+    /// one filed on this phone can still be read.
+    private func restoreKeysFromSnapshot(for wallet: Wallet) -> SnapshotRestore {
+        var sawUnreadable = false
         for address in Self.accountAddressVariants(wallet.publicAddress) {
-            guard let snapshot = try? keychainService.loadAccountSnapshot(publicAddress: address) else { continue }
+            let found: (seedPhrase: SeedPhrase, privateKey: Data)?
+            do {
+                found = try keychainService.loadAccountSnapshot(publicAddress: address)
+            } catch {
+                sawUnreadable = true
+                continue
+            }
+            guard let snapshot = found else { continue }
             do {
                 try keychainService.saveSeedPhrase(snapshot.seedPhrase)
                 try keychainService.savePrivateKey(snapshot.privateKey)
                 AppLog.log("%@", "[WalletManager] Restored missing keys from this account's snapshot")
-                return true
+                return .restored
             } catch {
                 try? keychainService.deleteSeedPhrase()
                 try? keychainService.deletePrivateKey()
-                return false
+                return .unreadable
             }
         }
-        return false
+        return sawUnreadable ? .unreadable : .none
+    }
+
+    private var unlockObserver: NSObjectProtocol?
+
+    /// A launch with the phone locked put up the recovery screen only because the snapshot
+    /// couldn't be read yet: once it can, look again.
+    private func reloadOnceUnlocked() {
+        guard unlockObserver == nil else { return }
+        unlockObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if let observer = self.unlockObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    self.unlockObserver = nil
+                }
+                guard self.walletNeedingKeyRecovery != nil else { return }
+                await self.loadWallet(force: false)
+            }
+        }
+    }
+
+    /// Log Out and Delete wait for this at most `pushUnregisterWait` seconds: the unregister's own
+    /// timeouts add up to more than a minute on a bad network, with nothing on screen moving. It
+    /// carries on in the background after that, with what it read before the account was cleared.
+    private static let pushUnregisterWait: TimeInterval = 4
+
+    private func unregisterFromPushBriefly() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let gate = ResumeOnceGate(continuation)
+            Task { @MainActor in
+                await PushNotificationManager.shared.unregister()
+                gate.resume()
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(Self.pushUnregisterWait * 1_000_000_000))
+                gate.resume()
+            }
+        }
     }
 
     func saveWalletOnly(_ wallet: Wallet) async throws {
         try keychainService.saveWallet(wallet)
+    }
+}
+
+/// Resumes a continuation once, for whichever of two tasks gets there first.
+private final class ResumeOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume()
     }
 }
 

@@ -274,6 +274,9 @@ final class AddressActivityNotifier: ObservableObject {
             retries: 4,
             delayNs: 1_500_000_000
         )
+        // Those retries take up to ~12 s, and an account switch meanwhile makes this someone
+        // else's receive: nothing below may record or announce it.
+        guard WalletManager.shared.currentWallet?.publicAddress == walletAddress else { return }
         if let fullTx {
             let inputAddresses = (fullTx.inputs ?? [])
                 .compactMap { $0.previousOutpointAddress }

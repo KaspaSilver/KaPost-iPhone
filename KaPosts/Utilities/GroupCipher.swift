@@ -155,6 +155,8 @@ enum GroupCipher {
 
     /// Raw Schnorr verify, matching KasiaTransactionBuilder's tx-verification pattern.
     static func verify(_ signature: Data, message: Data, xOnlyPublicKey: Data) -> Bool {
+        // From a group payload: the key type doesn't check its length itself.
+        guard xOnlyPublicKey.count == 32 else { return false }
         guard let schnorrSig = try? P256K.Schnorr.SchnorrSignature(dataRepresentation: signature) else {
             return false
         }
@@ -224,7 +226,7 @@ enum GroupCipher {
         var sig: String
         /// Present ONLY in the admin's self-addressed recovery copy — lets a seedless re-import
         /// rebuild the group as admin. Not signed; authenticated by re-deriving group_id +
-        /// blinding_key from it (see GroupChatService.applyRootPayload). Members' copies omit it.
+        /// blinding_key from it (see KaChat's GroupChatService.applyRootPayload). Members' copies omit it.
         var groupSeed: String?
 
         enum CodingKeys: String, CodingKey {

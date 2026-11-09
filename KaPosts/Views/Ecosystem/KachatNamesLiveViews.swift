@@ -407,7 +407,7 @@ final class KachatHubModel: ObservableObject {
         do {
             listings = try await registry.listings()
             lapsed = try await registry.lapsed()
-            grace = (try? await registry.inGrace()) ?? []
+            grace = (try? await registry.inGrace()) ?? grace
             // the chatting address and every used address of this wallet (IOS-085)
             if KachatNamesActions.shared.myKey != nil {
                 let own = try await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: false)
@@ -2994,8 +2994,11 @@ struct KachatLiveNameDetail: View {
         if !ownedByWallet, let ownerAddress, let id = try? await registry.identity(address: ownerAddress) {
             ownerLabel = id.label
         }
-        history = (try? await registry.history(name: info.name)) ?? []
-        offers = Self.currentOffers((try? await registry.offers(for: info.name)) ?? [], owner: info.owner, history: history)
+        // a failed read keeps what's on screen: it isn't "no history" or "no offers"
+        history = (try? await registry.history(name: info.name)) ?? history
+        if let open = try? await registry.offers(for: info.name) {
+            offers = Self.currentOffers(open, owner: info.owner, history: history)
+        }
         if !offers.isEmpty {
             await actions.refreshVirtualDaa()
             // Expired offers don't stay on your name: the owner's app (and the buyer's) send
@@ -4040,7 +4043,8 @@ struct KachatLiveProfileEditor: View {
             linktree = KachatNames.Profile.linktreeUsername(p.linktree)
         }
         if let key = KachatNamesRegistry.keyOf(address) {
-            activeNames = ((try? await registry.names(owner: key, includeInactive: false)) ?? []).map(\.name)
+            // a failed read isn't "no names": saving would drop the primary name
+            if let held = try? await registry.names(owner: key, includeInactive: false) { activeNames = held.map(\.name) }
         }
         if let pn = p?.primaryName, activeNames.contains(pn) { primary = pn }
         loaded = true
@@ -4276,7 +4280,8 @@ final class KachatExpiredNamesModel: ObservableObject {
         await registry.refreshIfStale(maxAge: 300)
         let grace = registry.graceMs
         let now = KachatNames.nowMs()
-        let owned = (try? await registry.names(owner: me, includeInactive: true)) ?? []
+        // a failed read keeps the banner as it is
+        guard let owned = try? await registry.names(owner: me, includeInactive: true) else { return }
         let inGrace = owned.filter { $0.status(graceMs: grace, nowMs: now) == .grace }.sorted { $0.expiresAt < $1.expiresAt }
         // assigned only on a change: each assignment redraws the whole Profile scroll
         if inGrace != expired { expired = inGrace }
