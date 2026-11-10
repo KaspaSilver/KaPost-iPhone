@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "默认（推荐）";
 "Delete saved address" = "删除已保存的地址";
 "Deselect All" = "取消全选";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "不同的钱包把你的 Kaspa 存在不同的地址路径上。请选择这些单词来自哪里，这样 KaPost 才能找到你的资金和域名。";
 "Do you already have a domain?" = "你已经有域名了吗？";
 "Done editing" = "完成编辑";
 "Editing message" = "正在编辑消息";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "什么是我的 12 或 24 个单词？";
 "What is a passphrase?" = "什么是密码短语？";
 "Where are you sending from?" = "你要从哪里发送？";
-"Where are your 12 or 24 words from?" = "你的 12 或 24 个单词来自哪里？";
 "Where do you want to be paid?" = "你想收款到哪里？";
 "Which domain should this profile use?" = "此个人资料应使用哪个域名？";
 "Who are you sending to?" = "你要发送给谁？";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "查看公钥";
 "View thread" = "查看串";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "每次投票是一笔交易。问题就是帖子本身，选项会随它一起发出。选项为两到四个，每个最多 40 个字符。";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "我们选了第一个有资金的地址。如果不是你用来发帖的地址，请点按其他地址。";
 "What's happening on Kaspa?" = "Kaspa 上有什么新鲜事？";
 "What's the new price?" = "新价格是多少？";
 "When someone engages with this post, they'll show up here." = "有人与此帖子互动时，会显示在这里。";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "此帖子正在发送中，无法取消。";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "目前无法读取你的“打赏来源”地址，因此未发送任何内容。请选择这笔打赏的来源。";
 "This is the public half of this address. It cannot spend anything." = "这是此地址的公开部分，无法用它花费任何资金。";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "标准 Kaspa 钱包";
+"Has history" = "有历史记录";
+"See Every Wallet Type" = "查看所有钱包类型";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost 会用你的助记词核对每一种 Kaspa 钱包，所以你不需要知道它们来自哪个钱包。";
+"This address has history, so this looks like the right account." = "此地址有历史记录，看起来是正确的账户。";
+"No funds or history on this address." = "此地址没有资金或历史记录。";
+"We picked the most likely account. Tap another if that's not the one you use." = "我们选择了最可能的账户。如果这不是你使用的账户，请点按其他账户。";
+"Your Account" = "你的账户";

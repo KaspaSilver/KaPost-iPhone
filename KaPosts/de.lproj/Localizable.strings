@@ -1840,7 +1840,6 @@
 "Default (Recommended)" = "Standard (empfohlen)";
 "Delete saved address" = "Gespeicherte Adresse löschen";
 "Deselect All" = "Alle abwählen";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "Verschiedene Wallets speichern dein Kaspa auf unterschiedlichen Adresspfaden. Wähle, woher diese Wörter stammen, damit KaPost dein Guthaben und deine Domains findet.";
 "Do you already have a domain?" = "Hast du schon eine Domain?";
 "Done editing" = "Bearbeiten beenden";
 "Editing message" = "Nachricht wird bearbeitet";
@@ -1975,7 +1974,6 @@
 "What are my 12 or 24 words?" = "Was sind meine 12 oder 24 Wörter?";
 "What is a passphrase?" = "Was ist eine Passphrase?";
 "Where are you sending from?" = "Von wo sendest du?";
-"Where are your 12 or 24 words from?" = "Woher stammen deine 12 oder 24 Wörter?";
 "Where do you want to be paid?" = "Wohin möchtest du bezahlt werden?";
 "Which domain should this profile use?" = "Welche Domain soll dieses Profil verwenden?";
 "Who are you sending to?" = "An wen sendest du?";
@@ -2378,7 +2376,6 @@
 "View Public Key" = "Öffentlichen Schlüssel anzeigen";
 "View thread" = "Thread ansehen";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "Eine Abstimmung ist eine Transaktion pro Stimme. Die Frage ist der Beitrag; die Optionen gehen mit ihm raus. Zwei bis vier Optionen, je 40 Zeichen.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "Wir haben die erste Adresse mit Guthaben gewählt. Tippe auf eine andere, falls du nicht von dieser aus postest.";
 "What's happening on Kaspa?" = "Was passiert auf Kaspa?";
 "What's the new price?" = "Wie lautet der neue Preis?";
 "When someone engages with this post, they'll show up here." = "Wenn jemand mit diesem Beitrag interagiert, erscheint er hier.";
@@ -2546,3 +2543,13 @@
 "This post is on its way right now, so it can't be cancelled." = "Dieser Beitrag wird gerade gesendet und kann daher nicht abgebrochen werden.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "Deine Adresse für „Trinkgeld von“ kann gerade nicht gelesen werden, daher wurde nichts gesendet. Wähle aus, woher dieses Trinkgeld kommt.";
 "This is the public half of this address. It cannot spend anything." = "Dies ist der öffentliche Teil dieser Adresse. Damit kann nichts ausgegeben werden.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "Standard-Kaspa-Wallet";
+"Has history" = "Hat Verlauf";
+"See Every Wallet Type" = "Alle Wallet-Typen anzeigen";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost prüft deine Wörter mit jeder Art von Kaspa-Wallet, du musst also nicht wissen, woher sie stammen.";
+"This address has history, so this looks like the right account." = "Diese Adresse hat einen Verlauf, das sieht also nach dem richtigen Konto aus.";
+"No funds or history on this address." = "Kein Guthaben und kein Verlauf auf dieser Adresse.";
+"We picked the most likely account. Tap another if that's not the one you use." = "Wir haben das wahrscheinlichste Konto ausgewählt. Tippe auf ein anderes, wenn du dieses nicht verwendest.";
+"Your Account" = "Dein Konto";

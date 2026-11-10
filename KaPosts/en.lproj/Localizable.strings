@@ -1969,3 +1969,13 @@
 "Couldn't unfollow" = "Couldn't unfollow";
 "Couldn't post your vote" = "Couldn't post your vote";
 "This is the public half of this address. It cannot spend anything." = "This is the public half of this address. It cannot spend anything.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "Standard Kaspa Wallet";
+"Has history" = "Has history";
+"See Every Wallet Type" = "See Every Wallet Type";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from.";
+"This address has history, so this looks like the right account." = "This address has history, so this looks like the right account.";
+"No funds or history on this address." = "No funds or history on this address.";
+"We picked the most likely account. Tap another if that's not the one you use." = "We picked the most likely account. Tap another if that's not the one you use.";
+"Your Account" = "Your Account";

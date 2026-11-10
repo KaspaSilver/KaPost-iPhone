@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "デフォルト（推奨）";
 "Delete saved address" = "保存したアドレスを削除";
 "Deselect All" = "すべての選択を解除";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "ウォレットによって、Kaspaを保管するアドレスのパスが異なります。KaPostが資金とドメインを見つけられるよう、これらの単語がどこのものかを選んでください。";
 "Do you already have a domain?" = "すでにドメインをお持ちですか？";
 "Done editing" = "編集を完了";
 "Editing message" = "メッセージを編集中";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "12語または24語とは？";
 "What is a passphrase?" = "パスフレーズとは？";
 "Where are you sending from?" = "どこから送りますか？";
-"Where are your 12 or 24 words from?" = "12語または24語はどこのものですか？";
 "Where do you want to be paid?" = "どこで受け取りますか？";
 "Which domain should this profile use?" = "このプロフィールにはどのドメインを使いますか？";
 "Who are you sending to?" = "誰に送りますか？";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "公開鍵を表示";
 "View thread" = "スレッドを表示";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "投票は1票につき1トランザクションです。質問は投稿そのもので、選択肢はそれと一緒に送られます。選択肢は2〜4個、各40文字までです。";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "資金のある最初のアドレスを選びました。投稿に使うアドレスが違う場合は、別のものをタップしてください。";
 "What's happening on Kaspa?" = "Kaspa で何が起きている？";
 "What's the new price?" = "新しい価格は？";
 "When someone engages with this post, they'll show up here." = "誰かがこの投稿に反応すると、ここに表示されます。";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "この投稿は現在送信中のため、キャンセルできません。";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "「チップの送信元」のアドレスを現在読み取れないため、何も送信されませんでした。このチップの送信元を選択してください。";
 "This is the public half of this address. It cannot spend anything." = "これはこのアドレスの公開部分です。何も使うことはできません。";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "標準のKaspaウォレット";
+"Has history" = "履歴あり";
+"See Every Wallet Type" = "すべてのウォレットの種類を表示";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPostがあらゆる種類のKaspaウォレットと照合するため、どのウォレットの単語かを知らなくても大丈夫です。";
+"This address has history, so this looks like the right account." = "このアドレスには履歴があるため、正しいアカウントのようです。";
+"No funds or history on this address." = "このアドレスには資金も履歴もありません。";
+"We picked the most likely account. Tap another if that's not the one you use." = "最も可能性の高いアカウントを選びました。使っているものと違う場合は、別のアカウントをタップしてください。";
+"Your Account" = "あなたのアカウント";

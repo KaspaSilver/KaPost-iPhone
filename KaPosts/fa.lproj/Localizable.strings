@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "پیش‌فرض (توصیه‌شده)";
 "Delete saved address" = "حذف آدرس ذخیره‌شده";
 "Deselect All" = "لغو انتخاب همه";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "کیف پول‌های مختلف Kaspa شما را روی مسیرهای آدرس متفاوتی نگه می‌دارند. انتخاب کنید این کلمات از کجا آمده‌اند تا KaPost دارایی و دامنه‌های شما را پیدا کند.";
 "Do you already have a domain?" = "آیا از قبل دامنه دارید؟";
 "Done editing" = "پایان ویرایش";
 "Editing message" = "ویرایش پیام";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "۱۲ یا ۲۴ کلمه من چیست؟";
 "What is a passphrase?" = "عبارت عبور چیست؟";
 "Where are you sending from?" = "از کجا می‌فرستید؟";
-"Where are your 12 or 24 words from?" = "۱۲ یا ۲۴ کلمه شما از کجا آمده است؟";
 "Where do you want to be paid?" = "می‌خواهید پرداخت به کجا برسد؟";
 "Which domain should this profile use?" = "این نمایه از کدام دامنه استفاده کند؟";
 "Who are you sending to?" = "برای چه کسی می‌فرستید؟";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "مشاهده کلید عمومی";
 "View thread" = "مشاهده رشته";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "رأی دادن یک تراکنش به ازای هر رأی است. سؤال همان پست است؛ گزینه‌ها همراه آن ارسال می‌شوند. دو تا چهار گزینه، هر کدام ۴۰ نویسه.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "اولین آدرس دارای موجودی را انتخاب کردیم. اگر آدرسی نیست که از آن پست می‌گذارید، آدرس دیگری را بزنید.";
 "What's happening on Kaspa?" = "روی Kaspa چه خبر است؟";
 "What's the new price?" = "قیمت جدید چقدر است؟";
 "When someone engages with this post, they'll show up here." = "وقتی کسی با این پست تعامل کند، اینجا نمایش داده می‌شود.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "این پست هم‌اکنون در حال ارسال است، بنابراین نمی‌توان آن را لغو کرد.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "آدرس «انعام از» شما اکنون قابل خواندن نیست، بنابراین چیزی ارسال نشد. مشخص کنید این انعام از کجا پرداخت شود.";
 "This is the public half of this address. It cannot spend anything." = "این نیمه عمومی این آدرس است و نمی‌تواند چیزی خرج کند.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "کیف پول استاندارد Kaspa";
+"Has history" = "دارای سابقه";
+"See Every Wallet Type" = "دیدن همهٔ انواع کیف پول";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost کلمات شما را با همهٔ انواع کیف پول Kaspa بررسی می‌کند، پس لازم نیست بدانید از کدام کیف پول آمده‌اند.";
+"This address has history, so this looks like the right account." = "این آدرس سابقه دارد، پس به نظر می‌رسد حساب درست همین است.";
+"No funds or history on this address." = "این آدرس موجودی یا سابقه‌ای ندارد.";
+"We picked the most likely account. Tap another if that's not the one you use." = "محتمل‌ترین حساب را انتخاب کردیم. اگر از این حساب استفاده نمی‌کنید، روی حساب دیگری بزنید.";
+"Your Account" = "حساب شما";

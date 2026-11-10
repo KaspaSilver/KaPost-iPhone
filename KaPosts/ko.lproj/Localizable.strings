@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "기본값 (권장)";
 "Delete saved address" = "저장된 주소 삭제";
 "Deselect All" = "모두 선택 해제";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "지갑마다 Kaspa를 보관하는 주소 경로가 다릅니다. KaPost이 자금과 도메인을 찾을 수 있도록 이 단어가 어디서 왔는지 고르세요.";
 "Do you already have a domain?" = "이미 도메인이 있나요?";
 "Done editing" = "편집 완료";
 "Editing message" = "메시지 편집 중";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "12개 또는 24개 단어란 무엇인가요?";
 "What is a passphrase?" = "패스프레이즈란?";
 "Where are you sending from?" = "어디에서 보내나요?";
-"Where are your 12 or 24 words from?" = "12개 또는 24개 단어는 어디서 왔나요?";
 "Where do you want to be paid?" = "어디로 받을까요?";
 "Which domain should this profile use?" = "이 프로필에 어떤 도메인을 사용할까요?";
 "Who are you sending to?" = "누구에게 보내나요?";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "공개 키 보기";
 "View thread" = "스레드 보기";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "투표는 표당 트랜잭션 하나입니다. 질문이 곧 게시물이고, 선택지는 함께 전송됩니다. 선택지는 2~4개, 각 40자입니다.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "자금이 있는 첫 번째 주소를 골랐습니다. 글을 올리는 주소가 아니라면 다른 주소를 탭하세요.";
 "What's happening on Kaspa?" = "Kaspa에서 무슨 일이 일어나고 있나요?";
 "What's the new price?" = "새 가격은 얼마인가요?";
 "When someone engages with this post, they'll show up here." = "누군가 이 게시물에 반응하면 여기에 표시됩니다.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "이 게시물은 지금 전송 중이라 취소할 수 없습니다.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "‘팁 보낼 주소’를 지금 읽을 수 없어 아무것도 전송되지 않았습니다. 이 팁을 보낼 주소를 선택하세요.";
 "This is the public half of this address. It cannot spend anything." = "이 주소의 공개 부분입니다. 이것으로는 아무것도 사용할 수 없습니다.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "표준 Kaspa 지갑";
+"Has history" = "기록 있음";
+"See Every Wallet Type" = "모든 지갑 유형 보기";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost이 모든 종류의 Kaspa 지갑과 단어를 대조하므로 어느 지갑의 단어인지 몰라도 됩니다.";
+"This address has history, so this looks like the right account." = "이 주소에 기록이 있어 올바른 계정으로 보입니다.";
+"No funds or history on this address." = "이 주소에는 자금이나 기록이 없습니다.";
+"We picked the most likely account. Tap another if that's not the one you use." = "가장 가능성이 높은 계정을 선택했습니다. 사용하는 계정이 아니면 다른 계정을 탭하세요.";
+"Your Account" = "내 계정";

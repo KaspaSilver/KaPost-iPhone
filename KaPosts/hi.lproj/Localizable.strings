@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "डिफ़ॉल्ट (अनुशंसित)";
 "Delete saved address" = "सहेजा गया पता हटाएं";
 "Deselect All" = "सभी चयन हटाएं";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "अलग-अलग वॉलेट आपका Kaspa अलग-अलग पता पाथ पर रखते हैं। चुनें कि ये शब्द कहाँ से आए हैं, ताकि KaPost आपके फंड और डोमेन ढूंढ सके।";
 "Do you already have a domain?" = "क्या आपके पास पहले से कोई डोमेन है?";
 "Done editing" = "संपादन हो गया";
 "Editing message" = "संदेश संपादित किया जा रहा है";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "मेरे 12 या 24 शब्द क्या हैं?";
 "What is a passphrase?" = "पासफ़्रेज़ क्या है?";
 "Where are you sending from?" = "आप कहाँ से भेज रहे हैं?";
-"Where are your 12 or 24 words from?" = "आपके 12 या 24 शब्द कहाँ से हैं?";
 "Where do you want to be paid?" = "आप भुगतान कहाँ लेना चाहते हैं?";
 "Which domain should this profile use?" = "यह प्रोफ़ाइल कौन-सा डोमेन इस्तेमाल करे?";
 "Who are you sending to?" = "आप किसे भेज रहे हैं?";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "पब्लिक की देखें";
 "View thread" = "थ्रेड देखें";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "वोटिंग में हर वोट एक लेन-देन होता है। सवाल ही पोस्ट है; विकल्प उसके साथ जाते हैं। दो से चार विकल्प, हर एक 40 अक्षरों का।";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "हमने फ़ंड वाला पहला पता चुना है। अगर आप इससे पोस्ट नहीं करते, तो दूसरे पर टैप करें।";
 "What's happening on Kaspa?" = "Kaspa पर क्या हो रहा है?";
 "What's the new price?" = "नया भाव क्या है?";
 "When someone engages with this post, they'll show up here." = "जब कोई इस पोस्ट पर प्रतिक्रिया देगा, वह यहाँ दिखेगा।";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "यह पोस्ट अभी भेजी जा रही है, इसलिए इसे रद्द नहीं किया जा सकता।";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "आपका “टिप किससे” पता अभी पढ़ा नहीं जा सकता, इसलिए कुछ नहीं भेजा गया। चुनें कि यह टिप कहाँ से जाए।";
 "This is the public half of this address. It cannot spend anything." = "यह इस पते का सार्वजनिक हिस्सा है। इससे कुछ भी खर्च नहीं किया जा सकता।";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "स्टैंडर्ड Kaspa वॉलेट";
+"Has history" = "इतिहास है";
+"See Every Wallet Type" = "सभी वॉलेट प्रकार देखें";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost आपके शब्दों को हर तरह के Kaspa वॉलेट से जाँचता है, इसलिए आपको यह जानने की ज़रूरत नहीं कि वे किस वॉलेट से आए हैं।";
+"This address has history, so this looks like the right account." = "इस पते का इतिहास है, इसलिए यह सही खाता लगता है।";
+"No funds or history on this address." = "इस पते पर कोई राशि या इतिहास नहीं है।";
+"We picked the most likely account. Tap another if that's not the one you use." = "हमने सबसे संभावित खाता चुना है। अगर आप इसे इस्तेमाल नहीं करते, तो दूसरे पर टैप करें।";
+"Your Account" = "आपका खाता";

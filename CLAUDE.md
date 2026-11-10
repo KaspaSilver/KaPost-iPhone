@@ -63,9 +63,14 @@ account made here is owed a backup (`AccountBackupStatus`), and until the backup
 (`AccountBackupView`) are finished `AccountBackupBanner` sits above every tab's title (red once the
 account holds funds; `kaPostsFixedTitle` draws it, and the Feed above its own title; Receive shows only
 the code and the address), and the Delete Account warning leads with Back Up Account; deleting is never blocked.
-Imported and older accounts are never owed one. An import that answers Yes to the passphrase question
-checks the first 50 addresses, picks the first with funds and lets you pick another; one without a
-passphrase opens address #0. Importing or finishing the steps starts a six-month timer; when
+Imported and older accounts are never owed one. Import has no "which wallet" list (KaChat's change,
+2026-11-10, kept in unison): name, 12 or 24, the words, then the passphrase question. No opens "Your
+Account", Yes searches live as the passphrase is typed. Both run `WalletManager.findImportAccounts`: every
+`WalletSourceFamily` (Standard 50 addresses, KDX and OneKey 20, Chainge 1) in one UTXO call, plus each
+type's address #0 on Kaspa REST's transactions-count, so an emptied wallet still counts. The type holding
+the most comes first (ties go to Standard) and its first address is picked; several found are listed, and
+See Every Wallet Type adds each type's #0. Nothing found, a failure or the 12 s timeout means Standard #0
+(the last two with Search Again). Importing or finishing the steps starts a six-month timer; when
 it runs out the Wallet screen shows `BackupHygieneCard`, and `BackupHygieneView` asks for five random
 words, then the passphrase if there is one. Every sign-in gets new tabs (`ContentView`'s
 `signInSession`), opening on the Feed.
@@ -75,8 +80,8 @@ words, then the passphrase if there is one. Every sign-in gets new tabs (`Conten
 `Services/NFCCard.swift`, ported from KaChat-iPhone, whose CLAUDE.md has the design; the card commands and
 backup format are `docs/PROTOCOL.md` in KaChat-NFC, so a card works across apps. It ships in production, like
 KaChat and KaPay, and `NFCCard.isAvailable` is false on iPad. Settings > Back Up Account > Back Up to NFC Card (`NFCCardBackupView`) only
-exists for an account with a BIP39 passphrase, which is never written to the card. Import Account > Restore from
-NFC Card (`NFCCardRestoreView`). The App ID needs Near Field Communication Tag Reading on.
+exists for an account with a BIP39 passphrase, which is never written to the card. Restore from NFC Card
+(`NFCCardRestoreView`) sits at the bottom of Import Account's name screen. The App ID needs Near Field Communication Tag Reading on.
 
 ## Full wallet (KaPay's Wallet tab)
 

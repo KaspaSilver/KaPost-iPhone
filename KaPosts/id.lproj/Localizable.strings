@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "Default (Disarankan)";
 "Delete saved address" = "Hapus alamat tersimpan";
 "Deselect All" = "Batalkan Semua Pilihan";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "Setiap dompet menyimpan Kaspa Anda di jalur alamat yang berbeda. Pilih asal kata-kata ini agar KaPost dapat menemukan dana dan domain Anda.";
 "Do you already have a domain?" = "Apakah Anda sudah punya domain?";
 "Done editing" = "Selesai mengedit";
 "Editing message" = "Mengedit pesan";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "Apa itu 12 atau 24 kata saya?";
 "What is a passphrase?" = "Apa itu frasa sandi?";
 "Where are you sending from?" = "Kamu mengirim dari mana?";
-"Where are your 12 or 24 words from?" = "Dari mana 12 atau 24 kata Anda berasal?";
 "Where do you want to be paid?" = "Kamu ingin dibayar ke mana?";
 "Which domain should this profile use?" = "Domain mana yang harus dipakai profil ini?";
 "Who are you sending to?" = "Kamu mengirim ke siapa?";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "Lihat Kunci Publik";
 "View thread" = "Lihat utas";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "Voting adalah satu transaksi per suara. Pertanyaannya adalah postingannya; opsinya dikirim bersamanya. Dua sampai empat opsi, masing-masing 40 karakter.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "Kami memilih alamat pertama yang berdana. Ketuk yang lain jika bukan itu yang Anda pakai untuk memposting.";
 "What's happening on Kaspa?" = "Apa yang terjadi di Kaspa?";
 "What's the new price?" = "Berapa harga barunya?";
 "When someone engages with this post, they'll show up here." = "Saat seseorang berinteraksi dengan postingan ini, mereka akan muncul di sini.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "Postingan ini sedang dikirim, jadi tidak dapat dibatalkan.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "Alamat “Tip Dari” Anda tidak dapat dibaca saat ini, jadi tidak ada yang dikirim. Pilih asal tip ini.";
 "This is the public half of this address. It cannot spend anything." = "Ini adalah bagian publik dari alamat ini. Tidak dapat membelanjakan apa pun.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "Dompet Kaspa Standar";
+"Has history" = "Ada riwayat";
+"See Every Wallet Type" = "Lihat Semua Jenis Dompet";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost memeriksa kata-kata Anda pada setiap jenis dompet Kaspa, jadi Anda tidak perlu tahu asalnya dari dompet mana.";
+"This address has history, so this looks like the right account." = "Alamat ini punya riwayat, jadi sepertinya ini akun yang benar.";
+"No funds or history on this address." = "Tidak ada dana atau riwayat di alamat ini.";
+"We picked the most likely account. Tap another if that's not the one you use." = "Kami memilih akun yang paling mungkin. Ketuk yang lain jika bukan ini yang Anda gunakan.";
+"Your Account" = "Akun Anda";

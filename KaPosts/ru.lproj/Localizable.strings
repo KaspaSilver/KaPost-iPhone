@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "По умолчанию (рекомендуется)";
 "Delete saved address" = "Удалить сохранённый адрес";
 "Deselect All" = "Снять выбор со всех";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "Разные кошельки хранят ваши Kaspa по разным путям адресов. Выберите, откуда эти слова, чтобы KaPost нашёл ваши средства и домены.";
 "Do you already have a domain?" = "У вас уже есть домен?";
 "Done editing" = "Редактирование завершено";
 "Editing message" = "Редактирование сообщения";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "Что такое мои 12 или 24 слова?";
 "What is a passphrase?" = "Что такое парольная фраза?";
 "Where are you sending from?" = "Откуда вы отправляете?";
-"Where are your 12 or 24 words from?" = "Откуда ваши 12 или 24 слова?";
 "Where do you want to be paid?" = "Куда вам заплатить?";
 "Which domain should this profile use?" = "Какой домен должен использовать этот профиль?";
 "Who are you sending to?" = "Кому вы отправляете?";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "Показать публичный ключ";
 "View thread" = "Показать цепочку";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "Голосование - это одна транзакция на каждый голос. Вопрос - это сам пост; варианты отправляются вместе с ним. От двух до четырёх вариантов, по 40 символов каждый.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "Мы выбрали первый адрес со средствами. Нажмите на другой, если вы пишете посты не с этого.";
 "What's happening on Kaspa?" = "Что происходит в Kaspa?";
 "What's the new price?" = "Какая новая цена?";
 "When someone engages with this post, they'll show up here." = "Когда кто-то взаимодействует с этим постом, он появится здесь.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "Этот пост уже отправляется, поэтому его нельзя отменить.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "Сейчас не удаётся прочитать адрес «Чаевые с», поэтому ничего не отправлено. Выберите, откуда отправить эти чаевые.";
 "This is the public half of this address. It cannot spend anything." = "Это открытая часть этого адреса. С её помощью ничего нельзя потратить.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "Стандартный кошелёк Kaspa";
+"Has history" = "Есть история";
+"See Every Wallet Type" = "Показать все типы кошельков";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost проверяет ваши слова по всем типам кошельков Kaspa, поэтому вам не нужно знать, из какого они.";
+"This address has history, so this looks like the right account." = "У этого адреса есть история, похоже, это нужный аккаунт.";
+"No funds or history on this address." = "На этом адресе нет средств и истории.";
+"We picked the most likely account. Tap another if that's not the one you use." = "Мы выбрали наиболее вероятный аккаунт. Нажмите на другой, если вы используете не этот.";
+"Your Account" = "Ваш аккаунт";

@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "افتراضي (موصى بيه)";
 "Delete saved address" = "مسح العنوان المحفوظ";
 "Deselect All" = "إلغاء تحديد الكل";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "المحافظ المختلفة بتخزّن Kaspa بتاعك على مسارات عناوين مختلفة. اختار الكلمات دي جاية منين علشان KaPost يلاقي فلوسك ونطاقاتك.";
 "Do you already have a domain?" = "عندك نطاق بالفعل؟";
 "Done editing" = "تم التعديل";
 "Editing message" = "تعديل الرسالة";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "ما هي كلماتي الـ 12 أو 24؟";
 "What is a passphrase?" = "يعني إيه عبارة المرور؟";
 "Where are you sending from?" = "من أين ترسل؟";
-"Where are your 12 or 24 words from?" = "كلماتك الـ 12 أو 24 جايين منين؟";
 "Where do you want to be paid?" = "أين تريد أن تستلم الدفعة؟";
 "Which domain should this profile use?" = "أنهي نطاق البروفايل ده يستخدمه؟";
 "Who are you sending to?" = "إلى من ترسل؟";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "عرض المفتاح العام";
 "View thread" = "عرض السلسلة";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "التصويت معاملة واحدة لكل صوت. السؤال هو المنشور؛ والاختيارات بتتبعت معاه. من اختيارين لأربعة، ٤٠ حرف لكل اختيار.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "اخترنا أول عنوان فيه رصيد. اضغط على عنوان تاني لو ده مش اللي بتنشر منه.";
 "What's happening on Kaspa?" = "إيه اللي بيحصل على Kaspa؟";
 "What's the new price?" = "إيه السعر الجديد؟";
 "When someone engages with this post, they'll show up here." = "لما حد يتفاعل مع المنشور ده، هيظهر هنا.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "المنشور ده في طريقه دلوقتي، فمش هينفع يتلغي.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "مش قادرين نقرا عنوان «البقشيش من» دلوقتي، فماتبعتش حاجة. اختار البقشيش ده هيتبعت منين.";
 "This is the public half of this address. It cannot spend anything." = "ده النص العام من العنوان ده، ومايقدرش يصرف أي حاجة.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "محفظة Kaspa العادية";
+"Has history" = "ليه سجل";
+"See Every Wallet Type" = "اعرض كل أنواع المحافظ";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost بيفحص كلماتك على كل أنواع محافظ Kaspa، فمش محتاج تعرف جت من أنهي محفظة.";
+"This address has history, so this looks like the right account." = "العنوان ده ليه سجل، فشكله ده الحساب الصح.";
+"No funds or history on this address." = "مفيش أموال ولا سجل على العنوان ده.";
+"We picked the most likely account. Tap another if that's not the one you use." = "اخترنا الحساب الأقرب. دوس على حساب تاني لو ده مش اللي بتستخدمه.";
+"Your Account" = "حسابك";

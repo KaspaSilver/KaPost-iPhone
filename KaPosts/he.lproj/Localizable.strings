@@ -1891,7 +1891,6 @@
 "Default (Recommended)" = "ברירת מחדל (מומלץ)";
 "Delete saved address" = "מחיקת כתובת שמורה";
 "Deselect All" = "ביטול בחירת הכול";
-"Different wallets store your Kaspa on different address paths. Pick where these words come from so KaPost finds your funds and domains." = "ארנקים שונים שומרים את ה-Kaspa שלכם בנתיבי כתובות שונים. בחרו מאיפה המילים האלה מגיעות כדי ש-KaPost ימצא את הכספים והדומיינים שלכם.";
 "Do you already have a domain?" = "יש לכם כבר דומיין?";
 "Done editing" = "סיום עריכה";
 "Editing message" = "עריכת הודעה";
@@ -2026,7 +2025,6 @@
 "What are my 12 or 24 words?" = "מה הן 12 או 24 המילים שלי?";
 "What is a passphrase?" = "מהו ביטוי סיסמה?";
 "Where are you sending from?" = "מאיפה אתה שולח?";
-"Where are your 12 or 24 words from?" = "מאיפה 12 או 24 המילים שלכם?";
 "Where do you want to be paid?" = "לאן תרצה לקבל את התשלום?";
 "Which domain should this profile use?" = "באיזה דומיין הפרופיל הזה צריך להשתמש?";
 "Who are you sending to?" = "למי אתה שולח?";
@@ -2429,7 +2427,6 @@
 "View Public Key" = "הצג מפתח ציבורי";
 "View thread" = "הצג שרשור";
 "Voting is one transaction per vote. The question is the post; the options go out with it. Two to four options, 40 characters each." = "הצבעה היא עסקה אחת לכל קול. השאלה היא הפוסט; האפשרויות יוצאות איתו. שתיים עד ארבע אפשרויות, 40 תווים כל אחת.";
-"We picked the first address with funds. Tap another if that's not the one you post from." = "בחרנו את הכתובת הראשונה שיש בה כספים. הקש על אחרת אם זו לא הכתובת שממנה אתה מפרסם.";
 "What's happening on Kaspa?" = "מה קורה ב-Kaspa?";
 "What's the new price?" = "מהו המחיר החדש?";
 "When someone engages with this post, they'll show up here." = "כשמישהו יגיב לפוסט הזה, הוא יופיע כאן.";
@@ -2597,3 +2594,13 @@
 "This post is on its way right now, so it can't be cancelled." = "הפוסט הזה נמצא כרגע בדרך, ולכן אי אפשר לבטל אותו.";
 "Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from." = "לא ניתן לקרוא כרגע את כתובת ״טיפים מ״ שלכם, ולכן שום דבר לא נשלח. בחרו מאיפה הטיפ הזה יישלח.";
 "This is the public half of this address. It cannot spend anything." = "זהו החלק הציבורי של הכתובת הזו. לא ניתן להוציא איתו דבר.";
+
+/* Import Account: finding the wallet the words belong to */
+"Standard Kaspa Wallet" = "ארנק Kaspa רגיל";
+"Has history" = "יש היסטוריה";
+"See Every Wallet Type" = "הצגת כל סוגי הארנקים";
+"KaPost checks your words against every kind of Kaspa wallet, so you don't need to know which one they came from." = "KaPost בודק את המילים שלך מול כל סוגי ארנקי Kaspa, כך שלא צריך לדעת מאיזה ארנק הן הגיעו.";
+"This address has history, so this looks like the right account." = "לכתובת הזו יש היסטוריה, כך שנראה שזה החשבון הנכון.";
+"No funds or history on this address." = "אין כספים או היסטוריה בכתובת הזו.";
+"We picked the most likely account. Tap another if that's not the one you use." = "בחרנו את החשבון הסביר ביותר. אם זה לא החשבון שבו משתמשים, אפשר להקיש על אחר.";
+"Your Account" = "החשבון שלך";
