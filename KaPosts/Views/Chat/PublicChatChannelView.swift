@@ -425,6 +425,11 @@ struct PublicChatChannelView: View {
 
     private var messageList: some View {
         let messages = publicChatService.messages(forChannel: channelName)
+        // A long voice note is one bubble at its first part; its other parts aren't drawn.
+        let voiceNotes = publicChatService.voiceNotes(forChannel: channelName)
+        let shownMessages = voiceNotes.hiddenIds.isEmpty
+            ? messages
+            : messages.filter { !voiceNotes.hiddenIds.contains($0.id) }
         return Group {
             if messages.isEmpty {
                 emptyState
@@ -465,11 +470,11 @@ struct PublicChatChannelView: View {
                                     }
                                     .buttonStyle(.plain)
                                 }
-                                ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                                    if shouldShowDateDivider(at: index, in: messages) {
+                                ForEach(Array(shownMessages.enumerated()), id: \.element.id) { index, message in
+                                    if shouldShowDateDivider(at: index, in: shownMessages) {
                                         dateDivider(for: message.blockTime)
                                     }
-                                    messageRow(message)
+                                    messageRow(message, voiceNote: voiceNotes.notesByAnchorId[message.id])
                                 }
                                 // Debounced rather than setting `isBottomAnchorVisible` directly:
                                 // this 1pt marker can appear/disappear many times per second
@@ -683,8 +688,35 @@ struct PublicChatChannelView: View {
     /// ten of them closures, and inside `messageList` it sat five containers deep - one
     /// expression the type checker would not finish ("unable to type-check this expression
     /// in reasonable time").
+    /// The row as its bubble shows it: a long voice note with one status for all its parts, an
+    /// edit with the edit's send state.
+    private func shownStatusMessage(_ message: PublicChatMessage, voiceNote: PublicChatVoiceNote?, editFailed: Bool, editWarning: Bool) -> PublicChatMessage {
+        if let voiceNote { return message.replacingDeliveryStatus(voiceNote.deliveryStatus) }
+        if editFailed { return message.replacingDeliveryStatus(.failed) }
+        if editWarning { return message.replacingDeliveryStatus(.unconfirmed) }
+        return message
+    }
+
+    /// Retry on a row: a long voice note resends only its failed parts, in order.
+    private func makeRetryAction(for message: PublicChatMessage, voiceNote: PublicChatVoiceNote?, editFailed: Bool) -> () -> Void {
+        if let voiceNote {
+            let failed = voiceNote.failedParts
+            return { publicChatService.retryPublicChatVoiceParts(failed) }
+        }
+        if editFailed { return { retryEdit(of: message) } }
+        return { publicChatService.retryPublicChat(message) }
+    }
+
+    /// A long voice note's parts as its bubble plays them.
+    private func makeVoiceNoteInput(for note: PublicChatVoiceNote) -> PublicChatVoiceNoteInput {
+        PublicChatVoiceNoteInput(
+            count: note.count,
+            parts: note.parts.compactMap { VoiceMessageSniff.decode($0.content)?.data }
+        )
+    }
+
     @ViewBuilder
-    private func messageRow(_ message: PublicChatMessage) -> some View {
+    private func messageRow(_ message: PublicChatMessage, voiceNote: PublicChatVoiceNote? = nil) -> some View {
         // An edited message reads with its newest text; the row itself is untouched. A failed
         // edit (only an older build left one in the store) never reached the chain.
         let storedEdit: MessageEditSnapshot? = publicChatService.edits(forChannel: channelName)[message.id]
@@ -692,12 +724,9 @@ struct PublicChatChannelView: View {
         let message = edit.map { message.replacingContent(MessageEditCodec.apply($0.text, to: message.content)) } ?? message
         let failedEditText = publicChatService.failedEditText(forChannel: channelName, targetTxId: message.id)
         // The bubble carries the edit's send state; `message` keeps the row's own for the actions.
-        let shownMessage: PublicChatMessage = failedEditText != nil
-            ? message.replacingDeliveryStatus(.failed)
-            : (edit?.deliveryStatus == .warning ? message.replacingDeliveryStatus(.unconfirmed) : message)
-        let retryAction: () -> Void = failedEditText != nil
-            ? { retryEdit(of: message) }
-            : { publicChatService.retryPublicChat(message) }
+        let shownMessage: PublicChatMessage = shownStatusMessage(message, voiceNote: voiceNote, editFailed: failedEditText != nil, editWarning: edit?.deliveryStatus == .warning)
+        let retryAction: () -> Void = makeRetryAction(for: message, voiceNote: voiceNote, editFailed: failedEditText != nil)
+        let voiceNoteInput: PublicChatVoiceNoteInput? = voiceNote.map { makeVoiceNoteInput(for: $0) }
         let canEdit = message.senderAddress == myAddress && message.deliveryStatus == .sent && MessageEditCodec.isEditable(message.content)
         let messageReplyQuote = replyQuote(for: message)
         // Hoisted out of the initializer with explicit types. A ternary producing an OPTIONAL
@@ -772,7 +801,8 @@ struct PublicChatChannelView: View {
                     && Int64(reactionCheckClock.timeIntervalSince1970 * 1000) - $0.blockTime < 600_000
             },
             isEdited: edit != nil,
-            onEdit: canEdit ? { beginEdit(message) } : nil
+            onEdit: canEdit ? { beginEdit(message) } : nil,
+            voiceNote: voiceNoteInput
         )
         // Compared on its data (see `PublicChatMessageRow.==`): its closures made every row
         // look changed to SwiftUI, so every keystroke, fee estimate, poll and avatar load in the
@@ -1026,36 +1056,45 @@ struct PublicChatChannelView: View {
         }
     }
 
-    /// Live estimate while a voice message is still being recorded, matching Android's
-    /// `VoiceMessage.estimatedWirePayloadSize` heuristic (final size isn't known until encoding).
+    /// Live fee while a voice message is still being recorded: the parts a recording this long
+    /// goes as (16 kbps CBR makes their sizes exact to a few bytes), each part's fee added up.
     private func updateRecordingFeeEstimate(elapsedSeconds: TimeInterval) {
-        let baseOverheadBytes = 150.0
-        let bytesPerSecondOfRecording = 2870.0
-        let estimatedBytes = Int(baseOverheadBytes + elapsedSeconds * bytesPerSecondOfRecording)
+        let partSizes = PublicChatAudioRecorder.estimatedPartSizes(forDuration: max(1, elapsedSeconds))
         isEstimatingFee = false
-        feeEstimateSompi = publicChatService.estimatePublicChatFee(channel: channelName, payloadByteCount: estimatedBytes)
+        feeEstimateSompi = publicChatService.estimatePublicChatVoiceFee(channel: channelName, partSizes: partSizes)
     }
 
     private var recordingBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 8) {
+            // Laid out as KaChat's 1:1 recording bar: a ring filling toward the limit, the time
+            // against it, the trash at the end.
+            HStack {
+                if recorder.state == .encoding {
+                    ProgressView()
+                    Text("Encoding…")
+                } else {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: min(1, recorder.elapsedSeconds / max(1, effectiveMaxRecordingDuration)))
+                            .stroke(Color.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 1), value: recorder.elapsedSeconds)
+                    }
+                    .frame(width: 20, height: 20)
+                    Text(verbatim: "\(AppLocalization.string("Recording...")) \(formatRecordingTime(recorder.elapsedSeconds)) / \(formatRecordingTime(effectiveMaxRecordingDuration))")
+                        .monospacedDigit()
+                }
+                Spacer()
                 Button {
                     recorder.cancel()
                     feeEstimateSompi = nil
                 } label: {
-                    Image(systemName: "trash.fill")
+                    Image(systemName: "trash")
                         .foregroundColor(.red)
                 }
                 .buttonStyle(.plain)
-
-                Image(systemName: "mic.fill")
-                    .font(.caption)
-                    .foregroundColor(.red)
-
-                Text(recorder.state == .encoding ? "Encoding…" : "Recording... \(Int(recorder.elapsedSeconds))s")
-                    .foregroundColor(.secondary)
-
-                Spacer()
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -1075,16 +1114,23 @@ struct PublicChatChannelView: View {
         }
     }
 
+    /// "02:50", as KaChat's recording bar shows it.
+    private func formatRecordingTime(_ duration: TimeInterval) -> String {
+        guard duration.isFinite else { return "--:--" }
+        let totalSeconds = Int(duration.rounded())
+        return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+
     private func stopAndSendRecording() {
         Task {
             do {
-                let recorded = try await recorder.stopAndEncode(keepOriginalPCMAt: nil)
-                try await publicChatService.sendPublicChatAudio(
-                    channel: channelName,
-                    audioData: recorded.data,
-                    fileName: recorded.fileName,
-                    mimeType: recorded.mimeType
-                )
+                let parts = try await recorder.stopAndEncodeParts()
+                if parts.count > 1 {
+                    // Longer than one part: tagged parts, one transaction each (2:50 at most).
+                    try await publicChatService.sendPublicChatVoiceParts(channel: channelName, parts: parts)
+                } else if let only = parts.first {
+                    try await publicChatService.sendPublicChatAudio(channel: channelName, audioData: only)
+                }
             } catch {
                 showToast("Failed to send voice message: \(error.localizedDescription)")
             }
@@ -1452,6 +1498,9 @@ private struct PublicChatMessageRow: View, Equatable {
     /// "edited" chip sits on the bubble. `onEdit` is offered on the user's own text bubbles only.
     var isEdited: Bool = false
     var onEdit: (() -> Void)? = nil
+    /// The parts of the long voice note this row stands for (it is the note's first part), or
+    /// nil for any other message. The bubble plays them as one recording.
+    var voiceNote: PublicChatVoiceNoteInput? = nil
 
     @State private var showFullText = false
     /// The link whose actions sheet is up. Public Chat keeps tap-to-open disabled (see
@@ -1479,6 +1528,7 @@ private struct PublicChatMessageRow: View, Equatable {
             && lhs.isQuickReactionBarShown == rhs.isQuickReactionBarShown
             && lhs.isReactionCheckFresh == rhs.isReactionCheckFresh
             && lhs.isEdited == rhs.isEdited
+            && lhs.voiceNote == rhs.voiceNote
             && (lhs.onEdit == nil) == (rhs.onEdit == nil)
             && (lhs.onJumpToReply == nil) == (rhs.onJumpToReply == nil)
             && (lhs.onShowReactions == nil) == (rhs.onShowReactions == nil)
@@ -1670,7 +1720,9 @@ private struct PublicChatMessageRow: View, Equatable {
 
     @ViewBuilder
     private func bubbleContent(voicePayload: VoiceMessageSniff.Payload?) -> some View {
-        if let voicePayload {
+        if let voiceNote {
+            PublicChatVoiceNoteBubble(input: voiceNote, isOwnMessage: isOwnMessage)
+        } else if let voicePayload {
             PublicChatAudioBubble(data: voicePayload.data, isOwnMessage: isOwnMessage)
         } else if shownText.utf8.count > Self.inlineTextTruncationThreshold {
             truncatedTextContent

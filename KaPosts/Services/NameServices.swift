@@ -134,7 +134,8 @@ enum NameNormalization {
 /// What a typed name points to on one service.
 struct NameResolution: Identifiable, Equatable {
     let tld: NameServiceTLD
-    /// The canonical name with its suffix, e.g. "bob.k".
+    /// The name as shown, e.g. "bob.k". A .kachat name follows Show .kachat Endings
+    /// (`KachatNameLabel`), so it may be bare.
     let display: String
     /// Where it points; nil when the name is not registered there (or has no address to pay).
     let address: String?
@@ -145,6 +146,12 @@ struct NameResolution: Identifiable, Equatable {
     var notLive: Bool = false
 
     var id: String { tld.rawValue }
+
+    /// The name with its ending always, for text other people read later (a post's @mention):
+    /// a bare name there wouldn't say which service it means, whatever this phone shows.
+    var fullName: String {
+        tld == .kachat && !display.hasSuffix(tld.suffix) ? display + tld.suffix : display
+    }
 }
 
 extension NameServiceTLD {
@@ -285,7 +292,7 @@ final class NameServicesClient: ObservableObject {
         for address in addresses {
             guard let key = KachatNamesRegistry.keyOf(address),
                   let held = try? await KachatNamesRegistry.shared.heldNames(owner: key), !held.isEmpty else { continue }
-            result[address] = held.map { OwnedServiceName(name: $0.name, display: "\($0.name).kachat", tld: .kachat, isProvisional: false) }
+            result[address] = held.map { OwnedServiceName(name: $0.name, display: KachatNameLabel.display($0.name), tld: .kachat, isProvisional: false) }
         }
         return result
     }
@@ -448,7 +455,7 @@ final class NameServicesClient: ObservableObject {
     private func resolveKachat(_ label: String) async -> NameResolution? {
         let canonical = KachatNames.Codec.normalize(label)
         guard KachatNames.Codec.isValid(canonical) else { return nil }
-        let display = "\(canonical).kachat"
+        let display = KachatNameLabel.display(canonical)
         guard NameServiceTLD.kachat.isLive else {
             return NameResolution(tld: .kachat, display: display, address: nil, failed: false, notLive: true)
         }

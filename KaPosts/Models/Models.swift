@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Security
 
 // MARK: - Dynamic Coding Key (for dual camelCase/snake_case decode)
 
@@ -1598,14 +1599,264 @@ enum InlineMediaSniff {
 /// preview sniff (showing raw JSON in chat lists). Field order now matches Android's
 /// `VoiceMessage.encode` and desktop's `buildImageEnvelopeJson` exactly.
 enum MediaFileEnvelope {
-    static func json(name: String, size: Int, mimeType: String, dataUrlContent: String) -> String {
-        "{\"type\":\"file\",\"name\":\"\(escape(name))\",\"size\":\(size),\"mimeType\":\"\(escape(mimeType))\",\"content\":\"\(escape(dataUrlContent))\"}"
+    /// `voicePart` (one part of a long voice note) goes between `mimeType` and `content`, the
+    /// place KaChat writes it, so head-only sniffs (`VoicePartTag.sniff`) find it.
+    static func json(name: String, size: Int, mimeType: String, dataUrlContent: String, voicePart: VoicePartTag? = nil) -> String {
+        let part = voicePart.map { ",\"voicePart\":\($0.json)" } ?? ""
+        return "{\"type\":\"file\",\"name\":\"\(escape(name))\",\"size\":\(size),\"mimeType\":\"\(escape(mimeType))\"\(part),\"content\":\"\(escape(dataUrlContent))\"}"
     }
 
     private static func escape(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
+
+// MARK: - Long voice notes (multi-part)
+
+/// One part of a long on-chain voice note, KaChat's format (KaChat MESSAGING.md, "Long voice
+/// notes (multi-part)"): `"voicePart":{"id":"<32 hex>","index":<1-based>,"count":<2...12>}` in
+/// the media-file JSON, between `mimeType` and `content`. Every part is a complete WebM-Opus
+/// file, so a client that ignores the tag shows the parts as separate voice notes, in order.
+///
+/// Read defensively: anything outside the rules below is no tag, and the message is then a
+/// plain single voice note.
+struct VoicePartTag: Equatable, Hashable {
+    let id: String
+    let index: Int
+    let count: Int
+
+    /// The most parts one note may have - a strict bound for readers too. The longest room
+    /// note (`VoiceNotePolicy.publicChat`) needs exactly 12.
+    static let maxParts = 12
+    /// The longest one part may run when read (a crafted part can't decode past this). Real
+    /// parts are 14.5 s at most.
+    static let maxPartSeconds: TimeInterval = 25
+
+    init?(id: String, index: Int, count: Int) {
+        let lowered = id.lowercased()
+        guard (16...64).contains(lowered.count),
+              lowered.allSatisfy({ $0.isASCII && $0.isHexDigit }),
+              (2...Self.maxParts).contains(count),
+              (1...count).contains(index) else { return nil }
+        self.id = lowered
+        self.index = index
+        self.count = count
+    }
+
+    /// A tag from a decoded JSON value: nil unless it is an object with a string `id` and
+    /// integer `index` / `count` that pass the rules.
+    init?(jsonObject: Any?) {
+        guard let object = jsonObject as? [String: Any],
+              let id = object["id"] as? String,
+              let index = Self.integer(object["index"]),
+              let count = Self.integer(object["count"]) else { return nil }
+        self.init(id: id, index: index, count: count)
+    }
+
+    private static func integer(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let double = number.doubleValue
+        guard double.isFinite, double == double.rounded(), abs(double) < 1_000 else { return nil }
+        return Int(double)
+    }
+
+    /// The JSON object as it goes on the wire, fixed key order.
+    var json: String {
+        "{\"id\":\"\(id)\",\"index\":\(index),\"count\":\(count)}"
+    }
+
+    /// The part file's name, e.g. "voice-2of12.webm".
+    var fileName: String { "voice-\(index)of\(count).webm" }
+
+    /// A fresh note id: 16 random bytes as lowercase hex.
+    static func newGroupId() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            bytes = (0..<16).map { _ in UInt8.random(in: 0...255) }
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The tag of a voice message's JSON, read from its head only (`MediaFileEnvelope.json`
+    /// writes it before the file). Nil for everything else, replies and photos included.
+    static func sniff(_ text: String) -> VoicePartTag? {
+        guard text.first == "{", text.utf8.count > 64 else { return nil }
+        let head = String(text.prefix(2048))
+        guard let mime = InlineMediaSniff.mimeType(of: head),
+              mime.lowercased().hasPrefix("audio/"),
+              let keyRange = head.range(of: "\"voicePart\"") else { return nil }
+        let rest = head[keyRange.upperBound...]
+        guard let open = rest.firstIndex(of: "{"),
+              rest[rest.startIndex..<open].allSatisfy({ $0 == ":" || $0.isWhitespace }),
+              let close = rest[open...].firstIndex(of: "}") else { return nil }
+        let objectText = String(rest[open...close])
+        guard let data = objectText.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return VoicePartTag(jsonObject: object)
+    }
+}
+
+/// On-chain voice notes in public chat rooms: KaChat's 16 kbps CBR Opus in 60 ms frames, parts
+/// of at most 14.5 s, and a note only as long as 1 KAS of fees allows.
+///
+/// Part layout at 16 kbps (`VoiceNoteLayout`): 120-byte packets, 126 bytes each as a SimpleBlock,
+/// 10 bytes per Cluster of 16, 155 of headers. A part of T seconds is
+/// N = ceil((T x 48000 + 312 look-ahead) / 2880) packets and 155 + 126 N + 10 ceil(N / 16) bytes.
+///
+/// A room message is plain text: `kchat:1:bcast:<room>:` and the media-file JSON, the file
+/// base64'd in a data URL. A part's payload is 15 + room name (36 at most) + ~190 bytes of JSON
+/// and tag + 4 ceil(R / 3) for R bytes of WebM. Its fee is 2 grams per transaction byte
+/// (payload + 272 of input and output), 100 sompi a gram.
+///
+/// - Part cap 31,000 bytes: N <= 243 (244 is 31,059), so T <= 14.57 s -> **14.5 s**, 242
+///   packets, 30,807 bytes. With a 36-character room that is a 41,318-byte payload, mass
+///   83,180, 0.0832 KAS.
+/// - Note length: 12 full parts (174 s) are 0.998 KAS and a 13th would pass 1 KAS, so the note
+///   is **170 s** (2:50, rounded down to 5 s): 12 parts, 0.976 KAS. 175 s would be 13 parts,
+///   1.005 KAS.
+/// - The same numbers as KaChat's 1:1 notes: base64 in a room costs what ECIES + base64 does there.
+enum VoiceNotePolicy {
+    static let bitrate: Int32 = 16_000
+    static let frameMs = 60
+
+    struct Path: Sendable {
+        /// The longest one part runs; a note this short is one untagged message.
+        let partSeconds: TimeInterval
+        /// The longest note: its parts' fees add up to 1 KAS at most.
+        let maxSeconds: TimeInterval
+        /// Hard ceiling of one part's WebM file.
+        let maxBytes: Int
+    }
+
+    static let publicChat = Path(partSeconds: 14.5, maxSeconds: 170, maxBytes: 31_000)
+}
+
+/// The WebM-Opus layout `WebMOpusEncoder` writes, for working out a recording's part sizes
+/// before it is encoded (the live fee). CBR makes it exact to a few bytes.
+enum VoiceNoteLayout {
+    /// The size of each part a recording of `duration` makes: parts of `partSeconds`, at most
+    /// `maxParts`, each capped at `maxBytes` as the encoder caps it.
+    static func partSizes(
+        duration: TimeInterval,
+        partSeconds: TimeInterval,
+        maxParts: Int = VoicePartTag.maxParts,
+        bitrate: Int32,
+        frameMs: Int,
+        maxBytes: Int,
+        sampleRate: Double = 48_000
+    ) -> [Int] {
+        var remaining = min(max(duration, Double(frameMs) / 1000), partSeconds * Double(maxParts))
+        let frameSamples = max(1, Int(sampleRate) * frameMs / 1000)
+        let frameRate12 = max(1, 12 * Int(sampleRate) / frameSamples)
+        let packetBytes = (12 * Int(bitrate) / 8 + frameRate12 / 2) / frameRate12
+        let packetsPerCluster = max(1, 1000 / max(1, frameMs))
+        let lookahead = Int(sampleRate) * 312 / 48_000
+        var sizes: [Int] = []
+        while remaining > 0.0005, sizes.count < maxParts {
+            let part = min(remaining, partSeconds)
+            let samples = Int(part * sampleRate) + lookahead
+            let packets = (samples + frameSamples - 1) / frameSamples
+            let clusters = (packets + packetsPerCluster - 1) / packetsPerCluster
+            sizes.append(min(155 + packets * (packetBytes + 6) + clusters * 10, maxBytes))
+            remaining -= part
+        }
+        return sizes
+    }
+}
+
+/// Parts of one long voice note in a room: same room, sender, tag id and count.
+struct PublicChatVoiceNote: Equatable {
+    let key: String
+    let count: Int
+    /// The parts present, one per index, in index order.
+    let parts: [PublicChatMessage]
+    /// The earliest part in the room: where the one bubble sits, and whose time it shows.
+    let anchor: PublicChatMessage
+
+    var isComplete: Bool { parts.count == count }
+
+    /// The note's status: any failed part fails it, then any part still sending keeps it
+    /// sending, then any part not confirmed shows that.
+    var deliveryStatus: PublicChatMessage.DeliveryStatus {
+        let statuses = parts.map(\.deliveryStatus)
+        if statuses.contains(.failed) { return .failed }
+        if statuses.contains(.pending) { return .pending }
+        if statuses.contains(.unconfirmed) { return .unconfirmed }
+        return .sent
+    }
+
+    /// The parts to resend: failed, in index order.
+    var failedParts: [PublicChatMessage] {
+        parts.filter { $0.deliveryStatus == .failed }
+    }
+
+    static func key(channel: String, sender: String, tag: VoicePartTag) -> String {
+        "\(channel.lowercased())|\(sender.lowercased())|\(tag.id)|\(tag.count)"
+    }
+}
+
+enum PublicChatVoiceParts {
+    struct Result: Equatable {
+        /// Notes by their anchor's id.
+        var notesByAnchorId: [String: PublicChatVoiceNote] = [:]
+        /// Parts that aren't their note's anchor: not drawn.
+        var hiddenIds: Set<String> = []
+    }
+
+    /// Groups the voice-note parts of a room's `messages`, which must be in room order. A note
+    /// with one part present is still a note (its bubble says it is receiving the rest).
+    static func group(_ messages: [PublicChatMessage]) -> Result {
+        var tagged: [String: [(message: PublicChatMessage, tag: VoicePartTag)]] = [:]
+        var order: [String] = []
+        for message in messages where message.content.first == "{" {
+            guard let tag = VoicePartTag.sniff(message.content) else { continue }
+            let key = PublicChatVoiceNote.key(channel: message.channelName, sender: message.senderAddress, tag: tag)
+            if tagged[key] == nil { order.append(key) }
+            tagged[key, default: []].append((message, tag))
+        }
+        var result = Result()
+        for key in order {
+            guard let members = tagged[key], let anchor = members.first?.message else { continue }
+            var byIndex: [Int: PublicChatMessage] = [:]
+            for member in members {
+                if let existing = byIndex[member.tag.index] {
+                    // Two messages for one index (a resend that landed twice): the delivered one.
+                    if priority(member.message.deliveryStatus) > priority(existing.deliveryStatus) {
+                        byIndex[member.tag.index] = member.message
+                    }
+                } else {
+                    byIndex[member.tag.index] = member.message
+                }
+            }
+            result.notesByAnchorId[anchor.id] = PublicChatVoiceNote(
+                key: key,
+                count: members[0].tag.count,
+                parts: byIndex.keys.sorted().compactMap { byIndex[$0] },
+                anchor: anchor
+            )
+            for member in members where member.message.id != anchor.id {
+                result.hiddenIds.insert(member.message.id)
+            }
+        }
+        return result
+    }
+
+    /// The note key of a message that is a part, else nil.
+    static func noteKey(of message: PublicChatMessage) -> String? {
+        guard message.content.first == "{", let tag = VoicePartTag.sniff(message.content) else { return nil }
+        return PublicChatVoiceNote.key(channel: message.channelName, sender: message.senderAddress, tag: tag)
+    }
+
+    private static func priority(_ status: PublicChatMessage.DeliveryStatus) -> Int {
+        switch status {
+        case .sent: return 3
+        case .unconfirmed: return 2
+        case .pending: return 1
+        case .failed: return 0
+        }
     }
 }
 
@@ -2373,6 +2624,21 @@ enum NotificationMode: String, Codable, CaseIterable {
 /// Mentions other clients already sent still display.
 enum MentionsFeature {
     static let enabled = false
+}
+
+/// How a .kachat name is shown: "alice.kachat" by default, or "alice" when Settings >
+/// Customization > Show .kachat Endings is off. Display only: typing, copying and anything sent
+/// keep the full name (the codec strips the ending), as KaChat does.
+enum KachatNameLabel {
+    static let showEndingsKey = "kachat_show_name_endings"
+
+    static var showsEnding: Bool {
+        UserDefaults.standard.object(forKey: showEndingsKey) as? Bool ?? true
+    }
+
+    static func display(_ name: String) -> String {
+        showsEnding ? "\(name).kachat" : name
+    }
 }
 
 // MARK: - Settings Models

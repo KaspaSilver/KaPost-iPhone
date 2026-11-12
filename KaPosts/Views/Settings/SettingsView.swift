@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import UIKit
 
 struct SettingsView: View {
+    @AppStorage(KachatNameLabel.showEndingsKey) private var showKachatEndings = true
     @EnvironmentObject var walletManager: WalletManager
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
@@ -198,13 +199,24 @@ struct SettingsView: View {
 
     private var customizationPage: some View {
         Form {
-            Section("Customization") {
+            Section {
                 // Appearance / Language / Currency, shared with the accounts screen's settings.
                 AppWideCustomizationPickers()
                 Toggle("Show Fee Estimate", isOn: $settingsViewModel.settings.showFeeEstimate)
                     .onChange(of: settingsViewModel.settings.showFeeEstimate) { _ in
                         settingsViewModel.saveSettings()
                     }
+
+                // Off shows .kachat names bare ("alice"). On by default: the ending is how a
+                // registered name tells itself apart from a name you gave someone yourself.
+                Toggle("Show .kachat Endings", isOn: $showKachatEndings)
+                    .onChange(of: showKachatEndings) { _ in
+                        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+                    }
+            } header: {
+                Text("Customization")
+            } footer: {
+                Text("Turn off to show names like alice instead of alice.kachat. A name you gave someone yourself never has the ending.")
             }
         }
         .navigationTitle("Customization")

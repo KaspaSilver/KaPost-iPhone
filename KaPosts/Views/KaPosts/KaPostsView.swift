@@ -7795,7 +7795,7 @@ private struct KaPostMentionSuggestionBar: View {
             guard let resolution = NameServicesClient.primary(of: results, typed: query)
                     ?? results.first(where: { $0.tld == .kas && $0.address != nil }) else { return }
             guard !Task.isCancelled, mentionQuery == query else { return }
-            resolvedAnyDomain = resolution.display
+            resolvedAnyDomain = resolution.fullName
         }
     }
 }
@@ -8108,7 +8108,7 @@ private struct KaPostComposerView: View {
             guard let resolution = NameServicesClient.primary(of: results, typed: query)
                     ?? results.first(where: { $0.tld == .kas && $0.address != nil }) else { return }
             guard !Task.isCancelled, mentionQuery == query else { return }
-            resolvedAnyDomain = resolution.display
+            resolvedAnyDomain = resolution.fullName
         }
         .onChange(of: text) { newValue in
             // Hard cap at the limit, X-style.

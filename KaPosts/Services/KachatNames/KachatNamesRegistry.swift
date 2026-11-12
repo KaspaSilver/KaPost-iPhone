@@ -1845,7 +1845,7 @@ final class KachatNamesNotifier {
 
         // Your names: renewal open, expired (grace), lapsed - once per paid period.
         for n in owned {
-            let display = "\(n.name).kachat"
+            let display = KachatNameLabel.display(n.name)
             var s = old?.names[n.name].flatMap { $0.expiresAt == n.expiresAt ? $0 : nil } ?? Snapshot.Name(expiresAt: n.expiresAt)
             switch n.status(graceMs: p.graceMs, nowMs: now) {
             case .active:
@@ -1884,7 +1884,7 @@ final class KachatNamesNotifier {
             // signed out during the fetch: nothing here belongs to who is signed in now
             guard KachatNamesActions.shared.myAddress == wallet else { return }
             guard let last = history.first(where: { ["sale", "offer_accepted", "offer_accept", "transfer", "release", "reclaim"].contains($0.op) }) else { continue }
-            let display = "\(name).kachat"
+            let display = KachatNameLabel.display(name)
             switch last.op {
             case "sale":
                 post("sold-\(last.txId)", name, S("%@ sold", display),
@@ -1903,7 +1903,7 @@ final class KachatNamesNotifier {
         for o in offersOnMine {
             new.offersOnMine.insert(o.id)
             guard old?.offersOnMine.contains(o.id) != true, let name = o.name else { continue }
-            post("offer-\(o.id)", name, S("New offer on %@", "\(name).kachat"), S("%@ KAS offered for it.", KaspaUnit.plain(o.amount)))
+            post("offer-\(o.id)", name, S("New offer on %@", KachatNameLabel.display(name)), S("%@ KAS offered for it.", KaspaUnit.plain(o.amount)))
         }
         // Kept while the indexer is away, or they'd all read as new when it returns.
         if !offersAreComplete { new.offersOnMine.formUnion(old?.offersOnMine ?? []) }
@@ -1916,7 +1916,7 @@ final class KachatNamesNotifier {
         let offersBefore = offersAreComplete ? (old?.myOffers ?? [:]) : [:]
         for (id, name) in offersBefore where new.myOffers[id] == nil && !name.isEmpty {
             if selfClosedOffers.contains(id) { continue }
-            let display = "\(name).kachat"
+            let display = KachatNameLabel.display(name)
             if owned.contains(where: { $0.name == name }) {
                 post("myoffer-\(id)", name, AppLocalization.string("Offer accepted"), S("%@ is yours now.", display))
                 continue
@@ -1994,7 +1994,7 @@ enum KachatNameReminders {
             KaspaUnit.label(String(format: AppLocalization.string(key), locale: AppLocalization.locale, arguments: args))
         }
         for n in names {
-            let display = "\(n.name).kachat"
+            let display = KachatNameLabel.display(n.name)
             let base = "\(prefix)\(n.name)-\(n.expiresAt)-"
             let renewAt = n.expiresAt - p.renewWindowMs
             if renewAt > now {

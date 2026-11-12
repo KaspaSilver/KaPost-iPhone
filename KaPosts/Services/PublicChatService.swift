@@ -89,6 +89,10 @@ final class PublicChatService: ObservableObject {
 
     @Published private(set) var channels: [PublicChatChannel] = []
     @Published private(set) var messagesByChannel: [String: [PublicChatMessage]] = [:]
+    /// Long voice notes in each room's loaded messages (`PublicChatVoiceParts`), worked out with
+    /// them in `reloadMessages`, so the room draws each note as one bubble without sniffing
+    /// every row on every pass. Set before `messagesByChannel`, which is what redraws.
+    private(set) var voiceNotesByChannel: [String: PublicChatVoiceParts.Result] = [:]
     /// This wallet's public chat reactions, keyed by channel then by targetTxId - mirrors
     /// KaChat's `GroupChatService.reactionsByGroupId`'s shape (and reuses `GroupStore.ReactionSnapshot`,
     /// see `PublicChatStore.fetchReactions`). Loaded per channel on open (`acquire`) and kept
@@ -499,8 +503,14 @@ final class PublicChatService: ObservableObject {
         let manual = manuallyUnreadChannels.contains(channel) ? 1 : 0
         guard let marker = lastReadByChannel[channel] else { return manual }
         let mine = WalletManager.shared.currentWallet?.publicAddress
+        // A long voice note's parts count once.
+        var seenNotes = Set<String>()
         let count = (messagesByChannel[channel] ?? []).reduce(0) { total, message in
-            message.blockTime > marker && message.senderAddress != mine ? total + 1 : total
+            guard message.blockTime > marker && message.senderAddress != mine else { return total }
+            if let note = PublicChatVoiceParts.noteKey(of: message), !seenNotes.insert(note).inserted {
+                return total
+            }
+            return total + 1
         }
         return max(count, manual)
     }
@@ -1015,6 +1025,11 @@ final class PublicChatService: ObservableObject {
         messagesByChannel[PublicChatChannelName.normalize(name)] ?? []
     }
 
+    /// The room's long voice notes: one bubble per note at its anchor, the other parts hidden.
+    func voiceNotes(forChannel name: String) -> PublicChatVoiceParts.Result {
+        voiceNotesByChannel[PublicChatChannelName.normalize(name)] ?? PublicChatVoiceParts.Result()
+    }
+
     /// Aggregated reactions for a channel, keyed by the reacted-to message's txId.
     func reactions(forChannel name: String) -> [String: [GroupStore.ReactionSnapshot]] {
         reactionsByChannel[PublicChatChannelName.normalize(name)] ?? [:]
@@ -1190,20 +1205,22 @@ final class PublicChatService: ObservableObject {
         // the message table (rows scanned by an app version that predates reactions).
         // Off the main actor: up to 400 rows, each a codec sniff, on every reload - and a
         // room's first backfill reloads once per history page.
-        let fresh = await Task.detached(priority: .userInitiated) {
+        let (fresh, voiceNotes) = await Task.detached(priority: .userInitiated) {
             // and never two rows with one id: the room's list is keyed by it, and a duplicate
             // left a blank gap in it (the store also deletes duplicates on read)
             var seen = Set<String>()
-            return rows.filter {
+            let fresh = rows.filter {
                 seen.insert($0.id).inserted
                     && MessageReactionCodec.parse($0.content) == nil && MessageEditCodec.parse($0.content) == nil
             }
+            return (fresh, PublicChatVoiceParts.group(fresh))
         }.value
         guard messageLoadGeneration[channel] == generation else { return }
         // Only actually publish when the content changed: `@Published` fires on every
         // assignment regardless of equality, and an unconditional assignment re-rendered the
         // whole message list - including an open avatar menu - even when nothing had changed.
         guard messagesByChannel[channel] != fresh else { return }
+        voiceNotesByChannel[channel] = voiceNotes
         messagesByChannel[channel] = fresh
     }
 
@@ -1234,36 +1251,75 @@ final class PublicChatService: ObservableObject {
         guard let wallet = WalletManager.shared.currentWallet, wallet.publicAddress == message.senderAddress else { return }
         guard let privateKey = WalletManager.shared.getPrivateKey() else { return }
 
-        let channel = message.channelName
-        let content = message.content
-        let pendingId = message.id
-
-        pendingSendsThisRun.insert(pendingId)
-        store.updateMessageStatus(id: pendingId, status: .pending)
-        loadMessages(for: channel)
+        pendingSendsThisRun.insert(message.id)
+        store.updateMessageStatus(id: message.id, status: .pending)
+        loadMessages(for: message.channelName)
 
         Task {
-            do {
-                _ = try await ChatService.shared.enqueueOutgoingTxOperation {
-                    try await self.sendPublicChatInternal(
-                        channel: channel,
-                        content: content,
-                        walletAddress: wallet.publicAddress,
-                        privateKey: privateKey,
-                        pendingId: pendingId
-                    )
+            try? await self.resendPending(message, walletAddress: wallet.publicAddress, privateKey: privateKey)
+        }
+    }
+
+    /// Retry on a long voice note's bubble: only its failed parts, one after another in index
+    /// order, so each spends the change of the one before. All of them show Sending at once;
+    /// when one fails again, the ones after it go back to Failed for the next Retry.
+    func retryPublicChatVoiceParts(_ failedParts: [PublicChatMessage]) {
+        guard let wallet = WalletManager.shared.currentWallet,
+              let privateKey = WalletManager.shared.getPrivateKey() else { return }
+        let parts = failedParts.filter { $0.deliveryStatus == .failed && $0.senderAddress == wallet.publicAddress }
+        guard let first = parts.first else { return }
+        for part in parts {
+            pendingSendsThisRun.insert(part.id)
+            store.updateMessageStatus(id: part.id, status: .pending)
+        }
+        loadMessages(for: first.channelName)
+
+        Task {
+            for (offset, part) in parts.enumerated() {
+                do {
+                    try await self.resendPending(part, walletAddress: wallet.publicAddress, privateKey: privateKey)
+                } catch {
+                    self.failRemainingParts(Array(parts[(offset + 1)...]))
+                    return
                 }
-            } catch {
-                try? await self.handleSendFailure(
-                    error,
-                    channel: channel,
-                    content: content,
-                    walletAddress: wallet.publicAddress,
-                    privateKey: privateKey,
-                    pendingId: pendingId
-                )
             }
         }
+    }
+
+    /// Sends a row that is already marked pending again, under its own id. Throws when it
+    /// failed (the row is then Failed or Not confirmed); returns when it went or was held for a
+    /// deferred retry.
+    private func resendPending(_ message: PublicChatMessage, walletAddress: String, privateKey: Data) async throws {
+        do {
+            _ = try await ChatService.shared.enqueueOutgoingTxOperation {
+                try await self.sendPublicChatInternal(
+                    channel: message.channelName,
+                    content: message.content,
+                    walletAddress: walletAddress,
+                    privateKey: privateKey,
+                    pendingId: message.id
+                )
+            }
+        } catch {
+            try await handleSendFailure(
+                error,
+                channel: message.channelName,
+                content: message.content,
+                walletAddress: walletAddress,
+                privateKey: privateKey,
+                pendingId: message.id
+            )
+        }
+    }
+
+    /// The parts after one that failed never went: Failed too, so one Retry sends them in order.
+    private func failRemainingParts(_ parts: [PublicChatMessage]) {
+        guard let channel = parts.first?.channelName else { return }
+        for part in parts {
+            pendingSendsThisRun.remove(part.id)
+            store.markMessageFailed(pendingId: part.id)
+        }
+        loadMessages(for: channel)
     }
 
     // MARK: - Reactions
@@ -1432,6 +1488,181 @@ final class PublicChatService: ObservableObject {
             dataUrlContent: "data:\(mimeType);base64,\(base64)"
         )
         try await sendPublicChat(channel: channel, content: jsonString)
+    }
+
+    /// The fee of a recorded voice note whose parts are `partSizes` bytes of WebM - the live
+    /// fee while recording. One part is an untagged message; more are tagged parts.
+    func estimatePublicChatVoiceFee(channel rawChannel: String, partSizes: [Int]) -> UInt64? {
+        let channel = PublicChatChannelName.normalize(rawChannel)
+        var total: UInt64 = 0
+        for (offset, size) in partSizes.enumerated() {
+            let tag = partSizes.count > 1
+                ? VoicePartTag(id: String(repeating: "0", count: 32), index: offset + 1, count: partSizes.count)
+                : nil
+            let base64Length = 4 * ((max(0, size) + 2) / 3)
+            let content = MediaFileEnvelope.json(
+                name: tag?.fileName ?? "voice.webm",
+                size: size,
+                mimeType: "audio/webm",
+                dataUrlContent: "data:audio/webm;base64," + String(repeating: "A", count: base64Length),
+                voicePart: tag
+            )
+            let payload = KasiaTransactionBuilder.buildPublicChatPayload(channel: channel, content: content)
+            guard let fee = estimatePublicChatFee(channel: channel, payloadByteCount: payload.count) else { return nil }
+            total = ChatService.shared.addSompiSafely(total, fee)
+        }
+        return total
+    }
+
+    /// A long voice note: each part a complete WebM-Opus file sent as its own ordinary voice
+    /// message, one transaction each, tagged `voicePart` with one random id (KaChat's format,
+    /// KaChat MESSAGING.md "Long voice notes (multi-part)"). Parts belong together by (room,
+    /// sender, id, count).
+    ///
+    /// The balance for every part is checked first. The parts then go out in index order, one
+    /// after another through the send queue, so each spends the change of the one before.
+    /// Parts never carry a reply: the reply envelope would push a part past what one
+    /// transaction holds. A note of one part goes as an ordinary voice message
+    /// (`sendPublicChatAudio`) instead.
+    func sendPublicChatVoiceParts(channel rawChannel: String, parts: [Data], mimeType: String = "audio/webm") async throws {
+        let channel = PublicChatChannelName.normalize(rawChannel)
+        guard PublicChatChannelName.isValid(channel) else {
+            throw KasiaError.networkError("Invalid channel name")
+        }
+        guard parts.count >= 2, parts.count <= VoicePartTag.maxParts, !parts.contains(where: \.isEmpty) else {
+            throw KasiaError.networkError("Audio file is empty")
+        }
+        guard let wallet = WalletManager.shared.currentWallet else {
+            throw KasiaError.walletNotFound
+        }
+        guard let privateKey = WalletManager.shared.getPrivateKey() else {
+            throw KasiaError.keychainError("Could not get private key")
+        }
+
+        let noteId = VoicePartTag.newGroupId()
+        var contents: [String] = []
+        for (offset, data) in parts.enumerated() {
+            guard let tag = VoicePartTag(id: noteId, index: offset + 1, count: parts.count) else {
+                throw KasiaError.networkError("Audio file is empty")
+            }
+            contents.append(MediaFileEnvelope.json(
+                name: tag.fileName,
+                size: data.count,
+                mimeType: mimeType,
+                dataUrlContent: "data:\(mimeType);base64,\(data.base64EncodedString())",
+                voicePart: tag
+            ))
+        }
+
+        // The whole note first, before a single part goes out.
+        try await ensureSufficientBalanceForVoiceParts(contents, channel: channel, walletAddress: wallet.publicAddress)
+
+        // Every part shows at once, Sending, a millisecond apart so they keep their order.
+        let start = Int64(Date().timeIntervalSince1970 * 1000)
+        var pending: [PublicChatMessage] = []
+        for (offset, content) in contents.enumerated() {
+            let pendingId = "pending_\(UUID().uuidString)"
+            pendingSendsThisRun.insert(pendingId)
+            let blockTime = start + Int64(offset)
+            store.insertMessage(
+                id: pendingId,
+                channel: channel,
+                senderAddress: wallet.publicAddress,
+                content: content,
+                blockTime: blockTime,
+                deliveryStatus: .pending
+            )
+            pending.append(PublicChatMessage(
+                id: pendingId,
+                channelName: channel,
+                senderAddress: wallet.publicAddress,
+                content: content,
+                blockTime: blockTime,
+                deliveryStatus: .pending
+            ))
+        }
+        loadMessages(for: channel)
+        // A part is never a reply, and the next message isn't one either.
+        replyingTo = nil
+
+        let chatService = ChatService.shared
+        for (offset, part) in pending.enumerated() {
+            do {
+                _ = try await chatService.enqueueOutgoingTxOperation {
+                    try await self.sendPublicChatInternal(
+                        channel: channel,
+                        content: part.content,
+                        walletAddress: wallet.publicAddress,
+                        privateKey: privateKey,
+                        pendingId: part.id
+                    )
+                }
+            } catch {
+                let rest = Array(pending[(offset + 1)...])
+                if chatService.isNoConfirmedInputsError(error) {
+                    // This part waits for a confirmed coin and retries itself; the rest follow
+                    // it the same way, in order through the send queue.
+                    try await handleSendFailure(
+                        error,
+                        channel: channel,
+                        content: part.content,
+                        walletAddress: wallet.publicAddress,
+                        privateKey: privateKey,
+                        pendingId: part.id
+                    )
+                    for later in rest {
+                        schedulePublicChatRetry(
+                            channel: channel,
+                            content: later.content,
+                            walletAddress: wallet.publicAddress,
+                            privateKey: privateKey,
+                            pendingId: later.id,
+                            delaySeconds: chatService.nextNoInputRetryDelay(for: later.id)
+                        )
+                    }
+                    return
+                }
+                failRemainingParts(rest)
+                try await handleSendFailure(
+                    error,
+                    channel: channel,
+                    content: part.content,
+                    walletAddress: wallet.publicAddress,
+                    privateKey: privateKey,
+                    pendingId: part.id
+                )
+                return
+            }
+        }
+    }
+
+    /// What all of a note's parts cost together, against the coins there are, leaving the dust
+    /// threshold over so the last part still has a change output to stand on. A check that
+    /// can't be made (the node unreachable) lets the send go on and fail on its own.
+    private func ensureSufficientBalanceForVoiceParts(_ contents: [String], channel: String, walletAddress: String) async throws {
+        let chatService = ChatService.shared
+        var totalFee: UInt64 = 0
+        for content in contents {
+            let payload = KasiaTransactionBuilder.buildPublicChatPayload(channel: channel, content: content)
+            guard let fee = estimatePublicChatFee(channel: channel, payloadByteCount: payload.count) else { return }
+            totalFee = chatService.addSompiSafely(totalFee, fee)
+        }
+        let utxos: [UTXO]
+        do {
+            utxos = try await NodePoolService.shared.getUtxosByAddresses([walletAddress])
+        } catch {
+            AppLog.log("[PublicChatService] Voice note balance precheck unavailable, continuing send: %@", error.localizedDescription)
+            return
+        }
+        let available = chatService.prepareMessageUtxos(confirmed: utxos)
+            .reduce(UInt64(0)) { chatService.addSompiSafely($0, $1.amount) }
+        guard available > 0 else {
+            throw KasiaError.networkError(chatService.noSpendableFundsYetMessage())
+        }
+        let required = chatService.addSompiSafely(totalFee, KasiaTransactionBuilder.dustThreshold)
+        guard available >= required else {
+            throw chatService.formatInsufficientBalanceError(plannedSpendSompi: required, availableSompi: available)
+        }
     }
 
     func sendPublicChat(channel rawChannel: String, content: String, feeOverride: UInt64? = nil) async throws {

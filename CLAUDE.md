@@ -194,6 +194,24 @@ where it can, shows what it saved where it can't, and recovers by itself (`Servi
   rows stay.
 - KaChat's 1:1 catch-up work doesn't apply: KaPost's 1:1 sync is off. Push can't work without the indexer.
 
+## Voice notes in rooms
+
+Since 2026-11-11 rooms record KaChat's long voice notes (KaChat MESSAGING.md, "Long voice notes
+(multi-part)"): 16 kbps CBR Opus in 60 ms frames, up to 2:50, as long as 1 KAS of fees allows
+(`VoiceNotePolicy.publicChat`, where the math is). A room message is plain base64 JSON, which costs
+what KaChat's 1:1 ECIES + base64 does, so the numbers match 1:1: parts of at most 14.5 s / 31,000
+bytes (0.083 KAS each), 12 parts and 0.976 KAS at 2:50. A note of one part or less is one ordinary
+voice message; a longer one goes as `voicePart`-tagged parts, one transaction each
+(`PublicChatService.sendPublicChatVoiceParts`: the balance for all parts first, then in order, never
+a reply). Parts belong together by (room, sender, id, count) (`PublicChatVoiceParts`, worked out in
+`reloadMessages`): one bubble at the first part with gapless playback and one scrubber
+(`PublicChatVoiceNoteBubble`), "Receiving… N of M" until all are in, one status, Retry resends only
+the failed parts, and unread counts the note once. Room pushes come from the indexer, one per part
+("Voice message"), and KaPost has no notification extension to read a part's tag. While the app
+is open, `RoomVoicePushBursts` (KaPostsApp.swift) applies KaChat's burst rule: a voice push from the
+same sender in the same room within 60 s of the last is listed quietly, and the quiet one before it
+removed. In the background or closed, every part's push rings.
+
 ## KaPost links in rooms
 
 A post link (`kachat://kapost/<id>`, `kaposts://kapost/<id>` or `https://kachat.app/post/<id>`) in a

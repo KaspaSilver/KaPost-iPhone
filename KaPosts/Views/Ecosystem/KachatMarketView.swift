@@ -233,7 +233,7 @@ struct KachatMarketView: View {
             } else if !typed.isEmpty {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(typed).kachat")
+                        Text(verbatim: KachatNameLabel.display(typed))
                             .font(.headline)
                             .lineLimit(1)
                         Text("Registration isn't open yet.")

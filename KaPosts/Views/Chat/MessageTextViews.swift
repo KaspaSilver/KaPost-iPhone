@@ -778,6 +778,13 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
 }
 
 #if canImport(YbridOpus) || OPUS_BRIDGE || OPUS_CATALYST
+/// The most a voice note decodes to: the longest one any composer records, `nextcloudVoiceSeconds`
+/// (an on-chain note is far shorter). A crafted file's packet count would otherwise set the size
+/// of the buffer reserved below.
+private func maxDecodedVoiceSamples(sampleRate: Double, channels: Int) -> Int {
+    Int(sampleRate * ComposerMediaLimits.nextcloudVoiceSeconds) * channels
+}
+
 private enum WebMOpusDecodeError: LocalizedError {
     case invalidWebM(String)
     case missingOpusHead
@@ -826,8 +833,9 @@ struct WebMOpusDecoder {
         defer { opus_decoder_destroy(decoder) }
 
         let maxFrameSize = Int(sampleRate / 1000.0 * 120.0)
+        let maxSamples = maxDecodedVoiceSamples(sampleRate: sampleRate, channels: head.channels)
         var samples = [Float]()
-        samples.reserveCapacity(packets.count * maxFrameSize * head.channels)
+        samples.reserveCapacity(min(packets.count * maxFrameSize * head.channels, maxSamples))
 
         var tempBuffer = [Float](repeating: 0, count: maxFrameSize * head.channels)
         for packet in packets {
@@ -849,6 +857,9 @@ struct WebMOpusDecoder {
             }
             let frameCount = Int(decodedFrames)
             let total = frameCount * head.channels
+            guard samples.count + total <= maxSamples else {
+                throw WebMOpusDecodeError.invalidWebM("Too long.")
+            }
             samples.append(contentsOf: tempBuffer.prefix(total))
         }
 
@@ -892,6 +903,139 @@ struct WebMOpusDecoder {
         return DecodedAudio(url: outputURL, duration: duration)
     }
 
+    struct DecodedParts {
+        let url: URL
+        let duration: TimeInterval
+        /// Peaks across the whole note, `waveformBars` of them, 0.1...1.
+        let waveform: [Float]
+        /// How many of the given parts decoded.
+        let decodedParts: Int
+    }
+
+    /// The parts of a long voice note (MESSAGING.md, "Long voice notes"), in the order given,
+    /// as ONE mono PCM file: each part is decoded on its own, its pre-skip removed and cut to its
+    /// Info Duration (the encoder feeds each part a little of the next one to cover the codec's
+    /// look-ahead), so the joins are gapless and one player seeks across the whole note.
+    ///
+    /// Decoded at 24 kHz: the parts are narrowband-to-wideband SILK, so nothing audible is lost,
+    /// and five minutes stay ~29 MB of samples instead of ~58. A part that doesn't decode is left
+    /// out; with none decoding this throws.
+    static func decodePartsToPCMFile(parts: [Data], waveformBars: Int = 40) throws -> DecodedParts {
+        guard !parts.isEmpty else { throw WebMOpusDecodeError.noAudio }
+        let outputRate = 24_000.0
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: outputRate,
+                                         channels: 1,
+                                         interleaved: false) else {
+            throw WebMOpusDecodeError.invalidWebM("Failed to build output format.")
+        }
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kasia-audio-play-\(UUID().uuidString).caf")
+        var audioFile: AVAudioFile? = try AVAudioFile(forWriting: outputURL,
+                                                      settings: format.settings,
+                                                      commonFormat: format.commonFormat,
+                                                      interleaved: format.isInterleaved)
+        var totalFrames = 0
+        var decodedParts = 0
+        // Peaks per 0.1 s across the note, folded into `waveformBars` at the end.
+        let binFrames = Int(outputRate / 10)
+        var bins: [Float] = []
+        var binPeak: Float = 0
+        var binFill = 0
+        // A part is at most 14.5 s (25 s accepted); a crafted file can't grow one past this.
+        let maxPartFrames = Int(outputRate * (VoicePartTag.maxPartSeconds + 1))
+        let maxFrameSize = Int(outputRate / 1000.0 * 120.0)
+
+        for part in parts.prefix(VoicePartTag.maxParts) {
+            guard let parsed = try? parseWebM(part),
+                  !parsed.packets.isEmpty,
+                  let head = try? parseOpusHead(parsed.opusHead) else { continue }
+            let channels = max(1, min(head.channels, 2))
+            var opusError: Int32 = 0
+            guard let decoder = opus_decoder_create(Int32(outputRate), Int32(channels), &opusError) else { continue }
+            defer { opus_decoder_destroy(decoder) }
+
+            var mono = [Float]()
+            mono.reserveCapacity(min(parsed.packets.count * maxFrameSize, maxPartFrames))
+            var tempBuffer = [Float](repeating: 0, count: maxFrameSize * channels)
+            var failed = false
+            for packet in parsed.packets {
+                let decodedFrames = packet.withUnsafeBytes { buffer -> Int32 in
+                    guard let base = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                        return OPUS_BAD_ARG
+                    }
+                    return opus_decode_float(decoder, base, Int32(buffer.count), &tempBuffer, Int32(maxFrameSize), 0)
+                }
+                guard decodedFrames >= 0 else { failed = true; break }
+                let frames = Int(decodedFrames)
+                guard mono.count + frames <= maxPartFrames else { break }
+                if channels == 1 {
+                    mono.append(contentsOf: tempBuffer.prefix(frames))
+                } else {
+                    for frame in 0..<frames {
+                        mono.append((tempBuffer[frame * 2] + tempBuffer[frame * 2 + 1]) / 2)
+                    }
+                }
+            }
+            if failed || mono.isEmpty { continue }
+
+            let skip = Int(Double(head.preSkip) * outputRate / 48_000.0)
+            if skip > 0 && mono.count > skip { mono.removeFirst(skip) }
+            if let durationMs = parsed.durationMs {
+                let wanted = Int((durationMs / 1000.0 * outputRate).rounded())
+                if wanted > 0 && wanted < mono.count { mono.removeLast(mono.count - wanted) }
+            }
+
+            for sample in mono {
+                binPeak = max(binPeak, abs(sample))
+                binFill += 1
+                if binFill == binFrames {
+                    bins.append(binPeak)
+                    binPeak = 0
+                    binFill = 0
+                }
+            }
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(mono.count)),
+                  let channel = buffer.floatChannelData?[0] else { continue }
+            buffer.frameLength = AVAudioFrameCount(mono.count)
+            mono.withUnsafeBufferPointer { source in
+                if let base = source.baseAddress {
+                    channel.update(from: base, count: mono.count)
+                }
+            }
+            try audioFile?.write(from: buffer)
+            totalFrames += mono.count
+            decodedParts += 1
+        }
+        audioFile = nil // closes the file
+        if binFill > 0 { bins.append(binPeak) }
+
+        guard decodedParts > 0, totalFrames > 0 else {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw WebMOpusDecodeError.noAudio
+        }
+
+        let bars = max(1, waveformBars)
+        var waveform: [Float] = []
+        if bins.isEmpty {
+            waveform = Array(repeating: 0.3, count: bars)
+        } else {
+            for bar in 0..<bars {
+                let start = min(bar * bins.count / bars, bins.count - 1)
+                let end = min(max(start + 1, (bar + 1) * bins.count / bars), bins.count)
+                let peak = bins[start..<end].max() ?? 0
+                waveform.append(min(1.0, max(0.1, peak * 2)))
+            }
+        }
+        return DecodedParts(
+            url: outputURL,
+            duration: TimeInterval(Double(totalFrames) / outputRate),
+            waveform: waveform,
+            decodedParts: decodedParts
+        )
+    }
+
     private struct OpusHead {
         let channels: Int
         let preSkip: Int
@@ -901,11 +1045,14 @@ struct WebMOpusDecoder {
     private struct ParsedWebM {
         let opusHead: Data
         let packets: [Data]
+        /// Segment Info's Duration in ms (TimecodeScale 1 ms, what our encoder writes), if any.
+        let durationMs: Double?
     }
 
     private static func parseWebM(_ data: Data) throws -> ParsedWebM {
         var opusHead: Data?
         var packets: [Data] = []
+        var durationMs: Double?
 
         let containerIDs: Set<UInt64> = [
             0x18538067, // Segment
@@ -918,14 +1065,13 @@ struct WebMOpusDecoder {
                         // than a bare SimpleBlock, unlike this app's own hand-rolled encoder.
         ]
 
-        // A real file nests Segment > Cluster > BlockGroup > Block. Containers carry no limit of
-        // their own, so a crafted voice note from a stranger in a room could nest them until the
-        // stack ran out.
-        let maxContainerDepth = 8
+        // Real files nest Segment > Cluster > BlockGroup > Block. Each container recurses, so a
+        // crafted one nested thousands deep overflowed the stack just by being rendered.
+        let maxContainerDepth = 16
 
         func parseElements(in range: Range<Int>, depth: Int) throws {
             guard depth <= maxContainerDepth else {
-                throw WebMOpusDecodeError.invalidWebM("Containers nested too deeply.")
+                throw WebMOpusDecodeError.invalidWebM("Nested too deeply.")
             }
             var offset = range.lowerBound
             while offset < range.upperBound {
@@ -950,6 +1096,8 @@ struct WebMOpusDecoder {
 
                 if id == 0x63A2 {
                     opusHead = data.subdata(in: payloadStart..<payloadEnd)
+                } else if id == 0x4489 {
+                    durationMs = readFloat(data, range: payloadStart..<payloadEnd)
                 } else if id == 0xA3 || id == 0xA1 {
                     // SimpleBlock (0xA3) or Block (0xA1, inside a BlockGroup) - both share the
                     // same track-number/timecode/flags header layout for our purposes.
@@ -973,7 +1121,21 @@ struct WebMOpusDecoder {
         guard let opusHead else {
             throw WebMOpusDecodeError.missingOpusHead
         }
-        return ParsedWebM(opusHead: opusHead, packets: packets)
+        return ParsedWebM(opusHead: opusHead, packets: packets, durationMs: durationMs)
+    }
+
+    /// An EBML float: 4 or 8 bytes, big-endian. Nil for any other length or a non-finite value.
+    private static func readFloat(_ data: Data, range: Range<Int>) -> Double? {
+        let bytes = [UInt8](data[range])
+        let value: Double
+        if bytes.count == 8 {
+            value = Double(bitPattern: bytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) })
+        } else if bytes.count == 4 {
+            value = Double(Float(bitPattern: bytes.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }))
+        } else {
+            return nil
+        }
+        return value.isFinite && value > 0 ? value : nil
     }
 
     private static func parseSimpleBlock(_ data: Data) throws -> Data? {
@@ -1124,50 +1286,6 @@ private struct OggOpusDecoder {
         let duration: TimeInterval
     }
 
-    /// Get duration from Ogg file by parsing granule position without full decode
-    static func getDuration(data: Data) throws -> TimeInterval {
-        // Find the last Ogg page and read its granule position
-        var lastGranulePosition: UInt64 = 0
-        var sampleRate: Double = 48_000
-        var preSkip: Int = 0
-        var offset = 0
-
-        while offset + 27 <= data.count {
-            guard data[offset..<(offset + 4)] == Data([0x4f, 0x67, 0x67, 0x53]) else {
-                break
-            }
-
-            // Read granule position (bytes 6-13, little endian)
-            let granule = readUInt64LE(data, offset: offset + 6)
-            lastGranulePosition = granule
-
-            let pageSegments = Int(data[offset + 26])
-            let headerSize = 27 + pageSegments
-            guard offset + headerSize <= data.count else { break }
-
-            let segmentTable = data[(offset + 27)..<(offset + 27 + pageSegments)]
-            let bodySize = segmentTable.reduce(0) { $0 + Int($1) }
-            let bodyStart = offset + headerSize
-
-            // Parse OpusHead from first page to get sample rate and pre-skip
-            if offset == 0 && bodySize >= 19 {
-                let headData = data[bodyStart..<(bodyStart + min(bodySize, 19))]
-                if headData.starts(with: Array("OpusHead".utf8)) {
-                    preSkip = Int(readUInt16LE(data, offset: bodyStart + 10))
-                    sampleRate = Double(readUInt32LE(data, offset: bodyStart + 12))
-                    if sampleRate == 0 { sampleRate = 48_000 }
-                }
-            }
-
-            offset = bodyStart + bodySize
-        }
-
-        // Opus always uses 48kHz internally for granule position
-        let totalSamples = Int64(lastGranulePosition) - Int64(preSkip)
-        let duration = max(0, Double(totalSamples) / 48_000.0)
-        return duration
-    }
-
     static func decodeToPCMFile(data: Data) throws -> DecodedAudio {
         let packets = try extractPackets(from: data)
         guard packets.count >= 2 else {
@@ -1190,8 +1308,9 @@ private struct OggOpusDecoder {
         defer { opus_decoder_destroy(decoder) }
 
         let maxFrameSize = Int(sampleRate / 1000.0 * 120.0)
+        let maxSamples = maxDecodedVoiceSamples(sampleRate: sampleRate, channels: head.channels)
         var samples = [Float]()
-        samples.reserveCapacity(audioPackets.count * maxFrameSize * head.channels)
+        samples.reserveCapacity(min(audioPackets.count * maxFrameSize * head.channels, maxSamples))
 
         var tempBuffer = [Float](repeating: 0, count: maxFrameSize * head.channels)
         for packet in audioPackets {
@@ -1213,6 +1332,9 @@ private struct OggOpusDecoder {
             }
             let frameCount = Int(decodedFrames)
             let total = frameCount * head.channels
+            guard samples.count + total <= maxSamples else {
+                throw OggOpusDecodeError.invalidOgg("Too long.")
+            }
             samples.append(contentsOf: tempBuffer.prefix(total))
         }
 
@@ -1320,17 +1442,6 @@ private struct OggOpusDecoder {
             | (UInt32(data[offset + 3]) << 24)
     }
 
-    private static func readUInt64LE(_ data: Data, offset: Int) -> UInt64 {
-        UInt64(data[offset])
-            | (UInt64(data[offset + 1]) << 8)
-            | (UInt64(data[offset + 2]) << 16)
-            | (UInt64(data[offset + 3]) << 24)
-            | (UInt64(data[offset + 4]) << 32)
-            | (UInt64(data[offset + 5]) << 40)
-            | (UInt64(data[offset + 6]) << 48)
-            | (UInt64(data[offset + 7]) << 56)
-    }
-
     private static func normalizedSampleRate(_ value: Double) -> Double {
         switch value {
         case 8_000, 12_000, 16_000, 24_000, 48_000:
@@ -1366,6 +1477,17 @@ struct WebMOpusDecoder {
     static func decodeToPCMFile(data: Data) throws -> DecodedAudio {
         throw WebMOpusDecodeError.unsupportedPlatform
     }
+
+    struct DecodedParts {
+        let url: URL
+        let duration: TimeInterval
+        let waveform: [Float]
+        let decodedParts: Int
+    }
+
+    static func decodePartsToPCMFile(parts: [Data], waveformBars: Int = 40) throws -> DecodedParts {
+        throw WebMOpusDecodeError.unsupportedPlatform
+    }
 }
 
 private struct OggOpusDecoder {
@@ -1375,10 +1497,6 @@ private struct OggOpusDecoder {
     }
 
     static func decodeToPCMFile(data: Data) throws -> DecodedAudio {
-        throw OggOpusDecodeError.unsupportedPlatform
-    }
-
-    static func getDuration(data: Data) throws -> TimeInterval {
         throw OggOpusDecodeError.unsupportedPlatform
     }
 }

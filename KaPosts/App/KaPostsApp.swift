@@ -322,6 +322,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                     completionHandler([])
                     return
                 }
+                // A long voice note's later parts: listed, no banner or sound.
+                if RoomVoicePushBursts.isLaterPart(
+                    threadId: threadId,
+                    sender: notification.request.content.subtitle,
+                    body: body,
+                    identifier: notification.request.identifier
+                ) {
+                    completionHandler([.list])
+                    return
+                }
             }
             if !options.contains(.sound), settings.incomingNotificationVibrationEnabled {
                 Haptics.impact(.light)
@@ -611,5 +621,52 @@ private struct PrivacyCoverView: View {
                 .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
         }
         .ignoresSafeArea()
+    }
+}
+
+/// KaChat's burst rule for parts of a long voice note or a multi-part photo, for room pushes (KaChat CLAUDE.md, "Parts
+/// arrive as bare txIds"). The indexer pushes every part of a long voice note as its own
+/// "Voice message", and KaPost has no notification extension to read the part tag. So a voice
+/// push from the same sender in the same room within 60 seconds of the last one is a later part:
+/// it is listed without a banner, sound or badge, and the quiet entry before it is removed,
+/// leaving the first banner and one quiet entry per note. Two separate voice messages from one
+/// sender within a minute ring once; the room still shows both.
+///
+/// This only runs while KaPost is open (`willPresent`). With the app in the background or
+/// closed, iOS shows every part's push as it arrives.
+@MainActor
+enum RoomVoicePushBursts {
+    /// Parts go out one after another, a few seconds apart.
+    private static let window: TimeInterval = 60
+    /// The indexer's previews for a media envelope: "Voice message" for any file or audio today
+    /// (a photo too), "Photo" once it tells photos apart (kachat-indexer
+    /// docs/ROOM_VOICE_PART_PUSHES.md). Multi-part photos (`mediaPart`) burst the same way.
+    private static let mediaPreviews: Set<String> = ["Voice message", "Photo"]
+
+    private struct Burst {
+        var lastPush: Date
+        /// The quiet notification the last later part left, to remove when the next arrives.
+        var quietId: String?
+    }
+
+    private static var bursts: [String: Burst] = [:]
+
+    /// True when this room push is a later part of a voice burst that already rang. Records
+    /// the push either way.
+    static func isLaterPart(threadId: String, sender: String, body: String, identifier: String) -> Bool {
+        guard threadId.hasPrefix("broadcast:"),
+              mediaPreviews.contains(body.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        let now = Date()
+        bursts = bursts.filter { now.timeIntervalSince($0.value.lastPush) < window }
+        let owner = "\(threadId)|\(sender.lowercased())"
+        guard let earlier = bursts[owner] else {
+            bursts[owner] = Burst(lastPush: now, quietId: nil)
+            return false
+        }
+        if let quietId = earlier.quietId {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [quietId])
+        }
+        bursts[owner] = Burst(lastPush: now, quietId: identifier)
+        return true
     }
 }

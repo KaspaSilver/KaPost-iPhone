@@ -129,11 +129,94 @@ private enum WebMOpusEncodingError: LocalizedError {
 }
 
 struct WebMOpusEncoder {
-    static func encode(pcmURL: URL, outputURL: URL, bitrate: Int32, sampleRate: Double, maxBytes: Int? = nil) async throws {
+    /// One WebM-Opus file of the whole recording at 20 ms frames, trimmed to `maxBytes` - the
+    /// group voice note (`VoiceNoteRecorder`), unchanged.
+    static func encode(pcmURL: URL, outputURL: URL, bitrate: Int32, sampleRate: Double, maxBytes: Int? = nil, frameMs: Int = 20) async throws {
         let pcmSamples = try await readFloatSamples(from: pcmURL, sampleRate: sampleRate)
+        guard !pcmSamples.isEmpty else {
+            throw WebMOpusEncodingError.noSamples
+        }
+        let webmData = try encodeRange(
+            pcmSamples,
+            range: 0..<pcmSamples.count,
+            coverLookahead: false,
+            bitrate: bitrate,
+            sampleRate: sampleRate,
+            frameMs: frameMs,
+            maxBytes: maxBytes
+        )
+        try webmData.write(to: outputURL, options: .atomic)
+    }
 
-        let totalFrames = pcmSamples.count
-        guard totalFrames > 0 else {
+    /// A 1:1 on-chain recording as parts of at most `partSeconds` each (one file when it is that
+    /// short), every part a complete WebM-Opus file of its own (MESSAGING.md, "Long voice notes
+    /// (multi-part)"). Audio past `maxParts` parts is dropped, and so is a last scrap under
+    /// 0.2 s after a full part (the tap that stopped the recording), which would otherwise cost
+    /// a whole transaction.
+    ///
+    /// Each part's encoder is also fed the codec's look-ahead (312 samples at 48 kHz) from the
+    /// next part, and its Info Duration says the part's real length: a reader that cuts each
+    /// part's pre-skip and trims it to that duration joins the parts with no gap
+    /// (`WebMOpusDecoder.decodePartsToPCMFile`). One that doesn't hears ~7 ms of overlap.
+    static func encodeParts(
+        pcmURL: URL,
+        outputDirectory: URL,
+        bitrate: Int32,
+        sampleRate: Double,
+        frameMs: Int,
+        partSeconds: TimeInterval,
+        maxParts: Int,
+        maxBytes: Int
+    ) async throws -> [URL] {
+        let pcmSamples = try await readFloatSamples(from: pcmURL, sampleRate: sampleRate)
+        guard !pcmSamples.isEmpty else {
+            throw WebMOpusEncodingError.noSamples
+        }
+        let partSamples = max(1, Int(partSeconds * sampleRate))
+        var total = min(pcmSamples.count, partSamples * max(1, maxParts))
+        let remainder = total % partSamples
+        if total > partSamples, remainder > 0, remainder < Int(0.2 * sampleRate) {
+            total -= remainder
+        }
+        let token = UUID().uuidString
+        var urls: [URL] = []
+        do {
+            for (offset, partStart) in stride(from: 0, to: total, by: partSamples).enumerated() {
+                let range = partStart..<min(partStart + partSamples, total)
+                let data = try encodeRange(
+                    pcmSamples,
+                    range: range,
+                    coverLookahead: true,
+                    bitrate: bitrate,
+                    sampleRate: sampleRate,
+                    frameMs: frameMs,
+                    maxBytes: maxBytes
+                )
+                let name = offset == 0 ? "kasia-audio-\(token).webm" : "kasia-audio-\(token)-\(offset + 1).webm"
+                let url = outputDirectory.appendingPathComponent(name)
+                try data.write(to: url, options: .atomic)
+                urls.append(url)
+            }
+        } catch {
+            for url in urls { try? FileManager.default.removeItem(at: url) }
+            throw error
+        }
+        return urls
+    }
+
+    /// Encodes `samples[range]` as one WebM-Opus file. With `coverLookahead`, the encoder also
+    /// gets the codec's look-ahead past the range (the next samples, else silence), so the decoded
+    /// output, after pre-skip, holds the whole range; the Info Duration is the range's length.
+    private static func encodeRange(
+        _ samples: [Float],
+        range: Range<Int>,
+        coverLookahead: Bool,
+        bitrate: Int32,
+        sampleRate: Double,
+        frameMs: Int,
+        maxBytes: Int?
+    ) throws -> Data {
+        guard !range.isEmpty else {
             throw WebMOpusEncodingError.noSamples
         }
 
@@ -161,21 +244,29 @@ struct WebMOpusEncoder {
             outputGain: 0
         )
 
-        let frameSize = max(1, Int(sampleRate / 50.0))
+        // The samples handed to the encoder: the range, plus the look-ahead when asked.
+        let contentCount = range.count
+        let extra = coverLookahead ? max(0, Int(lookahead)) : 0
+        let available = min(samples.count, range.upperBound + extra) - range.lowerBound
+        let totalFrames = contentCount + extra
+
+        // 20 ms (groups, older notes) or 60 ms (1:1 on chain): both are Opus frame sizes.
+        let frameSize = max(1, Int(sampleRate * Double(frameMs) / 1000.0))
         var offset = 0
         var frameBuffer = [Float](repeating: 0, count: frameSize)
         var outputBuffer = [UInt8](repeating: 0, count: 1500)
         var packets: [Data] = []
 
         while offset < totalFrames {
-            let remaining = totalFrames - offset
-            let currentFrame = min(frameSize, remaining)
+            let currentInput = min(frameSize, max(0, available - offset))
             frameBuffer.withUnsafeMutableBufferPointer { bufferPointer in
                 if let base = bufferPointer.baseAddress {
                     memset(base, 0, frameSize * MemoryLayout<Float>.size)
-                    pcmSamples.withUnsafeBufferPointer { samples in
-                        if let source = samples.baseAddress?.advanced(by: offset) {
-                            memcpy(base, source, currentFrame * MemoryLayout<Float>.size)
+                    if currentInput > 0 {
+                        samples.withUnsafeBufferPointer { source in
+                            if let sourceBase = source.baseAddress?.advanced(by: range.lowerBound + offset) {
+                                memcpy(base, sourceBase, currentInput * MemoryLayout<Float>.size)
+                            }
                         }
                     }
                 }
@@ -199,10 +290,10 @@ struct WebMOpusEncoder {
 
             let packet = Data(outputBuffer[0..<Int(encodedSize)])
             packets.append(packet)
-            offset += currentFrame
+            offset += frameSize
         }
 
-        let durationSeconds = Double(totalFrames) / sampleRate
+        let durationSeconds = Double(contentCount) / sampleRate
         let frameDurationMs = Int64((Double(frameSize) / sampleRate) * 1000.0)
 
         // The Info duration is what the packets actually hold - if the byte ceiling below ever
@@ -218,6 +309,7 @@ struct WebMOpusEncoder {
             frameDurationMs: frameDurationMs
         )
 
+        // The hard guard: never a file over `maxBytes`, whatever the codec did.
         if let maxBytes = maxBytes {
             while webmData.count > maxBytes, packets.count > 1 {
                 packets.removeLast()
@@ -230,8 +322,7 @@ struct WebMOpusEncoder {
                 )
             }
         }
-
-        try webmData.write(to: outputURL, options: .atomic)
+        return webmData
     }
 
     private static func readFloatSamples(from url: URL, sampleRate: Double) async throws -> [Float] {
@@ -530,7 +621,20 @@ private enum WebMOpusEncodingError: LocalizedError {
 }
 
 struct WebMOpusEncoder {
-    static func encode(pcmURL: URL, outputURL: URL, bitrate: Int32, sampleRate: Double, maxBytes: Int? = nil) async throws {
+    static func encode(pcmURL: URL, outputURL: URL, bitrate: Int32, sampleRate: Double, maxBytes: Int? = nil, frameMs: Int = 20) async throws {
+        throw WebMOpusEncodingError.unsupportedPlatform
+    }
+
+    static func encodeParts(
+        pcmURL: URL,
+        outputDirectory: URL,
+        bitrate: Int32,
+        sampleRate: Double,
+        frameMs: Int,
+        partSeconds: TimeInterval,
+        maxParts: Int,
+        maxBytes: Int
+    ) async throws -> [URL] {
         throw WebMOpusEncodingError.unsupportedPlatform
     }
 }
