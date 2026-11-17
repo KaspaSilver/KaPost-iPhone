@@ -328,7 +328,8 @@ struct PublicChatListView: View {
     private func deleteRoom(_ name: String) {
         if PublicChatService.curatedChannels.contains(name) {
             publicChatService.removeFromList(name)
-            showToast(String(localized: "#\(name) is off - turn it back on in Public Chats settings"))
+            showToast(String(format: AppLocalization.string("#%@ is off - turn it back on in Public Chats settings"),
+                             locale: AppLocalization.locale, name))
         } else {
             channelToLeave = name
         }
@@ -516,16 +517,15 @@ struct PublicChatListView: View {
         return HStack(spacing: 0) {
             bulkButton("Read", systemImage: "envelope.open") {
                 names.forEach { publicChatService.markChannelRead($0) }
-                finishBulk(String(localized: "Marked \(names.count) as read"))
+                finishBulk(bulkMessage("Marked %lld as read", names.count))
             }
             bulkButton("Unread", systemImage: "envelope.badge") {
                 names.forEach { publicChatService.markChannelUnread($0) }
-                finishBulk(String(localized: "Marked \(names.count) as unread"))
+                finishBulk(bulkMessage("Marked %lld as unread", names.count))
             }
             bulkButton(muted ? "Unmute" : "Mute", systemImage: muted ? "bell" : "bell.slash") {
                 names.forEach { publicChatService.setNotifyEnabled(muted, forChannel: $0) }
-                finishBulk(muted ? String(localized: "Notifications on for \(names.count)")
-                                 : String(localized: "Notifications off for \(names.count)"))
+                finishBulk(bulkMessage(muted ? "Notifications on for %lld" : "Notifications off for %lld", names.count))
             }
             bulkButton("Delete", systemImage: "trash", tint: .red) {
                 showBulkDelete = true
@@ -563,6 +563,11 @@ struct PublicChatListView: View {
         showToast(message)
     }
 
+    /// A bulk action's toast, in the in-app language (`String(localized:)` follows the device's).
+    private func bulkMessage(_ key: String, _ count: Int) -> String {
+        String(format: AppLocalization.string(key), locale: AppLocalization.locale, count)
+    }
+
     /// Bulk Delete asks first: rooms you added go with their messages; default rooms are only
     /// switched off (`PublicChatService.removeFromList`).
     private var bulkDeleteSheet: some View {
@@ -572,7 +577,7 @@ struct PublicChatListView: View {
                 .font(.scaled(size: 30))
                 .foregroundColor(.red)
                 .padding(.top, 26)
-            Text("Delete \(names.count) Public Chat\(names.count == 1 ? "" : "s")?")
+            Text(names.count == 1 ? "Delete \(names.count) Public Chat?" : "Delete \(names.count) Public Chats?")
                 .font(.title3.weight(.bold))
             Text("Rooms you added are removed with their messages. Default rooms are only switched off - turn them back on any time in Public Chats settings.")
                 .font(.subheadline)
@@ -582,7 +587,7 @@ struct PublicChatListView: View {
             ActionSheetRow(title: "Delete", subtitle: "Removes the picked rooms from this device.", systemImage: "trash", tint: .red) {
                 names.forEach { publicChatService.removeFromList($0) }
                 showBulkDelete = false
-                finishBulk(String(localized: "Deleted \(names.count)"))
+                finishBulk(bulkMessage("Deleted %lld", names.count))
             }
             ActionSheetRow(title: "Keep", subtitle: "Leave the rooms as they are.", systemImage: "xmark") {
                 showBulkDelete = false
@@ -667,7 +672,8 @@ struct PublicChatListView: View {
                     ActionSheetRow(title: "Delete", subtitle: "Switches this default room off. Turn it back on in Public Chats settings.", systemImage: "trash", tint: .red) {
                         roomActionTarget = nil
                         publicChatService.removeFromList(name)
-                        showToast(String(localized: "#\(name) is off - turn it back on in Public Chats settings"))
+                        showToast(String(format: AppLocalization.string("#%@ is off - turn it back on in Public Chats settings"),
+                                         locale: AppLocalization.locale, name))
                     }
                 }
             }
@@ -785,11 +791,12 @@ struct PublicChatListView: View {
     private func join(_ rawName: String) -> Bool {
         let normalized = PublicChatChannelName.normalize(rawName)
         guard PublicChatChannelName.isValid(normalized) else {
-            joinError = "Channel names must be 1-\(PublicChatChannelName.maxLength) characters with no spaces or colons."
+            joinError = String(format: AppLocalization.string("Channel names must be 1-%lld characters with no spaces or colons."),
+                               locale: AppLocalization.locale, PublicChatChannelName.maxLength)
             return false
         }
         guard publicChatService.joinChannel(normalized) else {
-            joinError = "Something went wrong joining that channel."
+            joinError = AppLocalization.string("Something went wrong joining that channel.")
             return false
         }
         joinFieldText = ""

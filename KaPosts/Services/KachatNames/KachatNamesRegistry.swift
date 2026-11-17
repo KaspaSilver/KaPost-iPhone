@@ -459,6 +459,8 @@ final class KachatNamesRegistry: ObservableObject {
         if case .indexer(let base) = source,
            let j = try await fromIndexer(KachatNames.IndexerAPI.NameJSON.self, base, "/names/\(name)") {
             if let info = j.info(keyOf: Self.keyOf) { return .registered(info) }
+            // registered but a record that can't be read is no answer, never "free"
+            if j.registered == true { throw KachatNames.Failure("the indexer's record of \(name) can't be read") }
             return .free(name: name, gap: j.gap?.info)
         }
         let st = try readChainState()
@@ -598,8 +600,9 @@ final class KachatNamesRegistry: ObservableObject {
     /// cancelled). A lapse is just the clock running out, so no registry change announces it.
     func dropLapsed(from names: [KachatNames.NameInfo], update: ([KachatNames.NameInfo]) -> Void) async {
         var held = names
-        while let next = held.map({ $0.expiresAt + graceMs }).filter({ $0 > KachatNames.nowMs() }).min() {
-            let wait = UInt64(max(0, next - KachatNames.nowMs()) + 500) * 1_000_000
+        while let next = held.map({ KachatNames.clampedSum($0.expiresAt, graceMs) }).filter({ $0 > KachatNames.nowMs() }).min() {
+            // at most a day at a time, so a far-off (or junk) time can't overflow the wait
+            let wait = UInt64(min(max(0, next - KachatNames.nowMs()), 86_400_000) + 500) * 1_000_000
             try? await Task.sleep(nanoseconds: wait)
             if Task.isCancelled { return }
             let grace = graceMs
@@ -1046,7 +1049,6 @@ final class KachatNamesRegistry: ObservableObject {
             }
             if anyChanged {
                 ContactsManager.shared.objectWillChange.send()
-                ContactsManager.shared.scheduleSharedNameSync()
             }
             return
         }
@@ -1076,7 +1078,6 @@ final class KachatNamesRegistry: ObservableObject {
         identityMisses[key] = nil
         if storeFetchedIdentity(found, for: key) {
             ContactsManager.shared.objectWillChange.send()
-            ContactsManager.shared.scheduleSharedNameSync()
         }
         return found
     }
@@ -1171,7 +1172,6 @@ final class KachatNamesRegistry: ObservableObject {
             }
             if changed {
                 ContactsManager.shared.objectWillChange.send()
-                ContactsManager.shared.scheduleSharedNameSync()
             }
         }
     }
@@ -1858,7 +1858,7 @@ final class KachatNamesNotifier {
                 s.renewNoted = true
                 if !s.graceNoted {
                     post("grace-\(n.name)-\(n.expiresAt)", n.name, S("%@ has expired", display),
-                         S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(n.expiresAt + p.graceMs)))
+                         S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(KachatNames.clampedSum(n.expiresAt, p.graceMs))))
                     s.graceNoted = true
                 }
             case .lapsed:
@@ -1996,19 +1996,19 @@ enum KachatNameReminders {
         for n in names {
             let display = KachatNameLabel.display(n.name)
             let base = "\(prefix)\(n.name)-\(n.expiresAt)-"
-            let renewAt = n.expiresAt - p.renewWindowMs
+            let renewAt = p.renewOpens(expiresAt: n.expiresAt)
             if renewAt > now {
                 wanted[base + "renew"] = (renewAt, S("Renew %@", display),
                                           S("Renewal is open: renew it before %@ to keep it.", KachatNamesActions.dayString(n.expiresAt)), n.name)
             }
             if n.expiresAt > now {
                 wanted[base + "grace"] = (n.expiresAt, S("%@ has expired", display),
-                                          S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(n.expiresAt + p.graceMs)), n.name)
+                                          S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(KachatNames.clampedSum(n.expiresAt, p.graceMs))), n.name)
             }
-            let lastCall = n.expiresAt + p.graceMs - min(p.graceMs / 2, 86_400_000)
+            let lastCall = KachatNames.clampedSum(KachatNames.clampedSum(n.expiresAt, p.graceMs), -min(p.graceMs / 2, 86_400_000))
             if lastCall > now {
                 wanted[base + "lastcall"] = (lastCall, S("%@ has expired", display),
-                                             S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(n.expiresAt + p.graceMs)), n.name)
+                                             S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(KachatNames.clampedSum(n.expiresAt, p.graceMs))), n.name)
             }
         }
         let stale = pending.filter { wanted[$0] == nil }

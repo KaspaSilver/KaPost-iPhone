@@ -243,7 +243,7 @@ struct KNSDomainsListView: View {
                     ForEach(names) { owned in
                         DomainNameCardView(
                             title: owned.display,
-                            badge: owned.isProvisional ? String(localized: "Settling") : nil
+                            badge: owned.isProvisional ? AppLocalization.string("Settling") : nil
                         )
                     }
                 }
@@ -727,6 +727,12 @@ struct KNSDomainSendView: View {
 
     private func handleInputChange(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An upper-case address goes into the field in lower case; that change comes back here.
+        let lowered = lowercasedKaspaAddress(trimmed)
+        if lowered != trimmed {
+            addressInput = lowered
+            return
+        }
 
         resolvedAddress = nil
         resolvedDomain = nil
@@ -740,7 +746,7 @@ struct KNSDomainSendView: View {
             return
         }
 
-        if trimmed.hasPrefix("kaspa:") || trimmed.hasPrefix("kaspatest:") {
+        if trimmed.lowercased().hasPrefix("kaspa:") || trimmed.lowercased().hasPrefix("kaspatest:") {
             isValidAddress = KaspaAddress.isValidOnActiveNetwork(trimmed)
             return
         }
@@ -756,6 +762,14 @@ struct KNSDomainSendView: View {
     /// Use one service's answer (the priority one, or a pick from "Other domains").
     private func selectResolution(_ resolution: NameResolution) {
         guard let address = resolution.address else { return }
+        // Only an address of this network is an answer; anything else reads as not found.
+        guard KaspaAddress.isValidOnActiveNetwork(address) else {
+            resolvedAddress = nil
+            resolvedDomain = nil
+            selectedTLD = nil
+            knsError = NameServicesClient.notFoundMessage(typed: resolution.fullName, results: [])
+            return
+        }
         resolvedAddress = address
         resolvedDomain = resolution.display
         selectedTLD = resolution.tld
@@ -802,6 +816,7 @@ struct KNSDomainSendView: View {
             if let queryIndex = address.firstIndex(of: "?") {
                 address = String(address[..<queryIndex])
             }
+            address = lowercasedKaspaAddress(address)
         }
         addressInput = address
         handleInputChange(address)

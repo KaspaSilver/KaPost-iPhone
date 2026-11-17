@@ -388,8 +388,12 @@ final class KeychainService {
 
     func saveAccountSnapshot(wallet: Wallet, seedPhrase: SeedPhrase, privateKey: Data) throws {
         let seedData = try JSONEncoder().encode(seedPhrase)
-        try saveSensitiveDataForAccount(seedData, baseKey: .seedPhrase, publicAddress: wallet.publicAddress)
-        try saveSensitiveDataForAccount(privateKey, baseKey: .privateKey, publicAddress: wallet.publicAddress)
+        // Both wrapped before either is written: a Secure Enclave failure leaves no snapshot with
+        // words and no key (which would still be listed as a saved account).
+        let wrappedSeed = try wrapForStorage(seedData)
+        let wrappedKey = try wrapForStorage(privateKey)
+        try saveSensitiveDataForAccount(wrapped: wrappedSeed, baseKey: .seedPhrase, publicAddress: wallet.publicAddress)
+        try saveSensitiveDataForAccount(wrapped: wrappedKey, baseKey: .privateKey, publicAddress: wallet.publicAddress)
     }
 
     func loadAccountSnapshot(publicAddress: String) throws -> (seedPhrase: SeedPhrase, privateKey: Data)? {
@@ -444,7 +448,7 @@ final class KeychainService {
 
     private func saveSensitiveDataForGroup(_ data: Data, baseKey: KeychainKey, groupId: String) throws {
         let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        let wrapped = tryWrapPrivateKey(data) ?? data
+        let wrapped = try wrapForStorage(data)
         try saveSensitiveDataRaw(wrapped, keyName: keyName)
     }
 
@@ -476,14 +480,8 @@ final class KeychainService {
         let deviceId = try deviceIdentifier()
         let keyName = "\(baseKey.rawValue).\(deviceId)"
 
-        // Wrap with Secure Enclave
-        let wrapped: Data
-        if let wrappedData = tryWrapPrivateKey(data) {
-            wrapped = wrappedData
-        } else {
-            // Fallback to raw storage if SE unavailable (logged in tryWrapPrivateKey)
-            wrapped = data
-        }
+        // Wrap with Secure Enclave (unwrapped only without one: see wrapForStorage)
+        let wrapped = try wrapForStorage(data)
 
         try saveSensitiveDataRaw(wrapped, keyName: keyName, accessible: Self.accessibility(for: baseKey))
     }
@@ -560,15 +558,9 @@ final class KeychainService {
         try deleteSensitiveDataRaw(keyName: keyName)
     }
 
-    private func saveSensitiveDataForAccount(_ data: Data, baseKey: KeychainKey, publicAddress: String) throws {
+    /// `wrapped` is already through `wrapForStorage`.
+    private func saveSensitiveDataForAccount(wrapped: Data, baseKey: KeychainKey, publicAddress: String) throws {
         let keyName = try accountScopedKeyName(baseKey: baseKey, publicAddress: publicAddress)
-
-        let wrapped: Data
-        if let wrappedData = tryWrapPrivateKey(data) {
-            wrapped = wrappedData
-        } else {
-            wrapped = data
-        }
 
         try saveSensitiveDataRaw(wrapped, keyName: keyName, accessible: Self.accessibility(for: baseKey))
     }
@@ -620,25 +612,13 @@ final class KeychainService {
     }
 
     /// Low-level save for device-specific data (no sync, device-only access)
+    /// Updated in place, added only when missing: a delete then a failed add (the phone locked,
+    /// say) lost the only copy.
     private func saveSensitiveDataRaw(_ data: Data, keyName: String, accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) throws {
-        var query = genericPasswordQueryForKey(keyName, includeAccessGroup: true)
-
-        SecItemDelete(query as CFDictionary)
-
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = accessible
-        query[kSecAttrSynchronizable as String] = kCFBooleanFalse
-
-        let status = SecItemAdd(query as CFDictionary, nil)
+        let status = upsertSensitiveDataRaw(data, keyName: keyName, accessible: accessible, includeAccessGroup: true)
         if status == errSecMissingEntitlement {
             // Fallback without access group
-            var fallbackQuery = genericPasswordQueryForKey(keyName, includeAccessGroup: false)
-            SecItemDelete(fallbackQuery as CFDictionary)
-            fallbackQuery[kSecValueData as String] = data
-            fallbackQuery[kSecAttrAccessible as String] = accessible
-            fallbackQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse
-
-            let fallbackStatus = SecItemAdd(fallbackQuery as CFDictionary, nil)
+            let fallbackStatus = upsertSensitiveDataRaw(data, keyName: keyName, accessible: accessible, includeAccessGroup: false)
             guard fallbackStatus == errSecSuccess else {
                 throw KasiaError.keychainError("Failed to save sensitive data: \(fallbackStatus)")
             }
@@ -647,6 +627,21 @@ final class KeychainService {
         guard status == errSecSuccess else {
             throw KasiaError.keychainError("Failed to save sensitive data: \(status)")
         }
+    }
+
+    private func upsertSensitiveDataRaw(_ data: Data, keyName: String, accessible: CFString, includeAccessGroup: Bool) -> OSStatus {
+        let query = genericPasswordQueryForKey(keyName, includeAccessGroup: includeAccessGroup)
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: accessible,
+        ]
+        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        guard status == errSecItemNotFound else { return status }
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = accessible
+        add[kSecAttrSynchronizable as String] = kCFBooleanFalse
+        return SecItemAdd(add as CFDictionary, nil)
     }
 
     /// Low-level load for device-specific data
@@ -836,14 +831,23 @@ final class KeychainService {
         try? delete(forKey: key, includeAccessGroup: false)
     }
 
-    private func tryWrapPrivateKey(_ privateKey: Data) -> Data? {
+    /// What a sensitive write stores: the data wrapped by the Secure Enclave. Unwrapped only on
+    /// hardware with no Secure Enclave at all (the Simulator), the same rule as
+    /// `deviceIdentifier`. On a phone that has one, a failed wrap throws: nothing re-wraps an item
+    /// later, so storing it bare would leave that key with only the Keychain's protection for good.
+    private func wrapForStorage(_ privateKey: Data) throws -> Data {
         do {
             return try wrapPrivateKey(privateKey)
         } catch {
-            // Every sensitive write comes through here, and the caller then stores it with only
-            // the Keychain's protection. Normal on the Simulator, worth knowing about on a phone.
-            AppLog.log("%@", "[Keychain] WARNING: Secure Enclave wrap failed, storing without it: \(error.localizedDescription)")
-            return nil
+            guard !SecureEnclave.isAvailable else {
+                AppLog.log("%@", "[Keychain] Secure Enclave wrap failed, nothing saved: \(error.localizedDescription)")
+                // Import and account switch show this and put the previous keys back.
+                throw KasiaError.keychainError(AppLocalization.string(
+                    "This iPhone's Secure Enclave couldn't protect the keys, so nothing was saved. Try again."
+                ))
+            }
+            AppLog.log("%@", "[Keychain] No Secure Enclave on this device; storing without hardware wrapping")
+            return privateKey
         }
     }
 

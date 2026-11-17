@@ -1467,7 +1467,7 @@ struct KasiaTransactionBuilder {
         feeOverride: UInt64? = nil
     ) throws -> ContextualSelection {
         // A coin a scheduled post is waiting to spend is not available (KaPostsScheduledStore).
-        let spendable = KaPostsScheduledStore.filterReserved(utxos).filter { !$0.isCoinbase }
+        let spendable = KaPostsScheduledStore.filterReserved(utxos).filter { !$0.isCoinbase && $0.covenantId == nil }
         let pending = spendable
             .filter { $0.blockDaaScore == 0 }
             .sorted { $0.amount > $1.amount }
@@ -1513,8 +1513,18 @@ struct KasiaTransactionBuilder {
 
         var selected: [UTXO] = []
         var total: UInt64 = 0
+        var hitTransactionLimit = false
 
         for utxo in prioritized {
+            // One transaction holds at most `maxInputsPerTransaction` coins and 100,000 grams;
+            // past either the node rejects it. A wallet of many small coins sending a 31 KB voice
+            // part needed more than that, the balance precheck passed, and every part failed.
+            guard selected.count < maxInputsPerTransaction,
+                  estimateFee(payload: payload, inputCount: selected.count + 1, outputs: [outputTemplate])
+                      / KaspaFeePolicy.minimumRelayFeePerGramSompi <= maxStandardMass else {
+                hitTransactionLimit = true
+                break
+            }
             selected.append(utxo)
             total = try addSompiChecked(total, utxo.amount, context: "contextual selection")
 
@@ -1531,6 +1541,9 @@ struct KasiaTransactionBuilder {
             }
         }
 
+        if hitTransactionLimit {
+            throw KasiaError.networkError(AppLocalization.string("Your balance is spread over too many small coins for one transaction. Compound UTXOs in Manage Addresses, then try again."))
+        }
         throw KasiaError.networkError("Insufficient funds after fee")
     }
 

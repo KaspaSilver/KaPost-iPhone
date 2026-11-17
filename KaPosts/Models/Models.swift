@@ -163,9 +163,9 @@ enum ContactNotificationMode: String, Codable, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .off: return String(localized: "Off")
-        case .noSound: return String(localized: "No Sound")
-        case .sound: return String(localized: "Sound")
+        case .off: return AppLocalization.string("Off")
+        case .noSound: return AppLocalization.string("No Sound")
+        case .sound: return AppLocalization.string("Sound")
         }
     }
 }
@@ -177,9 +177,9 @@ enum PhotoAutoDisplayMode: String, Codable, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .automatic: return String(localized: "Automatic")
-        case .alwaysShow: return String(localized: "Always Show")
-        case .alwaysHide: return String(localized: "Always Hide")
+        case .automatic: return AppLocalization.string("Automatic")
+        case .alwaysShow: return AppLocalization.string("Always Show")
+        case .alwaysHide: return AppLocalization.string("Always Hide")
         }
     }
 }
@@ -321,37 +321,6 @@ struct Contact: Codable, Identifiable, Equatable, Hashable {
         let body = parts[1]
         guard body.count > 12 else { return "\(prefix):\(body)" }
         return "\(prefix):\(body.prefix(4))....\(body.suffix(4))"
-    }
-}
-
-/// One saved Kaspa address in the Address Book (Kaspa Hub > Address Book). Kept per wallet,
-/// on this device and in the chat backup - never in the phone's Contacts.
-struct AddressBookEntry: Codable, Identifiable, Equatable, Hashable {
-    var id: UUID
-    var address: String
-    /// May be empty: the person removed the name they gave, and the address goes by who it is on
-    /// chain again (its .kachat name, else the address). Read it through `customName`.
-    var name: String
-
-    /// The name the person gave this address, or nil when it has none.
-    var customName: String? {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-    var note: String
-    var createdAt: Date
-    var updatedAt: Date
-    /// The assigned photo as base64 JPEG - only in the backup archive. In the app it is a file
-    /// (`AddressBookManager.photo(for:)`), so this stays nil everywhere else.
-    var photo: String? = nil
-
-    init(id: UUID = UUID(), address: String, name: String, note: String = "", createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id
-        self.address = address
-        self.name = name
-        self.note = note
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
     }
 }
 
@@ -576,13 +545,13 @@ enum MessageRetention: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .forever:
-            return String(localized: "Keep forever")
+            return AppLocalization.string("Keep forever")
         case .days30:
-            return String(localized: "30 days")
+            return AppLocalization.string("30 days")
         case .days90:
-            return String(localized: "90 days")
+            return AppLocalization.string("90 days")
         case .year1:
-            return String(localized: "1 year")
+            return AppLocalization.string("1 year")
         }
     }
 }
@@ -1773,7 +1742,7 @@ struct PublicChatVoiceNote: Equatable {
     let count: Int
     /// The parts present, one per index, in index order.
     let parts: [PublicChatMessage]
-    /// The earliest part in the room: where the one bubble sits, and whose time it shows.
+    /// The lowest-index part present: where the one bubble sits, and whose time it shows.
     let anchor: PublicChatMessage
 
     var isComplete: Bool { parts.count == count }
@@ -1804,6 +1773,9 @@ enum PublicChatVoiceParts {
         var notesByAnchorId: [String: PublicChatVoiceNote] = [:]
         /// Parts that aren't their note's anchor: not drawn.
         var hiddenIds: Set<String> = []
+        /// Each hidden part's anchor id, so a reply or reaction aimed at a hidden part (another
+        /// client that shows parts one by one) lands on the bubble.
+        var anchorIdByPartId: [String: String] = [:]
     }
 
     /// Groups the voice-note parts of a room's `messages`, which must be in room order. A note
@@ -1819,7 +1791,7 @@ enum PublicChatVoiceParts {
         }
         var result = Result()
         for key in order {
-            guard let members = tagged[key], let anchor = members.first?.message else { continue }
+            guard let members = tagged[key], !members.isEmpty else { continue }
             var byIndex: [Int: PublicChatMessage] = [:]
             for member in members {
                 if let existing = byIndex[member.tag.index] {
@@ -1831,14 +1803,20 @@ enum PublicChatVoiceParts {
                     byIndex[member.tag.index] = member.message
                 }
             }
+            // The anchor is the lowest index present, not the earliest row: while a note sends,
+            // its parts swap places as each one's local time becomes the chain's, and an anchor
+            // that followed room order hopped from part to part (and stopped playback).
+            let parts = byIndex.keys.sorted().compactMap { byIndex[$0] }
+            guard let anchor = parts.first else { continue }
             result.notesByAnchorId[anchor.id] = PublicChatVoiceNote(
                 key: key,
                 count: members[0].tag.count,
-                parts: byIndex.keys.sorted().compactMap { byIndex[$0] },
+                parts: parts,
                 anchor: anchor
             )
             for member in members where member.message.id != anchor.id {
                 result.hiddenIds.insert(member.message.id)
+                result.anchorIdByPartId[member.message.id] = anchor.id
             }
         }
         return result
@@ -1886,6 +1864,9 @@ enum VoiceMessageSniff {
     private static let payloadCache: NSCache<NSString, PayloadBox> = {
         let cache = NSCache<NSString, PayloadBox>()
         cache.countLimit = 64
+        // Bounded by size too: a room of long voice notes fills it with 31 KB parts, and a
+        // single voice message can be far larger.
+        cache.totalCostLimit = 16 * 1024 * 1024
         return cache
     }()
 
@@ -1898,7 +1879,7 @@ enum VoiceMessageSniff {
         let key = text as NSString
         if let cached = payloadCache.object(forKey: key) { return cached.payload }
         guard let payload = decodeUncached(text) else { return nil }
-        payloadCache.setObject(PayloadBox(payload), forKey: key)
+        payloadCache.setObject(PayloadBox(payload), forKey: key, cost: payload.data.count)
         return payload
     }
 
@@ -2607,8 +2588,8 @@ enum NotificationMode: String, Codable, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .disabled: return String(localized: "Disabled")
-        case .remotePush: return String(localized: "Remote push")
+        case .disabled: return AppLocalization.string("Disabled")
+        case .remotePush: return AppLocalization.string("Remote push")
         }
     }
 }
@@ -2638,6 +2619,14 @@ enum KachatNameLabel {
 
     static func display(_ name: String) -> String {
         showsEnding ? "\(name).kachat" : name
+    }
+
+    /// A name kept in full ("alice.kachat", or any other service's name) as it shows now. Screens
+    /// keep the full name and format it when drawn, so flipping the setting reaches them too.
+    static func shown(fullName: String) -> String {
+        let ending = ".kachat"
+        guard fullName.lowercased().hasSuffix(ending) else { return fullName }
+        return display(String(fullName.dropLast(ending.count)))
     }
 }
 
@@ -2968,7 +2957,7 @@ struct AppSettings: Codable {
             hubTabs: AppTab.defaultHub.map { $0.rawValue },
             childModeEnabled: false,
             biometricSeedPhraseEnabled: true,
-            // Asked when signing back in to a saved account: on by default (owner's call, 2026-11-01).
+            // Asked when signing back in to a saved account: off by default, the same as KaChat.
             biometricAccountLoginEnabled: false,
             biometricSpendingKeyEnabled: true,
             swapDisclaimerAgreed: false,

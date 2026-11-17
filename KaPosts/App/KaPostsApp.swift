@@ -308,7 +308,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             }
             if threadId == "kaposts" {
                 // The per-kind switches; and no banner while the Notifications screen is open.
-                if !Self.kaPostsPushAllowed(userInfo: userInfo, body: body, settings: settings)
+                // Nothing from someone you blocked or muted, as in the in-app count, when the
+                // push names who acted (`actor_pubkey`; until the push service sends it, only
+                // turning off a blocked author's bell keeps their posts away).
+                let actorHidden = (userInfo["actor_pubkey"] as? String)
+                    .flatMap { KaPostsAPIClient.kaspaAddress(fromPubkey: $0) }
+                    .map { KaPostsModerationStore.shared.isHidden($0) } ?? false
+                if actorHidden
+                    || !Self.kaPostsPushAllowed(userInfo: userInfo, body: body, settings: settings)
                     || (UIApplication.shared.applicationState == .active
                         && KaPostsNotificationService.shared.isNotificationsScreenVisible) {
                     completionHandler([])

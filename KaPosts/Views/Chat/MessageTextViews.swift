@@ -93,19 +93,19 @@ struct KaChatInternalLinkCardView: View {
             // A quote with no added comment is a repost: there is no text to show, so say what
             // it is rather than leaving the card looking half-loaded.
             return entry.snippet.isEmpty
-                ? (entry.action == "quote" ? "Reposted a post." : AppLocalization.string("Tap to open it in KaPost."))
+                ? AppLocalization.string(entry.action == "quote" ? "Reposted a post." : "Tap to open it in KaPost.")
                 : entry.snippet
         case .publicChatRoom(let channel):
             // Curated rooms and rooms already in the list just open; anything else is created
             // and added to the user's channel list on tap, so say so before they tap.
             let known = PublicChatService.curatedChannels.contains(channel)
                 || PublicChatService.shared.channels.contains { $0.channelName == channel }
-            return known
+            return AppLocalization.string(known
                 ? "Tap to open this public chat room."
-                : "Tap to join this public chat room."
+                : "Tap to join this public chat room.")
         case .profile(let address):
             let isContact = ContactsManager.shared.contacts.contains { $0.address.lowercased() == address }
-            return isContact ? "Tap to open your chat." : "Tap to see their KaPost profile."
+            return AppLocalization.string(isContact ? "Tap to open your chat." : "Tap to see their KaPost profile.")
         case .paymentRequest(let request):
             let action = request.isOwn ? AppLocalization.string("Your payment request. Tap to view.") : AppLocalization.string("Tap to pay.")
             var lines: [String] = []
@@ -144,7 +144,7 @@ struct KaChatInternalLinkCardView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(eyebrow)
+                Text(LocalizedStringKey(eyebrow))
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(.accentColor)
                     .textCase(.uppercase)
@@ -745,7 +745,7 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
     }
 
     private func formattedDuration(_ duration: TimeInterval) -> String {
-        guard duration.isFinite else { return "--:--" }
+        guard duration.isFinite, duration >= 0, duration < 360_000 else { return "--:--" }
         let totalSeconds = Int(duration)
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
@@ -981,9 +981,15 @@ struct WebMOpusDecoder {
 
             let skip = Int(Double(head.preSkip) * outputRate / 48_000.0)
             if skip > 0 && mono.count > skip { mono.removeFirst(skip) }
-            if let durationMs = parsed.durationMs {
-                let wanted = Int((durationMs / 1000.0 * outputRate).rounded())
-                if wanted > 0 && wanted < mono.count { mono.removeLast(mono.count - wanted) }
+            // Duration comes from the sender's file, so it can be anything (NaN, infinite,
+            // huge). Only trim when it is a sane, finite value shorter than what decoded;
+            // converting an out-of-range Double to Int would crash.
+            if let durationMs = parsed.durationMs, durationMs.isFinite, durationMs > 0 {
+                let wantedFrames = (durationMs / 1000.0 * outputRate).rounded()
+                if wantedFrames < Double(mono.count) {
+                    let wanted = Int(wantedFrames)
+                    if wanted > 0 { mono.removeLast(mono.count - wanted) }
+                }
             }
 
             for sample in mono {

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Unseen-KaPosts-activity count: what the notifications tab's badge shows.
 ///
@@ -13,17 +14,37 @@ final class KaPostsNotificationCenter: ObservableObject {
     /// How many notifications have arrived since the user last opened the KaPosts bell.
     @Published private(set) var unseenCount: Int = 0
 
-    private init() { reload() }
+    /// The account `unseenCount` was loaded for. The count is read and saved under this address,
+    /// not whatever wallet is current at write time, so one account's number never lands under
+    /// another's key.
+    private var loadedAddress = ""
+    private var walletCancellable: AnyCancellable?
 
-    private var walletAddress: String { WalletManager.shared.currentWallet?.publicAddress ?? "" }
-    private var unseenKey: String { "kapostsNotifCenter.unseen.\(walletAddress)" }
+    private init() {
+        loadedAddress = WalletManager.shared.currentWallet?.publicAddress ?? ""
+        reload()
+        // Log Out, sign-in, import and account switches all change `currentWallet`; none of them
+        // called `reload()`, so the last account's count stayed on the dock and the next poll
+        // added to it and saved it under the new account. `@Published` fires before the value is
+        // stored, so the new address comes from the sink, not from `WalletManager`.
+        walletCancellable = WalletManager.shared.$currentWallet
+            .map { $0?.publicAddress ?? "" }
+            .removeDuplicates()
+            .sink { [weak self] address in
+                guard let self, address != self.loadedAddress else { return }
+                self.loadedAddress = address
+                self.reload()
+            }
+    }
+
+    private var unseenKey: String { "kapostsNotifCenter.unseen.\(loadedAddress)" }
 
     /// Delete Account: one wallet's count, from this device.
     static func removeAllData(forWalletAddress walletAddress: String) {
         UserDefaults.standard.removeObject(forKey: "kapostsNotifCenter.unseen.\(walletAddress)")
     }
 
-    /// Call on account switch (and at init) to load the active wallet's count.
+    /// Loads the active wallet's count (account switches reload by themselves, see `init`).
     func reload() {
         unseenCount = max(0, UserDefaults.standard.integer(forKey: unseenKey))
     }

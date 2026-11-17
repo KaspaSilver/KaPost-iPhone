@@ -1054,7 +1054,7 @@ struct KachatLiveExpiredPage: View {
                         NavigationLink { KachatListingDetailView(info: n) } label: {
                             KachatNameTile(name: n.name) {
                                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                                    let releaseAt = n.expiresAt + (KachatLive.params?.graceMs ?? 0)
+                                    let releaseAt = KachatNames.clampedSum(n.expiresAt, KachatLive.params?.graceMs ?? 0)
                                     let left = releaseAt - Int64(context.date.timeIntervalSince1970 * 1000)
                                     VStack(spacing: 2) {
                                         Text("Released in")
@@ -2659,7 +2659,7 @@ struct KachatLiveNameDetail: View {
             }
             if status == .grace {
                 // when the grace period ends: then anyone can claim it (Available)
-                let ends = info.expiresAt + registry.graceMs
+                let ends = KachatNames.clampedSum(info.expiresAt, registry.graceMs)
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Grace period ends \(KachatLive.day(ends))")
@@ -3578,7 +3578,7 @@ struct KachatLiveDomainsTab: View {
     static func expiryLine(for n: KachatNames.NameInfo, graceMs: Int64) -> String? {
         switch n.status(graceMs: graceMs) {
         case .active: return String(format: AppLocalization.string("Expires %@"), KachatLive.day(n.expiresAt))
-        case .grace: return String(format: AppLocalization.string("Grace ends %@"), KachatLive.day(n.expiresAt + graceMs))
+        case .grace: return String(format: AppLocalization.string("Grace ends %@"), KachatLive.day(KachatNames.clampedSum(n.expiresAt, graceMs)))
         case .lapsed: return nil
         }
     }
@@ -4315,7 +4315,7 @@ struct KachatExpiredNamesBanner: View {
                         .font(.subheadline.weight(.semibold))
                     Text(visible.count == 1
                          ? String(format: AppLocalization.string("Renew %@ before its grace period ends on %@ to keep it."),
-                                  KachatNameLabel.display(n.name), KachatNamesActions.dayString(n.expiresAt + registry.graceMs))
+                                  KachatNameLabel.display(n.name), KachatNamesActions.dayString(KachatNames.clampedSum(n.expiresAt, registry.graceMs)))
                          : AppLocalization.string("Renew them before their grace periods end to keep them."))
                         .font(.caption)
                         .foregroundColor(.secondary)

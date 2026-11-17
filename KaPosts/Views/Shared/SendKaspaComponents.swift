@@ -223,8 +223,8 @@ struct OtherDomainsDropdown: View {
     }
 
     static func missingText(_ r: NameResolution) -> String {
-        if r.notLive { return String(localized: "Coming soon") }
-        return r.failed ? String(localized: "Couldn't check") : String(localized: "Not registered")
+        if r.notLive { return AppLocalization.string("Coming soon") }
+        return r.failed ? AppLocalization.string("Couldn't check") : AppLocalization.string("Not registered")
     }
 }
 
@@ -529,7 +529,8 @@ struct SendFeeControls: View {
 /// "Automatic" or "3 UTXOs selected", for the coin control row.
 func coinControlSummary(_ manualUtxos: [UTXO]?) -> String {
     guard let manualUtxos else { return AppLocalization.string("Automatic") }
-    return "\(manualUtxos.count) UTXO\(manualUtxos.count == 1 ? "" : "s") selected"
+    let key = manualUtxos.count == 1 ? "%lld UTXO selected" : "%lld UTXOs selected"
+    return String(format: AppLocalization.string(key), locale: AppLocalization.locale, manualUtxos.count)
 }
 
 /// A small glass capsule for one line of context (available balance, fee).
@@ -793,65 +794,6 @@ struct SendFeeEditorScreen: View {
                 }
                 .padding(.horizontal, 12)
             }
-        }
-    }
-}
-
-/// The amount step's From: the two pills of `SendFromSection` - Your Address and Choose an
-/// Address (any of your addresses; once picked, the pill shows its name) - without the address
-/// card under them, so the keypad has room. The balance it loads is the amount's Available.
-struct SendFromCompactRow: View {
-    @Binding var source: SendSource
-    /// The chosen address's balance, loaded here (nil while it loads).
-    @Binding var availableSompi: UInt64?
-    /// Opened from one address's own page: that address only, shown as the one pill.
-    var isLocked: Bool = false
-    @State private var showPicker = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text("From")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
-            if isLocked {
-                SelectablePill(title: LocalizedStringKey(sourceTitle), selected: true) {}
-                    .allowsHitTesting(false)
-            } else {
-                SelectablePill(title: "Chatting Address", selected: source == .chatting) {
-                    source = .chatting
-                }
-                SelectablePill(title: chooseTitle, selected: source != .chatting) {
-                    showPicker = true
-                }
-            }
-        }
-        .sheet(isPresented: $showPicker) {
-            OwnAddressPicker(title: "Send From", selected: source.address) { picked in
-                source = picked
-            }
-        }
-        .task(id: source) {
-            availableSompi = nil
-            guard let address = source.address else { return }
-            // A failed read says nothing about the balance: left unknown, not shown as 0.
-            let utxos = try? await NodePoolService.shared.getUtxosByAddresses([address])
-            guard !Task.isCancelled, let utxos else { return }
-            // what a send can spend: not coins just spent, held or not yet usable
-            availableSompi = ChatService.shared.withdrawalSpendable(utxos).reduce(UInt64(0)) { $0 + $1.amount }
-        }
-    }
-
-    /// "Choose an Address", or the picked address's name.
-    private var chooseTitle: LocalizedStringKey {
-        if case .spending(_, _, let label) = source { return LocalizedStringKey(label) }
-        return "Choose an Address"
-    }
-
-    private var sourceTitle: String {
-        switch source {
-        case .chatting: return AppLocalization.string("Chatting Address")
-        case .spending(_, _, let label): return label
         }
     }
 }
@@ -1315,7 +1257,8 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     /// The screen's error for a send that failed, shown under "Failed".
     var failureMessage: String?
     var labels: SwipeUpLabels = .send
-    /// What the Face ID prompt says, when this screen does something other than send Kaspa.
+    /// Set only by the .kachat screens, which still ask for Face ID first: what the prompt says.
+    /// Nil (every Kaspa send) sends on the swipe alone (owner's call, 2026-11-13).
     var authReason: String? = nil
     /// For an action that ends without a `SentTransaction` (a .kachat claim): true once it
     /// worked, and `outcome` shows under the title in place of the transaction.
@@ -1348,8 +1291,8 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     private static var barHeight: CGFloat { 64 }
     private static var settle: Animation { .spring(response: 0.45, dampingFraction: 0.86) }
 
-    /// Face ID is up for a send. Until it answers the screen is still the form, so without this a
-    /// second swipe (or VoiceOver activation) in that moment asked again and could send twice.
+    /// Face ID is up for a .kachat action. Until it answers the screen is still the form, so without
+    /// this a second swipe (or VoiceOver activation) in that moment asked again and could send twice.
     @State private var authPending = false
 
     private var active: Bool { isEnabled && !isBusy && !authPending }
@@ -1483,13 +1426,18 @@ struct SwipeUpToSendScrollView<Content: View>: View {
         }
     }
 
-    /// Kaspa never leaves on the swipe alone: Face ID first, on every screen that swipes up.
-    /// Declined, the screen settles back with everything still filled in.
+    /// A Kaspa send goes on the swipe: the swipe is the confirmation, and `startSending` switches to
+    /// `.sending` at once, so a second swipe can't send twice. A .kachat action (`authReason` set)
+    /// asks for Face ID first; declined, the screen settles back with everything still filled in.
     private func authenticateThenSend() {
         guard !authPending, phase == .form else { return }
+        guard let authReason else {
+            startSending()
+            return
+        }
         authPending = true
         DeviceAuth.authenticate(
-            reason: authReason ?? AppLocalization.string("Confirm sending Kaspa"),
+            reason: authReason,
             onSuccess: {
                 startSending()
                 authPending = false
@@ -1503,6 +1451,7 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     }
 
     private func startSending() {
+        guard phase == .form else { return }
         armed = false
         dagShown = false
         sendStarted = isBusy

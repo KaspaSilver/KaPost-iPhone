@@ -120,7 +120,11 @@ struct CoinControlView: View {
                         }
                     } footer: {
                         if !selectedKeys.isEmpty {
-                            Text(verbatim: "Selected: \(formatKas(selectedTotalSompi)) \(KaspaUnit.symbol) (\(selectedKeys.count) UTXO\(selectedKeys.count == 1 ? "" : "s"))")
+                            Text(verbatim: String(format: AppLocalization.string(selectedKeys.count == 1
+                                                                                  ? "Selected: %@ (%lld UTXO)"
+                                                                                  : "Selected: %@ (%lld UTXOs)"),
+                                                  locale: AppLocalization.locale,
+                                                  "\(formatKas(selectedTotalSompi)) \(KaspaUnit.symbol)", selectedKeys.count))
                         }
                     }
                 }

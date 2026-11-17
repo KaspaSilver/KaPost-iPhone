@@ -190,18 +190,55 @@ final class KaPostsScheduledStore: ObservableObject {
         inFlight.insert(entry.id)
         defer { inFlight.remove(entry.id) }
         let current = entries.first { $0.id == entry.id } ?? entry
-        if current.onServer, current.status == .scheduled {
+        if current.status == .scheduled {
             do {
                 try await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: entry.id)
+            } catch KaPostsAPIClient.KaPostsAPIError.api {
+                // The indexer answered and doesn't hold it: nothing there to cancel.
             } catch {
                 AppLog.log("[KaPosts] Cancelling a scheduled post failed: %@", error.localizedDescription)
-                return AppLocalization.string("Couldn't reach the server, so this post is still scheduled. Try again in a moment.")
+                if current.onServer {
+                    return AppLocalization.string("Couldn't reach the server, so this post is still scheduled. Try again in a moment.")
+                }
+                // Kept only here, but the indexer may have it anyway: a schedule whose answer
+                // was lost reached it all the same. Cancelled here now, and told to the indexer
+                // whenever it can be reached again, before the post's time if possible.
+                rememberCancel(entry.id)
             }
         }
         entries.removeAll { $0.id == entry.id }
         persist()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.reminderId(entry.id)])
         return nil
+    }
+
+    // MARK: - Cancels still owed to the indexer
+
+    private var pendingCancelsKey: String? { scopedKey.map { "\($0)_pending_cancels" } }
+
+    private func rememberCancel(_ txId: String) {
+        guard let key = pendingCancelsKey else { return }
+        var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+        if !ids.contains(txId) { ids.append(txId) }
+        UserDefaults.standard.set(ids, forKey: key)
+    }
+
+    /// Tells the indexer about cancels it missed. An id leaves the list once the indexer has
+    /// answered, either way.
+    private func flushPendingCancels() async {
+        guard let key = pendingCancelsKey,
+              let ids = UserDefaults.standard.stringArray(forKey: key), !ids.isEmpty else { return }
+        var left: [String] = []
+        for id in ids {
+            do {
+                try await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: id)
+            } catch KaPostsAPIClient.KaPostsAPIError.api {
+                // Answered: it doesn't hold it.
+            } catch {
+                left.append(id)
+            }
+        }
+        UserDefaults.standard.set(left, forKey: key)
     }
 
     func remove(_ entry: KaPostScheduledEntry) {
@@ -214,6 +251,7 @@ final class KaPostsScheduledStore: ObservableObject {
     func sendDueLocally() async {
         // What the indexer did with posts past their time comes first; with no answer from it,
         // the phone sends them.
+        await flushPendingCancels()
         let now = Date()
         if entries.contains(where: { $0.onServer && $0.status == .scheduled && $0.notBefore <= now }) {
             await pullServerOutcomes()
@@ -240,9 +278,16 @@ final class KaPostsScheduledStore: ObservableObject {
                     updated.submittedAt = Date()
                     AppLog.log("[KaPosts] Scheduled post submitted from the phone: %@", String(txId.prefix(12)))
                 } catch let rejection as NodePoolService.NodeRejectedTransactionError {
-                    updated.status = .failed
-                    updated.error = rejection.localizedDescription
-                    AppLog.log("[KaPosts] Scheduled post rejected: %@", rejection.localizedDescription)
+                    // Rejected because it is already on chain (the indexer sent it after all,
+                    // and its answer never reached the phone): that's a post that went out.
+                    if await KaPostChainReader.fetch(txId: entry.id) != nil {
+                        updated.status = .submitted
+                        updated.submittedAt = Date()
+                    } else {
+                        updated.status = .failed
+                        updated.error = rejection.localizedDescription
+                        AppLog.log("[KaPosts] Scheduled post rejected: %@", rejection.localizedDescription)
+                    }
                 } catch {
                     // Offline, still connecting, or no answer: it stays scheduled, its coins
                     // held, and goes again next time. The same signed transaction can't pay twice.
@@ -270,6 +315,7 @@ final class KaPostsScheduledStore: ObservableObject {
 
     /// The indexer's view of this wallet's scheduled posts, then whatever is left for the phone.
     func refreshFromServer() async {
+        await flushPendingCancels()
         await pullServerOutcomes()
         await submitDue()
     }
@@ -293,6 +339,11 @@ final class KaPostsScheduledStore: ObservableObject {
             }
             let status = KaPostScheduledEntry.Status(rawValue: server.status) ?? entries[index].status
             if status != entries[index].status || server.error != entries[index].error {
+                // Sent by the indexer: the scheduled store stops holding its coins now, but the
+                // node lists them until the spend is in a block, so the send queue holds them on.
+                if status == .submitted, entries[index].status == .scheduled {
+                    ChatService.shared.reserveOutpointKeys(entries[index].spentOutpoints)
+                }
                 entries[index].status = status
                 entries[index].error = server.error
                 entries[index].submittedAt = server.submittedAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
@@ -310,8 +361,8 @@ final class KaPostsScheduledStore: ObservableObject {
     /// the app is what sends it.
     private func scheduleReminder(for entry: KaPostScheduledEntry) {
         let content = UNMutableNotificationContent()
-        content.title = "Scheduled post"
-        content.body = "Your post is ready to go out. Open KaPost to send it."
+        content.title = AppLocalization.string("Scheduled post")
+        content.body = AppLocalization.string("Your post is ready to go out. Open KaPost to send it.")
         content.sound = .default
         content.threadIdentifier = "kaposts-scheduled"
         let seconds = max(1, entry.notBefore.timeIntervalSinceNow)

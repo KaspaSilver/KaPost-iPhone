@@ -165,88 +165,6 @@ enum ActionSheetTileMetrics {
     }
 }
 
-/// Renaming something, in a half sheet.
-///
-/// A system alert with a text field is the platform's default for this, and it is the wrong
-/// shape: it steals the whole screen for one word, and its field is a cramped afterthought. This
-/// is the same sheet every other cold-storage action already uses.
-struct RenameSheet: View {
-    let title: String
-    var subtitle: String?
-    var fieldLabel: String = "Name"
-    @Binding var text: String
-    let onSave: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @FocusState private var focused: Bool
-
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    var body: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .padding(.top, 20)
-            .padding(.bottom, 4)
-
-            TextField(fieldLabel, text: $text)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .focused($focused)
-                .onSubmit(save)
-                .padding(14)
-                .background(glassBackground(cornerRadius: 16))
-
-            HStack(spacing: 12) {
-                Button("Cancel") { dismiss() }
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.primary)
-                    .background(glassBackground(cornerRadius: 16))
-
-                Button("Save", action: save)
-                    .font(.subheadline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.black)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.accentColor.opacity(trimmed.isEmpty ? 0.4 : 1))
-                    )
-                    .disabled(trimmed.isEmpty)
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.height(260)])
-        .presentationDragIndicator(.visible)
-        // A turn later: the field does not exist yet on the tap that presented this.
-        .onAppear { DispatchQueue.main.async { focused = true } }
-    }
-
-    private func save() {
-        guard !trimmed.isEmpty else { return }
-        onSave(trimmed)
-        Haptics.success()
-        dismiss()
-    }
-}
-
 /// Who reacted to one message, and with what.
 ///
 /// The pill on a bubble shows which emoji are on it and nothing else - not how many of each, and
@@ -597,7 +515,8 @@ struct ConfirmActionSheet: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text(title)
+            // Looked up, not shown verbatim (see ActionSheetRow): callers pass English keys.
+            Text(LocalizedStringKey(title))
                 .font(.headline)
                 .multilineTextAlignment(.center)
                 .padding(.top, 20)
@@ -927,7 +846,8 @@ struct MessageActionsSheet: View {
     var body: some View {
         VStack(spacing: 12) {
             VStack(spacing: 4) {
-                Text(request.title)
+                // Callers pass English keys ("Link", "Voice Message"): looked up, not verbatim.
+                Text(LocalizedStringKey(request.title))
                     .font(.headline)
                 if let preview = request.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
                     Text(preview)

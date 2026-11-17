@@ -132,7 +132,8 @@ struct EmojiReactionPicker: View {
                 }
             }
         } header: {
-            Text(title)
+            // Section names are English keys ("Smileys", "Recents"): looked up, not verbatim.
+            Text(LocalizedStringKey(title))
                 .font(.caption.weight(.bold))
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

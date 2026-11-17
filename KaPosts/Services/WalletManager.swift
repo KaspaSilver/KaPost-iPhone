@@ -997,6 +997,9 @@ final class WalletManager: ObservableObject {
 
     /// Get the private key data for the current wallet (used for decryption)
     func getPrivateKey() -> Data? {
+        // Logged out (or no account in the slot): no key. Log Out keeps the keychain entries for
+        // a later sign-in, and this used to read them anyway for any caller still running.
+        guard currentWallet != nil, !isLoggedOut else { return nil }
         if let cached = cachedPrivateKey, cached.address == currentWallet?.publicAddress {
             return cached.key
         }
@@ -1300,7 +1303,7 @@ final class WalletManager: ObservableObject {
     /// Keeps on-disk wallet stores intact.
     private func resetInMemoryChatStateForAccountSwitch() {
         ChatService.shared.resetForNewWallet(skipStoreClear: true)
-        ContactsManager.shared.clearInMemoryContacts(syncShared: true, updatePush: false)
+        ContactsManager.shared.clearInMemoryContacts(updatePush: false)
     }
 
     /// When this account was first added to the app on this device, stamped once and never
@@ -2229,7 +2232,9 @@ final class WalletManager: ObservableObject {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let gate = ResumeOnceGate(continuation)
             Task { @MainActor in
-                await PushNotificationManager.shared.unregister()
+                // Retries by itself, after this wait and across launches, until the service
+                // answers, so a Log Out made offline still stops the account's pushes.
+                await PushNotificationManager.shared.unregisterForSignOut()
                 gate.resume()
             }
             Task {

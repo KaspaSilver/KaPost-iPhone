@@ -96,7 +96,7 @@ struct PassphraseOptionView: View {
 
     // MARK: - 1. The question
 
-    private var questionTitle: String {
+    private var questionTitle: LocalizedStringKey {
         "Did you create these words with a passphrase?"
     }
 
@@ -429,7 +429,7 @@ struct PassphraseOptionView: View {
         }
     }
 
-    private func explainerSection(_ title: String, _ body: String) -> some View {
+    private func explainerSection(_ title: LocalizedStringKey, _ body: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.headline)
@@ -451,11 +451,11 @@ struct PassphraseOptionView: View {
     private func submitFromEntry(skippingSearch: Bool = false) {
         guard skippingSearch || !isSearchingAddresses else { return }
         guard !passphrase.isEmpty else {
-            error = "Enter a passphrase, or go back and choose No."
+            error = AppLocalization.string("Enter a passphrase, or go back and choose No.")
             return
         }
         if mode == .create, passphrase != confirmPassphrase {
-            error = "The passphrases do not match. Please re-enter them."
+            error = AppLocalization.string("The passphrases do not match. Please re-enter them.")
             return
         }
         if skippingSearch { importChoice?.wrappedValue = ImportAccountChoice() }

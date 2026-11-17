@@ -204,6 +204,10 @@ final class NodePoolService: ObservableObject {
             connectionPool: connectionPool,
             epochMonitor: epochMonitor
         )
+        // A client that asked for block-added before the manager existed (a room scan can
+        // start before this runs) only landed in `blockAddedClients`; the new manager starts
+        // with the flag off, so carry the request over or that client never gets the stream.
+        await subscriptionManager?.setBlockAddedWanted(!blockAddedClients.isEmpty)
 
         // Bind subscription manager state
         subscriptionManager?.$state
@@ -628,24 +632,42 @@ final class NodePoolService: ObservableObject {
     /// `SendOutcomeUnknownError` rather than a failure: it may yet land.
     ///
     /// Whatever it spends is held back from the next send (`ChatService.reserveOutpointKeys`), here
-    /// rather than at each caller, so no path (KNS, .kachat names, posts, combines) can skip it, on
-    /// success. An unknown outcome is deliberately not held: the same as KaPay.
+    /// rather than at each caller, so no path (KNS, .kachat names, posts, combines) can skip it.
+    /// Held from before the submit, so a send running alongside outside the outgoing queue
+    /// can't pick the same coins; given back if nothing went out. An unknown outcome is
+    /// deliberately not held: the same as KaPay.
     func submitTransaction(_ transaction: KaspaRpcTransaction, allowOrphan: Bool = false) async throws -> (txId: String, endpoint: String) {
+        let rpcTransaction = transaction.toProtobuf()
+        let held = ChatService.shared.holdOutpointKeysForSubmit(Self.outpointKeys(of: rpcTransaction))
         do {
             let sent = try await submitTransactionUnrecorded(transaction, allowOrphan: allowOrphan)
-            reserveInputs(of: transaction.toProtobuf())
+            reserveInputs(of: rpcTransaction)
             return sent
         } catch let unknown as SendOutcomeUnknownError {
             // Not held, so a resend picks these same coins and only one of the two can land.
+            ChatService.shared.releaseOutpointKeys(held)
             ChatService.shared.invalidateUtxoCache()
             throw unknown
+        } catch {
+            releaseUnlessSpent(held, after: error)
+            throw error
         }
     }
 
+    private static func outpointKeys(of rpcTransaction: Protowire_RpcTransaction) -> [String] {
+        rpcTransaction.inputs.map { "\($0.previousOutpoint.transactionID):\($0.previousOutpoint.index)" }
+    }
+
     private func reserveInputs(of rpcTransaction: Protowire_RpcTransaction) {
-        ChatService.shared.reserveOutpointKeys(rpcTransaction.inputs.map {
-            "\($0.previousOutpoint.transactionID):\($0.previousOutpoint.index)"
-        })
+        ChatService.shared.reserveOutpointKeys(Self.outpointKeys(of: rpcTransaction))
+    }
+
+    /// Nothing went out: the coins go back, unless the node said they're already spent (gone
+    /// either way, and the node goes on listing them for a while).
+    private func releaseUnlessSpent(_ held: [String], after error: Error) {
+        let message = error.localizedDescription.lowercased()
+        guard !message.contains("spent"), !message.contains("double spend") else { return }
+        ChatService.shared.releaseOutpointKeys(held)
     }
 
     private func submitTransactionUnrecorded(_ transaction: KaspaRpcTransaction, allowOrphan: Bool) async throws -> (txId: String, endpoint: String) {
@@ -698,14 +720,19 @@ final class NodePoolService: ObservableObject {
     /// For the version-1 builders (`.kachat`), whose transactions aren't `KaspaRpcTransaction`s.
     /// Its inputs are held back as in `submitTransaction`.
     func submitRpcTransaction(_ rpcTransaction: Protowire_RpcTransaction, expectedTxId: String) async throws -> (txId: String, endpoint: String) {
+        let held = ChatService.shared.holdOutpointKeysForSubmit(Self.outpointKeys(of: rpcTransaction))
         do {
             let sent = try await submitRpcTransactionUnrecorded(rpcTransaction, expectedTxId: expectedTxId)
             reserveInputs(of: rpcTransaction)
             return sent
         } catch let unknown as SendOutcomeUnknownError {
             // Not held, so a resend picks these same coins and only one of the two can land.
+            ChatService.shared.releaseOutpointKeys(held)
             ChatService.shared.invalidateUtxoCache()
             throw unknown
+        } catch {
+            releaseUnlessSpent(held, after: error)
+            throw error
         }
     }
 
@@ -728,10 +755,11 @@ final class NodePoolService: ObservableObject {
 
     /// A node may have the transaction and its answer never came, so a resend could pay twice. Asks
     /// the network for longer than `isTransactionKnown` does, for one that's still on its way.
-    private func confirmAfterLostAnswer(txId: String) async throws -> (txId: String, endpoint: String) {
+    /// `excluding`: nodes whose word doesn't count (one that answered with a wrong id).
+    private func confirmAfterLostAnswer(txId: String, excluding: Set<String> = []) async throws -> (txId: String, endpoint: String) {
         for attempt in 0..<6 {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if await getMempoolEntry(txId: txId, attempt: attempt + 2) != nil { return (txId: txId, endpoint: "already-known") }
+            if await getMempoolEntry(txId: txId, attempt: attempt + 2, excluding: excluding) != nil { return (txId: txId, endpoint: "already-known") }
             if await Self.isAcceptedViaREST(txId: txId) { return (txId: txId, endpoint: "already-known") }
         }
         AppLog.log("[NodePool] submit of %@ got no answer and the network doesn't have it yet: outcome unknown", String(txId.prefix(12)))
@@ -749,13 +777,16 @@ final class NodePoolService: ObservableObject {
     ) async throws -> (txId: String, endpoint: String) {
         guard sent.txId.lowercased() == expectedTxId.lowercased() else {
             AppLog.log("[NodePool] %@ answered a submit with a different id than %@", sent.endpoint, String(expectedTxId.prefix(12)))
-            if await isTransactionKnown(txId: expectedTxId) { return (txId: expectedTxId, endpoint: "already-known") }
-            return try await confirmAfterLostAnswer(txId: expectedTxId)
+            if await isTransactionKnown(txId: expectedTxId, excluding: [sent.endpoint]) { return (txId: expectedTxId, endpoint: "already-known") }
+            return try await confirmAfterLostAnswer(txId: expectedTxId, excluding: [sent.endpoint])
         }
+        // the node that said "sent" isn't asked whether it has it: if it kept the transaction to
+        // itself, its own mempool would say yes and the resend below would never happen
+        let answeredBy: Set<String> = [sent.endpoint]
         Task { [weak self] in
             for _ in 0..<2 {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard let self, await !self.isTransactionKnown(txId: expectedTxId) else { return }
+                guard let self, await !self.isTransactionKnown(txId: expectedTxId, excluding: answeredBy) else { return }
                 AppLog.log("[NodePool] The network can't see %@ yet: sending it again", String(expectedTxId.prefix(12)))
                 _ = try? await self.submitRpcTransaction(rpcTransaction)
             }
@@ -778,12 +809,13 @@ final class NodePoolService: ObservableObject {
 
     /// Whether the network already has `txId`: in a mempool, or accepted (REST API). Checked
     /// twice, a moment apart, since a just-accepted transaction may not have propagated yet.
-    /// `afterRejection`: a node turned the transaction down, so a REST server typed into Settings
-    /// isn't enough to call it sent - only a mempool, or the built-in REST server.
-    private func isTransactionKnown(txId: String, afterRejection: Bool = false) async -> Bool {
+    /// `afterRejection`: a node turned the transaction down, so one node's mempool or a REST server
+    /// typed into Settings isn't enough to call it sent - only two nodes' mempools, or the
+    /// built-in REST server. `excluding`: nodes whose word doesn't count.
+    private func isTransactionKnown(txId: String, afterRejection: Bool = false, excluding: Set<String> = []) async -> Bool {
         for attempt in 0..<2 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
-            if await getMempoolEntry(txId: txId, attempt: attempt) != nil { return true }
+            if await getMempoolEntry(txId: txId, attempt: attempt, excluding: excluding, minSources: afterRejection ? 2 : 1) != nil { return true }
             if await Self.isAcceptedViaREST(txId: txId, builtInServerOnly: afterRejection) { return true }
         }
         return false
@@ -881,13 +913,16 @@ final class NodePoolService: ObservableObject {
     }
 
     /// Get mempool entry for a transaction (returns nil if not in mempool)
-    /// Queries top 10 active nodes by latency in parallel with single immediate attempt
+    /// Queries the primary and the 3 fastest other active nodes in parallel, single attempt each.
+    /// An entry counts only if its transaction hashes to `txId` here and it isn't an orphan.
     /// - Parameters:
     ///   - txId: Transaction ID to look up
     ///   - attempt: Optional attempt number for logging (tracks how many times this was called)
-    func getMempoolEntry(txId: String, attempt: Int = 0) async -> MempoolEntryResult? {
-        // Get active nodes sorted by latency, limited to top 10
-        let activeRecords = await registry.records(inState: .active)
+    ///   - excluding: endpoint keys not to ask
+    ///   - minSources: how many nodes must have it
+    func getMempoolEntry(txId: String, attempt: Int = 0, excluding: Set<String> = [], minSources: Int = 1) async -> MempoolEntryResult? {
+        // Get active nodes sorted by latency
+        let activeRecords = await registry.records(inState: .active).filter { !excluding.contains($0.endpoint.key) }
         let sortedRecords = activeRecords.sorted { a, b in
             let aLatency = a.health.latencyMs.value ?? a.health.globalLatencyMs.value ?? Double.infinity
             let bLatency = b.health.latencyMs.value ?? b.health.globalLatencyMs.value ?? Double.infinity
@@ -915,9 +950,12 @@ final class NodePoolService: ObservableObject {
                 }
             }
 
-            // Return first non-nil result
+            // Return once enough nodes have it: after a rejection one node's say-so isn't enough
+            var sources = 0
             for await tuple in group {
                 if let (entry, endpoint) = tuple, let entry = entry {
+                    sources += 1
+                    guard sources >= minSources else { continue }
                     group.cancelAll()
                     AppLog.log("[NodePool] getMempoolEntry: FOUND %@ in mempool on attempt %d from %@ (payload: %d chars, outputs: %d, fee: %llu)",
                           String(txId.prefix(12)), attempt, endpoint.key, entry.payload.count, entry.outputs.count, entry.fee)
@@ -950,7 +988,8 @@ final class NodePoolService: ObservableObject {
             var msg = Protowire_KaspadMessage()
             var req = Protowire_GetMempoolEntryRequestMessage()
             req.txID = txId
-            req.includeOrphanPool = true
+            // an orphan can't land until its parents do: it doesn't count as sent
+            req.includeOrphanPool = false
             req.filterTransactionPool = false
             msg.getMempoolEntryRequest = req
 
@@ -970,11 +1009,16 @@ final class NodePoolService: ObservableObject {
             }
 
             let entry = mempoolResponse.entry
-            guard entry.hasTransaction else {
+            guard entry.hasTransaction, !entry.isOrphan else {
                 return nil
             }
 
             let tx = entry.transaction
+            // nodes are unauthenticated: the entry must really be the transaction asked about
+            guard Self.transactionId(of: tx)?.lowercased() == txId.lowercased() else {
+                AppLog.log("[NodePool] %@ answered a mempool look-up for %@ with another transaction", conn.endpoint.key, String(txId.prefix(12)))
+                return nil
+            }
 
             // Extract inputs (outpoints only; address resolution happens elsewhere)
             var inputs: [(txId: String, index: UInt32)] = []
@@ -1002,6 +1046,71 @@ final class NodePoolService: ObservableObject {
                 isOrphan: entry.isOrphan
             )
         } catch {
+            return nil
+        }
+    }
+
+    /// A transaction's id worked out here from what a node handed back (version 0 as
+    /// `computeTransactionId`, version 1 as `KachatNames.Tx.id`); nil for one it can't read.
+    static func transactionId(of tx: Protowire_RpcTransaction) -> String? {
+        guard let subnetworkId = Data(hexString: tx.subnetworkID), let payload = Data(hexString: tx.payload) else { return nil }
+        switch tx.version {
+        case 0:
+            var outputs: [KaspaRpcTransactionOutput] = []
+            for output in tx.outputs {
+                guard let script = Data(hexString: output.scriptPublicKey.scriptPublicKey) else { return nil }
+                outputs.append(KaspaRpcTransactionOutput(
+                    value: output.amount,
+                    scriptPublicKey: KaspaScriptPublicKey(version: UInt16(truncatingIfNeeded: output.scriptPublicKey.version), script: script)
+                ))
+            }
+            let inputs = tx.inputs.map { input in
+                KaspaRpcTransactionInput(
+                    previousOutpoint: UTXO.Outpoint(transactionId: input.previousOutpoint.transactionID, index: input.previousOutpoint.index),
+                    signatureScript: Data(),
+                    sequence: input.sequence,
+                    sigOpCount: UInt8(truncatingIfNeeded: input.sigOpCount)
+                )
+            }
+            return KasiaTransactionBuilder.computeTransactionId(KaspaRpcTransaction(
+                version: 0, inputs: inputs, outputs: outputs, lockTime: tx.lockTime,
+                subnetworkId: subnetworkId, gas: tx.gas, payload: payload
+            ))
+        case 1:
+            do {
+                var inputs: [KachatNames.TxInput] = []
+                for input in tx.inputs {
+                    inputs.append(KachatNames.TxInput(
+                        outpoint: KachatNames.Outpoint(txid: try KachatNames.unhex32(input.previousOutpoint.transactionID), index: input.previousOutpoint.index),
+                        signatureScript: Data(),
+                        sequence: input.sequence,
+                        computeBudget: UInt16(truncatingIfNeeded: input.computeBudget)
+                    ))
+                }
+                var outputs: [KachatNames.TxOutput] = []
+                for output in tx.outputs {
+                    var covenant: KachatNames.CovenantBinding?
+                    if output.hasCovenant {
+                        covenant = KachatNames.CovenantBinding(
+                            authorizingInput: UInt16(truncatingIfNeeded: output.covenant.authorizingInput),
+                            covenantId: try KachatNames.unhex(output.covenant.covenantID)
+                        )
+                    }
+                    outputs.append(KachatNames.TxOutput(
+                        value: output.amount,
+                        scriptVersion: UInt16(truncatingIfNeeded: output.scriptPublicKey.version),
+                        script: try KachatNames.unhex(output.scriptPublicKey.scriptPublicKey),
+                        covenant: covenant
+                    ))
+                }
+                return KachatNames.Tx(
+                    version: 1, inputs: inputs, outputs: outputs, lockTime: tx.lockTime,
+                    subnetworkId: subnetworkId, gas: tx.gas, payload: payload, storageMass: tx.storageMass
+                ).idHex
+            } catch {
+                return nil
+            }
+        default:
             return nil
         }
     }
@@ -1355,6 +1464,9 @@ final class NodePoolService: ObservableObject {
     // MARK: - Pool Stats
 
     private func updatePoolStats() async {
+        // the pool keeps (and reconnects) only active nodes' connections: tell it after every
+        // change here too, not only after the profiler's rebalance
+        await connectionPool.setActiveKeys(Set(await registry.records(inState: .active).map(\.endpoint.key)))
         let health = await registry.poolHealth()
         let counts = await registry.stateCounts()
 

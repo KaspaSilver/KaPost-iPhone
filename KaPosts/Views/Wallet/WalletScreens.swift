@@ -133,7 +133,7 @@ struct ChattingAddressManageView: View {
                 onViewPrivateKey: {
                     afterAddressActions = {
                         if settingsViewModel.settings.biometricSpendingKeyEnabled {
-                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
+                            DeviceAuth.authenticate(reason: AppLocalization.string("Unlock to view this address's private key")) {
                                 showPrivateKeySheet = true
                             }
                         } else {
@@ -836,11 +836,17 @@ struct WithdrawKaspaView: View {
 
     @State private var isResolvingKNS = false
     @State private var resolvedAddress: String?
+    /// In full ("alice.kachat"); read through `shownResolvedDomain`, so Show .kachat Endings
+    /// applies as it is now, not as it was when the name resolved.
     @State private var resolvedDomain: String?
     /// Every service's answer for a typed name and the one in use: the rest go under "Other domains".
     @State private var nameResolutions: [NameResolution] = []
     @State private var selectedTLD: NameServiceTLD?
     @State private var knsError: String?
+
+    private var shownResolvedDomain: String? {
+        resolvedDomain.map { KachatNameLabel.shown(fullName: $0) }
+    }
 
     @State private var feeTier: WithdrawFeeTier = .normal
     @State private var normalFeeSompi: UInt64?
@@ -1156,7 +1162,7 @@ struct WithdrawKaspaView: View {
                         input: $addressInput,
                         isResolving: isResolvingKNS,
                         resolvedAddress: resolvedAddress,
-                        resolvedName: resolvedDomain,
+                        resolvedName: shownResolvedDomain,
                         lookupError: knsError,
                         isValidAddress: isValidAddress,
                         onScan: { showQRScanner = true },
@@ -1308,7 +1314,7 @@ struct WithdrawKaspaView: View {
 
     /// The recipient's name: the domain it resolved from.
     private var recipientName: String? {
-        resolvedDomain
+        shownResolvedDomain
     }
 
     // MARK: Step 4 - Review
@@ -1322,7 +1328,7 @@ struct WithdrawKaspaView: View {
             isBusy: isSending,
             isEnabled: canSend,
             amountSompi: amountSompi,
-            recipient: isCompoundMode ? nil : (resolvedDomain ?? effectiveAddress),
+            recipient: isCompoundMode ? nil : (shownResolvedDomain ?? effectiveAddress),
             sent: sentTransaction,
             failureMessage: errorMessage,
             onDone: {
@@ -1488,6 +1494,12 @@ struct WithdrawKaspaView: View {
 
     private func handleInputChange(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An upper-case address goes into the field in lower case; that change comes back here.
+        let lowered = lowercasedKaspaAddress(trimmed)
+        if lowered != trimmed {
+            addressInput = lowered
+            return
+        }
 
         resolvedAddress = nil
         resolvedDomain = nil
@@ -1511,7 +1523,7 @@ struct WithdrawKaspaView: View {
             return
         }
 
-        if trimmed.hasPrefix("kaspa:") || trimmed.hasPrefix("kaspatest:") {
+        if trimmed.lowercased().hasPrefix("kaspa:") || trimmed.lowercased().hasPrefix("kaspatest:") {
             // the other network's address is the same key on another chain: refused
             isValidAddress = KaspaAddress.isValidOnActiveNetwork(trimmed)
             return
@@ -1543,8 +1555,16 @@ struct WithdrawKaspaView: View {
     /// Use one service's answer (the priority one, or a pick from "Other domains").
     private func selectResolution(_ resolution: NameResolution) {
         guard let address = resolution.address else { return }
+        // Only an address of this network is an answer; anything else reads as not found.
+        guard KaspaAddress.isValidOnActiveNetwork(address) else {
+            resolvedAddress = nil
+            resolvedDomain = nil
+            selectedTLD = nil
+            knsError = NameServicesClient.notFoundMessage(typed: resolution.fullName, results: [])
+            return
+        }
         resolvedAddress = address
-        resolvedDomain = resolution.display
+        resolvedDomain = resolution.fullName
         selectedTLD = resolution.tld
         knsError = nil
     }
@@ -1589,6 +1609,7 @@ struct WithdrawKaspaView: View {
             if let queryIndex = address.firstIndex(of: "?") {
                 address = String(address[..<queryIndex])
             }
+            address = lowercasedKaspaAddress(address)
         }
         addressInput = address
         handleInputChange(address)
@@ -1700,7 +1721,7 @@ struct WithdrawKaspaView: View {
                         txId: txId,
                         amountSompi: amountSompi,
                         // The domain when one was resolved, otherwise the address itself.
-                        recipient: resolvedDomain ?? recipient
+                        recipient: shownResolvedDomain ?? recipient
                     )
                 }
             } catch {

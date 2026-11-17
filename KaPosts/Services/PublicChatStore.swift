@@ -235,9 +235,27 @@ final class PublicChatStore {
         let normalized = PublicChatChannelName.normalize(name)
         let context = viewContext
         context.performAndWait {
-            guard let channel = fetchChannel(name: normalized, in: context) else { return }
-            context.delete(channel)
-            save(context)
+            if let channel = fetchChannel(name: normalized, in: context) {
+                context.delete(channel)
+                save(context)
+            }
+            // Its messages, reactions and edits go with it, as the Delete sheet says: pruning
+            // walks joined rooms only, so nothing else would ever remove them. Hidden senders
+            // stay, in case the room is joined again.
+            for entityName in [CDPublicChatMessage.entityName, CDPublicChatReaction.entityName, CDPublicChatEdit.entityName] {
+                let request = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
+                request.predicate = NSPredicate(format: "channelName == %@", normalized)
+                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+                deleteRequest.resultType = .resultTypeObjectIDs
+                guard let result = try? context.execute(deleteRequest) as? NSBatchDeleteResult,
+                      let objectIds = result.result as? [NSManagedObjectID],
+                      !objectIds.isEmpty else { continue }
+                // A batch delete bypasses the context, so rows it already holds would linger.
+                NSManagedObjectContext.mergeChanges(
+                    fromRemoteContextSave: [NSDeletedObjectsKey: objectIds],
+                    into: [context]
+                )
+            }
         }
     }
 
@@ -439,7 +457,27 @@ final class PublicChatStore {
                 normalized, PublicChatMessage.DeliveryStatus.pending.rawValue,
                 PublicChatMessage.DeliveryStatus.unconfirmed.rawValue, "pending_"
             )
-            for row in (try? context.fetch(request)) ?? [] where !keeping.contains(row.id) {
+            let rows = ((try? context.fetch(request)) ?? []).filter { !keeping.contains($0.id) }
+            // A long voice note's parts go out one at a time, in index order, so when a run
+            // ended mid-note only the earliest unsettled part can have been submitted. The parts
+            // after it never left the phone: Failed, so the note's Retry sends them, instead of
+            // "Not confirmed" for good with the room stuck on "Receiving 3 of 12".
+            var earliestIndexByNote: [String: Int] = [:]
+            var partOf: [NSManagedObjectID: (note: String, index: Int)] = [:]
+            for row in rows {
+                guard let content = row.content, content.first == "{",
+                      let tag = VoicePartTag.sniff(content) else { continue }
+                let note = "\(row.senderAddress.lowercased())|\(tag.id)|\(tag.count)"
+                partOf[row.objectID] = (note, tag.index)
+                earliestIndexByNote[note] = min(earliestIndexByNote[note] ?? tag.index, tag.index)
+            }
+            for row in rows {
+                if let part = partOf[row.objectID], let earliest = earliestIndexByNote[part.note],
+                   part.index > earliest, row.id.hasPrefix("pending_") {
+                    row.deliveryStatus = PublicChatMessage.DeliveryStatus.failed.rawValue
+                    changed = true
+                    continue
+                }
                 let delivered = NSFetchRequest<CDPublicChatMessage>(entityName: CDPublicChatMessage.entityName)
                 delivered.predicate = NSPredicate(
                     format: "channelName == %@ AND senderAddress == %@ AND content == %@ AND deliveryStatus == %@ AND blockTime >= %lld",

@@ -57,13 +57,9 @@ final class ContactsManager: ObservableObject {
     private var activeWalletAddress: String?
     private var lastMessageSaveWorkItem: DispatchWorkItem?
     private let lastMessageSaveDelay: TimeInterval = 0.6
-    private var sharedSyncWorkItem: DispatchWorkItem?
     private var pushUpdateWorkItem: DispatchWorkItem?
-    private let sharedSyncDelay: TimeInterval = 0.8
     private let pushUpdateDelay: TimeInterval = 0.8
-    private var lastSharedSyncAt: Date?
     private var lastPushUpdateAt: Date?
-    private let minSharedSyncInterval: TimeInterval = 5.0
     private let minPushUpdateInterval: TimeInterval = 5.0
     private let knsService = KNSService.shared
     private var balanceFetchInFlight: Set<String> = []
@@ -270,21 +266,14 @@ final class ContactsManager: ObservableObject {
         // the KaPosts page renders, and never the previous wallet's (IOS-064).
         KaPostsScheduledStore.shared.reloadForCurrentWallet()
         loadDeletedAddresses()
-
-        if normalizedAddress == nil {
-            SharedDataManager.syncContactsForExtension()
-        }
     }
 
-    func clearInMemoryContacts(syncShared: Bool = true, updatePush: Bool = false) {
+    func clearInMemoryContacts(updatePush: Bool = false) {
         cancelPendingSaves()
         contacts = []
         contactBalances = [:]
         balanceLastFetch = [:]
         balanceFetchInFlight = []
-        if syncShared {
-            SharedDataManager.syncContactsForExtension()
-        }
         if updatePush {
             Task {
                 await PushNotificationManager.shared.updateWatchedAddresses()
@@ -299,7 +288,7 @@ final class ContactsManager: ObservableObject {
         userDefaults.removeObject(forKey: deletedAddressesKey(forNormalizedWalletAddress: normalizedAddress))
 
         if activeWalletAddress == normalizedAddress {
-            clearInMemoryContacts(syncShared: true, updatePush: false)
+            clearInMemoryContacts(updatePush: false)
             deletedAddresses = []
         }
     }
@@ -404,8 +393,6 @@ final class ContactsManager: ObservableObject {
         }
         if didClear, let data = try? JSONEncoder().encode(cleared) {
             userDefaults.set(data, forKey: contactsKey)
-            // The notification extension names senders from its own copy - refresh it too.
-            scheduleSharedSync()
         }
         return cleared
     }
@@ -671,7 +658,6 @@ final class ContactsManager: ObservableObject {
     // MARK: - Private Methods
 
     private func saveContacts(
-        syncShared: Bool = true,
         updatePush: Bool = true,
         publishContacts: Bool = false
     ) {
@@ -683,11 +669,6 @@ final class ContactsManager: ObservableObject {
         if let contactsKey = activeContactsKey,
            let data = try? JSONEncoder().encode(contacts) {
             userDefaults.set(data, forKey: contactsKey)
-        }
-
-        // Sync contacts to shared container for notification extension
-        if syncShared {
-            scheduleSharedSync()
         }
 
         // Update push notification watched addresses
@@ -802,8 +783,6 @@ final class ContactsManager: ObservableObject {
     private func cancelPendingSaves() {
         lastMessageSaveWorkItem?.cancel()
         lastMessageSaveWorkItem = nil
-        sharedSyncWorkItem?.cancel()
-        sharedSyncWorkItem = nil
         pushUpdateWorkItem?.cancel()
         pushUpdateWorkItem = nil
     }
@@ -811,30 +790,10 @@ final class ContactsManager: ObservableObject {
     private func scheduleLastMessageSave() {
         lastMessageSaveWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            self?.saveContacts(syncShared: false, updatePush: false)
+            self?.saveContacts(updatePush: false)
         }
         lastMessageSaveWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + lastMessageSaveDelay, execute: workItem)
-    }
-
-    /// A name the extensions show changed without the contact list changing (a .kachat name
-    /// landed): re-sync the shared copy, debounced like every other sync.
-    func scheduleSharedNameSync() {
-        scheduleSharedSync()
-    }
-
-    private func scheduleSharedSync() {
-        sharedSyncWorkItem?.cancel()
-        let now = Date()
-        let timeSinceLast = lastSharedSyncAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-        let minDelay = max(sharedSyncDelay, minSharedSyncInterval - timeSinceLast)
-        let delay = max(sharedSyncDelay, minDelay)
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.lastSharedSyncAt = Date()
-            SharedDataManager.syncContactsForExtension()
-        }
-        sharedSyncWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func schedulePushUpdate() {

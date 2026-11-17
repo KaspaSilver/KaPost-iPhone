@@ -110,7 +110,7 @@ struct ImportWalletView: View {
     /// clipboard is cleared once the words are in - a seed does not belong there.
     private func pasteSeedPhrase() {
         guard let raw = UIPasteboard.general.string else {
-            error = "Nothing to paste."
+            error = AppLocalization.string("Nothing to paste.")
             return
         }
         // Cleared as soon as it is read, whether or not the words are accepted: secret words do
@@ -122,15 +122,17 @@ struct ImportWalletView: View {
             .map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: ".)")) }
             .filter { !$0.isEmpty && !$0.allSatisfy(\.isNumber) }
         guard pasted.count == 12 || pasted.count == 24 else {
-            error = "You need 12 or 24 words - the clipboard holds \(pasted.count)."
+            error = String(format: AppLocalization.string("You need 12 or 24 words - the clipboard holds %lld."),
+                           locale: AppLocalization.locale, pasted.count)
             return
         }
         let unknown = pasted.filter { !BIP39.shared.isValidWord($0) }
         guard unknown.isEmpty else {
             // never repeats what was pasted
             error = unknown.count == 1
-                ? "One of the pasted words isn't a valid word. Check your copy and try again."
-                : "\(unknown.count) of the pasted words aren't valid words. Check your copy and try again."
+                ? AppLocalization.string("One of the pasted words isn't a valid word. Check your copy and try again.")
+                : String(format: AppLocalization.string("%lld of the pasted words aren't valid words. Check your copy and try again."),
+                         locale: AppLocalization.locale, unknown.count)
             return
         }
         seedWordCount = pasted.count
@@ -209,7 +211,7 @@ struct ImportWalletView: View {
     private func advanceToPassphrase() {
         guard canImport else { return }
         guard BIP39.shared.validateMnemonic(seedPhraseText) else {
-            error = "These words are invalid. Double-check the words - the last word encodes a checksum, so one wrong word fails validation."
+            error = AppLocalization.string("These words are invalid. Double-check the words - the last word encodes a checksum, so one wrong word fails validation.")
             return
         }
         showPassphraseStep = true

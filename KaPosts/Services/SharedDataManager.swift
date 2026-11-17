@@ -65,164 +65,10 @@ final class SharedDataManager {
         static let chatRequestsWallet = "chat_requests_wallet"
     }
 
-    // MARK: - Message Requests
-
-    /// Who is a pending Message Request and who is blocked, lowercased, for the notification
-    /// extension: a request's later messages, and anything from a blocked address, stay silent.
-    /// Stamped with the wallet, written after the lists (same rule as the contacts).
-    @MainActor
-    static func syncChatRequestsForExtension(requests: [String], blocked: [String]) {
-        sharedDefaults?.set(requests.map { $0.lowercased() }, forKey: Keys.chatRequestAddresses)
-        sharedDefaults?.set(blocked.map { $0.lowercased() }, forKey: Keys.chatBlockedAddresses)
-        sharedDefaults?.set(WalletManager.shared.currentWallet?.publicAddress, forKey: Keys.chatRequestsWallet)
-    }
-
-    // MARK: - Contact Sync
-
-    /// Sync contacts from ContactsManager to shared container for notification extension
-    @MainActor
-    static func syncContactsForExtension() {
-        let contacts = ContactsManager.shared.contacts.map { contact in
-            SharedContact(
-                address: contact.address,
-                // Who they are in the app: a name you gave them (chat or Address Book), else their
-                // .kachat name, else the short address - so a push from someone with a .kachat
-                // name says it, not their address.
-                alias: ContactsManager.shared.displayName(for: contact),
-                notificationModeOverride: contact.notificationModeOverride
-            )
-        }
-
-        guard let data = try? JSONEncoder().encode(contacts) else {
-            AppLog.log("[SharedData] Failed to encode contacts")
-            return
-        }
-
-        sharedDefaults?.set(data, forKey: Keys.contacts)
-        // Stamped with the wallet these belong to, written AFTER the list so a reader can never
-        // see a new stamp over an old list.
-        sharedDefaults?.set(WalletManager.shared.currentWallet?.publicAddress, forKey: Keys.contactsWallet)
-        AppLog.log("[SharedData] Synced %d contacts to shared container", contacts.count)
-        syncCallContactsForIntents()
-    }
-
-    /// Whether calls are on for `address` (Chat Info's "Allow calls"), read from the shared list
-    /// without the wallet loaded - what a VoIP push that just launched the app decides by
-    /// before anything rings. nil when the list was never written (no answer yet).
-    static func isCallAllowed(_ address: String) -> Bool? {
-        guard let data = sharedDefaults?.data(forKey: Keys.callContacts),
-              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return nil }
-        let target = address.lowercased()
-        return list.contains { ($0["address"] ?? "").lowercased() == target }
-    }
-
-    /// The callable contacts, for the Intents extension. Refreshed with the contact list.
-    @MainActor
-    static func syncCallContactsForIntents() {
-        let callable: [[String: String]] = ContactsManager.shared.contacts.compactMap { contact in
-            guard contact.callsEnabled == true else { return nil }
-            return [
-                "address": contact.address,
-                "name": ContactsManager.shared.displayName(for: contact)
-            ]
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: callable) else { return }
-        sharedDefaults?.set(data, forKey: Keys.callContacts)
-    }
-
-    // MARK: - Recent Conversations (Share Extension direct targets)
-
-    /// Most-recently-used 1:1 conversation list surfaced by the Share Extension's "Recent"
-    /// section. Kept fresh from chat opens and message sends (see `ChatService`). Newest first.
-    static let maxRecentConversations = 8
-
-    static func recordRecentConversation(address: String, alias: String) {
-        let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedAddress.isEmpty else { return }
-
-        var recents = getRecentConversations().filter { $0.address != trimmedAddress }
-        recents.insert(
-            SharedRecentConversation(
-                address: trimmedAddress,
-                alias: alias.trimmingCharacters(in: .whitespacesAndNewlines),
-                lastUsedMs: Int64(Date().timeIntervalSince1970 * 1000)
-            ),
-            at: 0
-        )
-        if recents.count > maxRecentConversations {
-            recents = Array(recents.prefix(maxRecentConversations))
-        }
-
-        guard let data = try? JSONEncoder().encode(recents) else { return }
-        sharedDefaults?.set(data, forKey: Keys.recentConversations)
-    }
-
-    static func getRecentConversations() -> [SharedRecentConversation] {
-        guard let data = sharedDefaults?.data(forKey: Keys.recentConversations),
-              let recents = try? JSONDecoder().decode([SharedRecentConversation].self, from: data) else {
-            return []
-        }
-        return recents
-    }
-
-    static func removeRecentConversation(address: String) {
-        let recents = getRecentConversations()
-        let filtered = recents.filter { $0.address != address }
-        guard filtered.count != recents.count else { return }
-        if filtered.isEmpty {
-            sharedDefaults?.removeObject(forKey: Keys.recentConversations)
-        } else if let data = try? JSONEncoder().encode(filtered) {
-            sharedDefaults?.set(data, forKey: Keys.recentConversations)
-        }
-    }
-
-    // MARK: - Group Sync
-
-    /// The wallet's own recent outgoing group-message txIds. A group reaction envelope carries
-    /// its target's txId, so with this list the NSE can apply the mentions-only rule's personal
-    /// exception - a reaction to MY message still notifies in a mentions-only group - and word
-    /// the banner "to your message" when it knows the target is mine. Refreshed on every group
-    /// sync, at wallet load (once history is in memory), and when an outgoing send resolves to
-    /// its real txId.
-    @MainActor
-    static func syncOwnGroupTxIdsForExtension() {
-        // From the store, not from memory: every group's full history is no longer resident (see
-        // `GroupStore.messageRows(forGroup:newestLimit:)`), and a list built from the windowed
-        // arrays would drop older own messages - a reaction to one would then stop being flagged
-        // as personal in the push path. Fire-and-forget so the call sites stay synchronous.
-        Task {
-            let txIds = await GroupStore.shared.ownOutgoingTxIds(limit: 500)
-            sharedDefaults?.set(txIds, forKey: Keys.groupOwnTxIds)
-        }
-    }
-
-    /// The wallet's own primary KNS domain (bare, lowercased) for the extension's mentions-only
-    /// gate: Android's composer writes mentions as `@{primaryKNSDomain}` in the wire plaintext
-    /// (not iOS's `@{address}` form), so the NSE must recognize that token too. Refreshed by
-    /// `KNSService.updateCache` whenever the wallet's own KNS info (re)loads. Skips when nothing
-    /// is cached yet - "not loaded" must not erase a previously shared domain - and clears when
-    /// the lookup is loaded but finds no explicit primary.
-    @MainActor
-    static func syncOwnKNSDomainForExtension() {
-        guard let address = WalletManager.shared.currentWallet?.publicAddress,
-              KNSService.shared.domainCache[address] != nil else { return }
-        // `barePrimaryDomain` is nil while .kas names aren't shown as names (5.2), so this clears
-        // a domain shared before the update rather than leaving it for the extension.
-        if let domain = KNSService.shared.barePrimaryDomain(for: address) {
-            sharedDefaults?.set(domain, forKey: Keys.ownPrimaryKNSDomain)
-        } else {
-            sharedDefaults?.removeObject(forKey: Keys.ownPrimaryKNSDomain)
-        }
-    }
-
-    /// Get all groups from shared container (called from notification extension)
-    static func getAllGroups() -> [SharedGroup] {
-        guard let data = sharedDefaults?.data(forKey: Keys.groups),
-              let groups = try? JSONDecoder().decode([SharedGroup].self, from: data) else {
-            return []
-        }
-        return groups
-    }
+    // KaPost has one target and no extensions. The contact, call-contact, chat-request,
+    // recent-conversation, group and KNS-domain copies KaChat's extensions read were never read
+    // here, so they are no longer written; `clearAllSharedData` still clears what an older
+    // version left behind.
 
     /// Sync notification defaults used by the notification service extension.
     /// Deliberately nonisolated: UserDefaults is thread-safe and AppSettings.save is
@@ -262,37 +108,6 @@ final class SharedDataManager {
 
     static func getWalletAddress() -> String? {
         return sharedDefaults?.string(forKey: Keys.walletAddress)
-    }
-
-    /// Get contact by address (called from notification extension)
-    static func getContact(address: String) -> SharedContact? {
-        return sharedContactsForCurrentWallet().first { $0.address == address }
-    }
-
-    /// Get all contacts from shared container
-    static func getAllContacts() -> [SharedContact] {
-        return sharedContactsForCurrentWallet()
-    }
-
-    /// The shared contact list, but ONLY when it belongs to the wallet currently signed in.
-    ///
-    /// `shared_contacts` is one key holding whichever account synced last. That is fine while the
-    /// two stay in step, and wrong the moment they do not: an account switch that has not yet
-    /// re-synced, or a push arriving during one, leaves the extension naming a notification with
-    /// an alias from a DIFFERENT account - someone else's name on a stranger's message. Comparing
-    /// the stamp to the shared wallet address makes that impossible; a mismatch reads as "no
-    /// contacts", so the push falls back to the address, which is merely less friendly rather
-    /// than wrong.
-    private static func sharedContactsForCurrentWallet() -> [SharedContact] {
-        guard let data = sharedDefaults?.data(forKey: Keys.contacts),
-              let contacts = try? JSONDecoder().decode([SharedContact].self, from: data) else {
-            return []
-        }
-        let stamp = sharedDefaults?.string(forKey: Keys.contactsWallet)
-        let current = sharedDefaults?.string(forKey: Keys.walletAddress)
-        // Both absent is the signed-out case and matches; one absent does not.
-        guard stamp == current else { return [] }
-        return contacts
     }
 
     // MARK: - Shared Secrets
@@ -625,21 +440,6 @@ final class SharedDataManager {
 
 // MARK: - Shared Models
 
-/// Contact info shared with notification extension
-struct SharedContact: Codable {
-    let address: String
-    let alias: String
-    let notificationModeOverride: ContactNotificationMode?
-}
-
-/// Group roster info shared with notification extension (see `syncGroupsForExtension`).
-struct SharedGroup: Codable {
-    let groupId: String
-    let name: String
-    let adminAddress: String
-    let members: [SharedGroupMember]
-}
-
 struct SharedGroupMember: Codable {
     let address: String
     let xOnlyPubKeyHex: String
@@ -647,13 +447,6 @@ struct SharedGroupMember: Codable {
     /// `GroupMember.displayName`) - lets the notification extension show a real name for the
     /// sender of a group message instead of falling back to their raw address.
     let displayName: String?
-}
-
-/// Recent conversation entry shared with the Share Extension (see `recordRecentConversation`).
-struct SharedRecentConversation: Codable {
-    let address: String
-    let alias: String
-    let lastUsedMs: Int64
 }
 
 /// Pending message that needs to be fetched

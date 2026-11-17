@@ -56,8 +56,24 @@ struct KaPostsSearchView: View {
             if post.text.lowercased().contains(trimmedQuery) { return true }
             // A post also matches on WHO wrote it, so searching a name finds their posts without
             // having to switch tabs to find them first.
-            return displayName(for: post.posterAddress).lowercased().contains(trimmedQuery)
+            return nameMatches(post.posterAddress)
         }
+    }
+
+    /// Whether the query finds this author by name. A `.kachat` name matches in either form,
+    /// whatever Show .kachat Endings shows: its label ("alice") or written out ("alice.kachat").
+    /// The ending on its own doesn't count, or "kachat" would find every named author.
+    private func nameMatches(_ address: String) -> Bool {
+        let shown = displayName(for: address)
+        guard let rawLabel = kachatRegistry.cachedIdentity(for: address)?.label, !rawLabel.isEmpty else {
+            return shown.lowercased().contains(trimmedQuery)
+        }
+        let label = rawLabel.lowercased()
+        if label.contains(trimmedQuery) { return true }
+        if trimmedQuery.contains("."), "\(label).kachat".contains(trimmedQuery) { return true }
+        // A name given to the contact on this device is shown in its place, and searched too.
+        guard shown != KachatNameLabel.display(rawLabel) else { return false }
+        return shown.lowercased().contains(trimmedQuery)
     }
 
     /// One row per author, with how many of their scanned posts matched - so the list is ordered
@@ -71,8 +87,7 @@ struct KaPostsSearchView: View {
         }
         return counts
             .filter { address, _ in
-                let name = displayName(for: address).lowercased()
-                return name.contains(trimmedQuery) || address.lowercased().contains(trimmedQuery)
+                nameMatches(address) || address.lowercased().contains(trimmedQuery)
             }
             .map { (address: $0.key, postCount: $0.value) }
             .sorted { lhs, rhs in

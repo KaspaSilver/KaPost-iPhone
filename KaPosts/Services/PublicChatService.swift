@@ -194,6 +194,7 @@ final class PublicChatService: ObservableObject {
             // What was fetched and backfilled was the other wallet's store: this one's rooms
             // start from nothing.
             settledPendingChannels = []
+            settledWhileIndexerDown = []
             deepBackfilledChannels = []
             deepBackfillResume = [:]
             deepBackfillFloor = [:]
@@ -522,8 +523,17 @@ final class PublicChatService: ObservableObject {
 
     func markChannelRead(_ name: String) {
         let channel = PublicChatChannelName.normalize(name)
-        let newest = messagesByChannel[channel]?.last?.blockTime ?? 0
-        lastReadByChannel[channel] = max(newest, Int64(Date().timeIntervalSince1970 * 1000))
+        // Up to the newest message seen, not up to now: a message sent just before you left
+        // the room but delivered after (the block scan or the indexer lagging) has a block time
+        // earlier than "now" and was counted as read without ever being shown. Never backward,
+        // and from now only for a room with nothing loaded.
+        let marker: Int64
+        if let newest = messagesByChannel[channel]?.last?.blockTime {
+            marker = max(newest, lastReadByChannel[channel] ?? 0)
+        } else {
+            marker = max(Int64(Date().timeIntervalSince1970 * 1000), lastReadByChannel[channel] ?? 0)
+        }
+        lastReadByChannel[channel] = marker
         manuallyUnreadChannels.remove(channel)
         persistReadState()
     }
@@ -598,8 +608,18 @@ final class PublicChatService: ObservableObject {
         guard !Self.curatedChannels.contains(PublicChatChannelName.normalize(name)) else { return }
         let normalized = PublicChatChannelName.normalize(name)
         store.leaveChannel(normalized)
+        voiceNotesByChannel.removeValue(forKey: normalized)
         messagesByChannel.removeValue(forKey: normalized)
         reactionsByChannel.removeValue(forKey: normalized)
+        editsByChannel.removeValue(forKey: normalized)
+        failedEditsByChannel.removeValue(forKey: normalized)
+        // The store no longer has what these say was fetched and applied: a rejoin this session
+        // pages the room in again.
+        deepBackfilledChannels.remove(normalized)
+        deepBackfillResume[normalized] = nil
+        deepBackfillFloor[normalized] = nil
+        indexerNewestSeen[normalized] = nil
+        appliedIndexerRows[normalized] = nil
         liveViewRefCounts.removeValue(forKey: normalized)
         refreshChannels()
         updateScanningStateIfNeeded()
@@ -847,7 +867,8 @@ final class PublicChatService: ObservableObject {
                     pagesLeft = resume.pagesLeft
                 } else {
                     hasMore = messages.hasMore
-                    oldest = messages.messages.map(\.blockTime).min()
+                    // From the oldest millisecond again (see the cursor in the loop below).
+                    oldest = messages.messages.map(\.blockTime).min().map { $0 + 1 }
                     pagesLeft = 50 // safety valve: 50 × 200 = 10k rows, far beyond any real room
                 }
                 var interrupted = false
@@ -871,7 +892,16 @@ final class PublicChatService: ObservableObject {
                     // Each page merged as it arrives, oldest last.
                     await mergeIndexerRows(page.messages, channel: channel, prune: false)
                     hasMore = page.hasMore
-                    oldest = page.messages.map(\.blockTime).min()
+                    // The indexer's `before` is exclusive (`block_time < before`), and rows of one
+                    // block share a millisecond: those cut off at a page's edge were skipped. So the
+                    // next page asks from the oldest millisecond again (rows dedupe by txid). A page
+                    // that is all that millisecond made no progress, and steps past it instead.
+                    let pageOldest = page.messages.map(\.blockTime).min()
+                    if let pageOldest, pageOldest + 1 < before {
+                        oldest = pageOldest + 1
+                    } else {
+                        oldest = pageOldest
+                    }
                     if hasMore, let next = oldest {
                         deepBackfillResume[channel] = (before: next, pagesLeft: pagesLeft)
                     }
@@ -890,6 +920,9 @@ final class PublicChatService: ObservableObject {
             // Best-effort on top of live scanning - the loop just tries again next tick.
             noteIndexerResult(base: baseURL, failed: error)
             AppLog.log("%@", "[PublicChat] Indexer fetch failed for #\(channel): \(error.localizedDescription)")
+            if unreachableIndexers[baseURL] != nil {
+                settlePendingSendsFromBeforeThisRun(channel: channel, indexerDown: true)
+            }
         }
     }
 
@@ -973,12 +1006,21 @@ final class PublicChatService: ObservableObject {
     private var pendingSendsThisRun: Set<String> = []
     /// Rooms already checked for those rows, once per account per run.
     private var settledPendingChannels: Set<String> = []
+    /// Rooms settled early because their indexer is down. They still get the full check once the
+    /// backfill finishes, which drops a "Not confirmed" row whose delivered copy then arrived.
+    private var settledWhileIndexerDown: Set<String> = []
 
     /// After the room's full history is in (the deep backfill), so a send that did land has its
-    /// delivered copy to match.
-    private func settlePendingSendsFromBeforeThisRun(channel: String) {
+    /// delivered copy to match. Also once while the room's indexer is confirmed down: no history
+    /// is coming, and the rows would otherwise say "Sending" with no Retry all session.
+    private func settlePendingSendsFromBeforeThisRun(channel: String, indexerDown: Bool = false) {
         guard store.isReady, !settledPendingChannels.contains(channel) else { return }
-        settledPendingChannels.insert(channel)
+        if indexerDown {
+            guard !settledWhileIndexerDown.contains(channel) else { return }
+            settledWhileIndexerDown.insert(channel)
+        } else {
+            settledPendingChannels.insert(channel)
+        }
         if store.settlePendingMessages(inChannel: channel, keeping: pendingSendsThisRun) {
             loadMessages(for: channel)
         }
@@ -1030,9 +1072,24 @@ final class PublicChatService: ObservableObject {
         voiceNotesByChannel[PublicChatChannelName.normalize(name)] ?? PublicChatVoiceParts.Result()
     }
 
-    /// Aggregated reactions for a channel, keyed by the reacted-to message's txId.
+    /// Aggregated reactions for a channel, keyed by the reacted-to message's txId. Reactions on
+    /// a long voice note's hidden parts (sent by a client that shows parts one by one) are
+    /// shown on the note's bubble, keyed by its anchor.
     func reactions(forChannel name: String) -> [String: [GroupStore.ReactionSnapshot]] {
-        reactionsByChannel[PublicChatChannelName.normalize(name)] ?? [:]
+        let channel = PublicChatChannelName.normalize(name)
+        let byTarget = reactionsByChannel[channel] ?? [:]
+        guard let anchors = voiceNotesByChannel[channel]?.anchorIdByPartId, !anchors.isEmpty else { return byTarget }
+        var merged = byTarget
+        for (partId, anchorId) in anchors {
+            guard let partReactions = byTarget[partId], !partReactions.isEmpty else { continue }
+            merged.removeValue(forKey: partId)
+            var onAnchor = merged[anchorId] ?? []
+            for reaction in partReactions where !onAnchor.contains(where: { $0.reactorAddress == reaction.reactorAddress }) {
+                onAnchor.append(reaction)
+            }
+            merged[anchorId] = onAnchor
+        }
+        return merged
     }
 
     func edits(forChannel name: String) -> [String: MessageEditSnapshot] {
@@ -1248,6 +1305,9 @@ final class PublicChatService: ObservableObject {
 
     func retryPublicChat(_ message: PublicChatMessage) {
         guard message.deliveryStatus == .failed else { return }
+        // A second tap before the list redraws still carries the Failed snapshot: without this
+        // it sent the message again and paid twice.
+        guard !pendingSendsThisRun.contains(message.id) else { return }
         guard let wallet = WalletManager.shared.currentWallet, wallet.publicAddress == message.senderAddress else { return }
         guard let privateKey = WalletManager.shared.getPrivateKey() else { return }
 
@@ -1266,7 +1326,10 @@ final class PublicChatService: ObservableObject {
     func retryPublicChatVoiceParts(_ failedParts: [PublicChatMessage]) {
         guard let wallet = WalletManager.shared.currentWallet,
               let privateKey = WalletManager.shared.getPrivateKey() else { return }
-        let parts = failedParts.filter { $0.deliveryStatus == .failed && $0.senderAddress == wallet.publicAddress }
+        // Parts already resending (a second tap on a bubble that hasn't redrawn) are left out.
+        let parts = failedParts.filter {
+            $0.deliveryStatus == .failed && $0.senderAddress == wallet.publicAddress && !pendingSendsThisRun.contains($0.id)
+        }
         guard let first = parts.first else { return }
         for part in parts {
             pendingSendsThisRun.insert(part.id)
@@ -1276,6 +1339,7 @@ final class PublicChatService: ObservableObject {
 
         Task {
             for (offset, part) in parts.enumerated() {
+                guard self.isStillSignedIn(as: wallet.publicAddress) else { return }
                 do {
                     try await self.resendPending(part, walletAddress: wallet.publicAddress, privateKey: privateKey)
                 } catch {
@@ -1310,6 +1374,13 @@ final class PublicChatService: ObservableObject {
                 pendingId: message.id
             )
         }
+    }
+
+    /// False once the account that started a send has logged out or been switched away from: the
+    /// rest of a long voice note must not go out from the old account under the new one's
+    /// session (the rows belong to the old account's store and stay for its next sign-in).
+    private func isStillSignedIn(as address: String) -> Bool {
+        WalletManager.shared.currentWallet?.publicAddress == address && !WalletManager.shared.isLoggedOut
     }
 
     /// The parts after one that failed never went: Failed too, so one Retry sends them in order.
@@ -1587,6 +1658,7 @@ final class PublicChatService: ObservableObject {
 
         let chatService = ChatService.shared
         for (offset, part) in pending.enumerated() {
+            guard isStillSignedIn(as: wallet.publicAddress) else { return }
             do {
                 _ = try await chatService.enqueueOutgoingTxOperation {
                     try await self.sendPublicChatInternal(
@@ -1774,6 +1846,8 @@ final class PublicChatService: ObservableObject {
             return
         }
         ChatService.shared.clearNoInputRetryState(for: pendingId)
+        // No send is working on it any more, so its Retry may start one.
+        pendingSendsThisRun.remove(pendingId)
         store.markMessageFailed(pendingId: pendingId)
         loadMessages(for: channel)
         // Surface a humanized message (never kaspad's raw "orphan is disallowed" text) - this is
@@ -1798,6 +1872,7 @@ final class PublicChatService: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
             guard let self else { return }
             self.scheduledSendRetries.remove(pendingId)
+            guard self.isStillSignedIn(as: walletAddress) else { return }
             let currentStatus = self.store.deliveryStatus(ofMessage: pendingId)
             guard currentStatus == .pending else {
                 ChatService.shared.clearNoInputRetryState(for: pendingId)
@@ -2120,9 +2195,14 @@ final class PublicChatService: ObservableObject {
         }
         let base = AppSettings.load().kaspaRestAPIURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: "\(base.hasSuffix("/") ? String(base.dropLast()) : base)/transactions/\(txId)?inputs=false&outputs=true&resolve_previous_outpoints=no") else { return nil }
+        // Its own timeout: `data(from:)` waits the default 60 s, and every block runs one of
+        // these per room message at once, so a stalled REST server held each block's checks
+        // for about 3 minutes and they piled up.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         for attempt in 0..<3 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
-            guard let (data, response) = try? await URLSession.shared.data(from: url),
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
                   (response as? HTTPURLResponse)?.statusCode == 200,
                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let outputs = j["outputs"] as? [[String: Any]] else { continue }
@@ -2143,9 +2223,12 @@ final class PublicChatService: ObservableObject {
                     let hits = Self.extractPublicChatHits(block, hrp: hrp)
                     guard !hits.isEmpty else { return }
                     Task { @MainActor in
+                        // Rooms we listen to and senders not hidden first: checking an author can
+                        // cost REST lookups, and every room on the network posts.
+                        guard let wanted = self?.hitsWorthVerifying(hits), !wanted.isEmpty else { return }
                         // only posts whose input 0 spends from the posting address (XP-012);
                         // verifiedAuthors is nonisolated, so the lookups run off the main actor
-                        let verified = await Self.verifiedAuthors(hits, hrp: hrp)
+                        let verified = await Self.verifiedAuthors(wanted, hrp: hrp)
                         guard !verified.isEmpty else { return }
                         await self?.processPublicChatHits(verified)
                     }
@@ -2164,6 +2247,19 @@ final class PublicChatService: ObservableObject {
     }
 
     // MARK: - Block scanning
+
+    /// The scan's hits in rooms this app listens to, from senders not hidden there. Applied again
+    /// in `processPublicChatHits`, since either can change while authors are checked.
+    private func hitsWorthVerifying(_ hits: [BlockScanHit]) -> [BlockScanHit] {
+        let wanted = wantedChannels
+        guard !wanted.isEmpty else { return [] }
+        let hidden = store.hiddenSendersByChannel()
+        return hits.filter { hit in
+            wanted.contains(hit.channel)
+                && !hidden.global.contains(hit.senderAddress)
+                && hidden.perChannel[hit.channel]?.contains(hit.senderAddress) != true
+        }
+    }
 
     /// Main-actor tail of the block scan: runs ONLY when a block actually contained public chat
     /// payloads (rare). State filtering + store insert + UI refresh. The message rows go in as

@@ -170,8 +170,28 @@ struct KaPostsView: View {
     }
 
     /// In-memory only - a post is PLAIN TEXT, nothing else. No links (rendered inert), no photos.
-    /// X-matching post/reply length cap.
+    /// X-matching post/reply length cap, counted by `postLength`.
     static let postCharacterLimit = 25_000
+
+    /// How much of the limit `text` uses: its UTF-8 bytes. A post is paid for and capped by its
+    /// bytes (base64 in the payload, 2 grams a byte against the node's 100,000-gram limit), and a
+    /// character can be 2-4 bytes, so counting characters let through long Russian, Arabic or
+    /// Chinese posts no node would take. English is one byte a character, so 25,000 still means
+    /// 25,000 letters there; at the cap a post's transaction stays near 70,000 grams.
+    static func postLength(_ text: String) -> Int { text.utf8.count }
+
+    /// `text` cut to the limit at a character boundary (no half characters).
+    static func clampedToPostLimit(_ text: String) -> String {
+        guard postLength(text) > postCharacterLimit else { return text }
+        var bytes = 0
+        var end = text.startIndex
+        for character in text {
+            bytes += character.utf8.count
+            if bytes > postCharacterLimit { break }
+            end = text.index(after: end)
+        }
+        return String(text[..<end])
+    }
 
     struct DraftPost: Identifiable, Equatable {
         /// Local session posts get a random id; indexer-fetched posts get a STABLE id derived
@@ -877,6 +897,7 @@ struct KaPostsView: View {
             }
         }
         .onReceive(KaPostsLiveChainFeed.shared.$posts) { mergeLivePosts($0) }
+        .onReceive(KaPostsLiveChainFeed.shared.$amendments) { applyLiveAmendments($0) }
         // The indexer's back: the real feed, with counts and everything it missed.
         .onReceive(NotificationCenter.default.publisher(for: .kaPostsIndexerAvailabilityChanged)) { _ in
             guard !indexerHealth.isDown else { return }
@@ -977,7 +998,7 @@ struct KaPostsView: View {
             }
         } label: {
             VStack(spacing: 8) {
-                Text(tab.title)
+                Text(LocalizedStringKey(tab.title))
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(isSelected ? .accentColor : .accentColor.opacity(0.5))
                     .frame(maxWidth: .infinity)
@@ -1019,6 +1040,39 @@ struct KaPostsView: View {
         }
         guard !fresh.isEmpty else { return }
         remotePosts.insert(contentsOf: fresh.sorted { $0.timestamp > $1.timestamp }, at: 0)
+    }
+
+    /// Deletes and edits the block stream saw while the indexer is down, applied to the feed on
+    /// screen (a saved page): without this a post deleted during the outage stayed until the
+    /// indexer came back. Same rule as `KaPostsLiveChainFeed.amended`: only the post's own key
+    /// counts, and an edit only inside the edit window and never on a poll. `@Published` sends
+    /// the new value before storing it, so this works from the value given.
+    private func applyLiveAmendments(_ amendments: [String: KaPostsLiveChainFeed.LiveAmendment]) {
+        guard !amendments.isEmpty else { return }
+        var updated = remotePosts
+        var changed = false
+        updated.removeAll { post in
+            guard let id = post.remoteId, let pubkey = post.posterPubkey,
+                  let amendment = amendments[KaPostsLiveChainFeed.amendmentKey(postId: id, authorPubkey: pubkey)],
+                  amendment.edit == nil else { return false }
+            changed = true
+            return true
+        }
+        for index in updated.indices {
+            let post = updated[index]
+            guard post.poll == nil, let id = post.remoteId, let pubkey = post.posterPubkey,
+                  let edit = amendments[KaPostsLiveChainFeed.amendmentKey(postId: id, authorPubkey: pubkey)]?.edit else { continue }
+            let editedAt = Date(timeIntervalSince1970: TimeInterval(edit.timestampMs) / 1000)
+            let sinceOriginal = editedAt.timeIntervalSince(post.timestamp)
+            guard sinceOriginal >= 0, sinceOriginal <= KaPostsAPIClient.editWindow,
+                  editedAt > (post.editedAt ?? .distantPast),
+                  let bytes = Data(base64Encoded: edit.b64), let text = String(data: bytes, encoding: .utf8) else { continue }
+            updated[index].text = KaPostsAPIClient.stripMarker(text)
+            updated[index].editedAt = editedAt
+            updated[index].mentionedPubkeys = edit.mentions
+            changed = true
+        }
+        if changed { remotePosts = updated }
     }
 
     @ViewBuilder
@@ -2147,7 +2201,7 @@ struct KaPostsView: View {
                 HStack(spacing: 8) {
                     TimelineView(.periodic(from: .now, by: 0.25)) { context in
                         let remaining = max(0, Int(ceil(undo.deadline.timeIntervalSince(context.date))))
-                        Text("\(undo.label) in \(remaining)s")
+                        Text("\(AppLocalization.string(undo.label)) in \(remaining)s")
                             .font(.footnote.weight(.semibold))
                             .monospacedDigit()
                     }
@@ -2264,12 +2318,13 @@ struct KaPostsView: View {
     static func mentionAddress(_ token: String, signed: [String] = []) async -> String? {
         let results = await NameServicesClient.shared.resolveEverywhere(token)
         if !signed.isEmpty {
-            let keys = Set(signed.map { $0.lowercased() })
+            // On the x-only key: an address gives only x, and the signed key may start 03.
+            let keys = Set(signed.map(KaPostsChainPosts.xOnly))
             let typed = NameServiceTLD.splitTypedName(token).tld
             let ordered = results.filter { $0.tld == typed } + results.filter { $0.tld != typed }
             if let match = ordered.first(where: { r in
                 guard let address = r.address, let pk = KaPostsAPIClient.kapostPubkey(fromAddress: address) else { return false }
-                return keys.contains(pk.lowercased())
+                return keys.contains(KaPostsChainPosts.xOnly(pk))
             }) {
                 return match.address
             }
@@ -2333,17 +2388,34 @@ struct KaPostsView: View {
         var out: [String] = []
         for token in tokens {
             if token.hasSuffix(".kas"), let pubkey = byKasName[String(token.dropLast(4))] {
-                if found.insert(pubkey).inserted { out.append(pubkey) }
+                let real = await Self.mentionPubkey(guessed: pubkey)
+                if found.insert(KaPostsChainPosts.xOnly(real)).inserted { out.append(real) }
                 continue
             }
             // everyone else on every service, .kachat first
             if let address = await Self.mentionAddress(token),
-               let pubkey = KaPostsAPIClient.kapostPubkey(fromAddress: address),
-               found.insert(pubkey).inserted {
-                out.append(pubkey)
+               let pubkey = KaPostsAPIClient.kapostPubkey(fromAddress: address) {
+                let real = await Self.mentionPubkey(guessed: pubkey)
+                if found.insert(KaPostsChainPosts.xOnly(real)).inserted { out.append(real) }
             }
         }
         return out
+    }
+
+    /// Mentioned people's real keys, by x-only key, for this run: a key never changes parity.
+    @MainActor private static var mentionKeyCache: [String: String] = [:]
+
+    /// The key a mention signs: the person's real "02"/"03" key, worked out the way Follow does
+    /// (`resolveKaPostsPubkey`), since an address gives only x and about half of keys start 03.
+    /// Someone who has never posted keeps the "02" guess, which only an indexer matching on the
+    /// x-only key can notify.
+    @MainActor private static func mentionPubkey(guessed: String) async -> String {
+        let xOnly = KaPostsChainPosts.xOnly(guessed)
+        if let cached = mentionKeyCache[xOnly] { return cached }
+        guard let address = KaPostsAPIClient.kaspaAddress(fromPubkey: guessed),
+              let real = await resolveKaPostsPubkey(address: address) else { return guessed }
+        mentionKeyCache[xOnly] = real
+        return real
     }
 
     /// Unposted work for an in-flight or failed thread, keyed by the root post's LOCAL id.
@@ -2487,14 +2559,25 @@ struct KaPostsView: View {
     /// scroll jank the Android port hit with its observable probe-claim maps. Only a POSITIVE
     /// "this is a thread root" changes pixels, so only that lands in @State below.
     ///
-    /// Claims (and the roots they found) persist across launches: a probe answers a question
-    /// about history that does not change, so relaunching the app and re-asking it for every
-    /// commented post in the feed was pure waste. FIFO-capped so the store cannot grow without
-    /// bound; the oldest claims fall off and simply get probed again someday.
+    /// Claims (and the roots they found) persist across launches: relaunching the app and
+    /// re-asking for every commented post in the feed was pure waste. FIFO-capped so the store
+    /// cannot grow without bound; the oldest claims fall off and simply get probed again someday.
+    ///
+    /// A root is for good, but "no thread here" is not: the author can add a self-reply later,
+    /// and a thread's root is often probed before its second part is indexed. Kept for good, that
+    /// answer hid "View thread" until 2,048 newer claims pushed it out. It now expires
+    /// (`noThreadAnswerLifetime`), soon for a new post, after a day at most.
     private final class ThreadProbeClaims {
         private static let claimedKey = "kachat_kaposts_thread_probe_claimed"
         private static let rootsKey = "kachat_kaposts_thread_probe_roots"
+        private static let expiryKey = "kachat_kaposts_thread_probe_expiry"
         private static let capacity = 2048
+
+        /// How long "no thread" holds for a post this old: as long as the post has existed,
+        /// from 10 minutes to a day.
+        static func noThreadAnswerLifetime(postAge: TimeInterval) -> TimeInterval {
+            min(max(postAge, 600), 86_400)
+        }
         /// How many probes may be on the wire at once. One flick through a fresh feed reveals
         /// dozens of rows, and each used to fire its request immediately.
         static let maxInFlight = 4
@@ -2506,26 +2589,44 @@ struct KaPostsView: View {
         private lazy var order: [String] = UserDefaults.standard.stringArray(forKey: Self.claimedKey) ?? []
         private lazy var claimedSet: Set<String> = Set(order)
         private lazy var rootsSet: Set<String> = Set(UserDefaults.standard.stringArray(forKey: Self.rootsKey) ?? [])
+        /// When each claim's "no thread" answer stops counting (seconds since 1970).
+        private lazy var expiry: [String: Double] =
+            (UserDefaults.standard.dictionary(forKey: Self.expiryKey) as? [String: Double]) ?? [:]
         var inFlight = 0
         private var saveScheduled = false
 
-        var claimed: Set<String> { claimedSet }
         /// Persisted positive results - the roots `threadRootIds` starts from.
         var persistedRoots: Set<String> { rootsSet }
 
-        func claim(_ id: String) {
-            guard claimedSet.insert(id).inserted else { return }
+        /// Whether `id` was asked and its answer still holds: a root for good, "no thread" until
+        /// it expires. A claim saved before answers expired has no time and is asked once more.
+        func isSettled(_ id: String) -> Bool {
+            guard claimedSet.contains(id) else { return false }
+            if rootsSet.contains(id) { return true }
+            guard let until = expiry[id] else { return false }
+            return until > Date().timeIntervalSince1970
+        }
+
+        /// `answerLifetime`: how long a "no thread" answer to this claim holds.
+        func claim(_ id: String, answerLifetime: TimeInterval = 86_400) {
+            expiry[id] = Date().timeIntervalSince1970 + answerLifetime
+            guard claimedSet.insert(id).inserted else {
+                scheduleSave()
+                return
+            }
             order.append(id)
             if order.count > Self.capacity {
                 let dropped = order.removeFirst()
                 claimedSet.remove(dropped)
                 rootsSet.remove(dropped)
+                expiry[dropped] = nil
             }
             scheduleSave()
         }
 
         /// A probe that was cancelled before it asked anything should be asked again later.
         func unclaim(_ id: String) {
+            expiry[id] = nil
             guard claimedSet.remove(id) != nil else { return }
             order.removeAll { $0 == id }
             scheduleSave()
@@ -2545,6 +2646,7 @@ struct KaPostsView: View {
                 self.saveScheduled = false
                 UserDefaults.standard.set(self.order, forKey: Self.claimedKey)
                 UserDefaults.standard.set(Array(self.rootsSet), forKey: Self.rootsKey)
+                UserDefaults.standard.set(self.expiry, forKey: Self.expiryKey)
             }
         }
     }
@@ -2567,8 +2669,11 @@ struct KaPostsView: View {
         guard let remoteId = post.remoteId,
               !post.isLocalThreadRoot,
               commentCount(of: post) > 0,
-              !threadProbeClaims.claimed.contains(remoteId) else { return }
-        threadProbeClaims.claim(remoteId) // claim, so one post never probes twice
+              !threadProbeClaims.isSettled(remoteId) else { return }
+        // claim, so one post isn't probed twice while its answer holds
+        threadProbeClaims.claim(remoteId, answerLifetime: ThreadProbeClaims.noThreadAnswerLifetime(
+            postAge: Date().timeIntervalSince(post.timestamp)
+        ))
         // Wait for a slot rather than firing at once. Polling instead of a continuation queue
         // so a row that scrolls back out while waiting (its `.task` is cancelled) just leaves,
         // and gives its claim back so the next appearance asks the question it never got to.
@@ -2665,6 +2770,9 @@ struct KaPostsView: View {
                 return try await op()
             } catch let unknown as SendOutcomeUnknownError {
                 throw unknown
+            } catch KaPostsAPIClient.KaPostsAPIError.tooLong {
+                // The same text never fits on a later try.
+                throw KaPostsAPIClient.KaPostsAPIError.tooLong
             } catch {
                 attempt += 1
                 guard attempt <= 4 else { throw error }
@@ -2797,7 +2905,8 @@ struct KaPostsView: View {
                     AppLog.log("[KaPosts] Delete outcome unknown")
                 } catch {
                     mutatePost(id: post.id) { $0.pendingDeletion = false }
-                    actionError = "Couldn't delete the post: \(UserFacingError.message(for: error))"
+                    actionError = String(format: AppLocalization.string("Couldn't delete the post: %@"),
+                                         locale: AppLocalization.locale, UserFacingError.message(for: error))
                     AppLog.log("[KaPosts] Delete submit failed: %@", error.localizedDescription)
                 }
             }
@@ -2835,13 +2944,18 @@ struct KaPostsView: View {
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != post.text, post.isStillEditable, let remoteId = post.remoteId,
               post.posterAddress == WalletManager.shared.currentWallet?.publicAddress else { return }
-        pendingEditOriginals[post.id] = (post.text, post.editedAt)
+        let key = "edit:\(post.id)"
+        // A second edit while the first is still held replaces it unsent (same key). Undo or a
+        // failure must then go back to the text before the first edit, the one on chain, not to
+        // the first edit's text, which never left the phone.
+        if scheduler.deadlines[key] == nil || pendingEditOriginals[post.id] == nil {
+            pendingEditOriginals[post.id] = (post.text, post.editedAt)
+        }
         mutatePost(id: post.id) {
             $0.text = trimmed
             $0.editedAt = Date()
             $0.deliveryStatus = .pending
         }
-        let key = "edit:\(post.id)"
         showUndoToast(key: key, postId: post.id, label: "Saving edit")
         scheduler.schedule(key: key) {
             clearUndoToast(key: key)
@@ -2866,7 +2980,8 @@ struct KaPostsView: View {
                         $0.editedAt = original?.editedAt ?? post.editedAt
                         $0.deliveryStatus = .sent
                     }
-                    actionError = "Couldn't save the edit: \(UserFacingError.message(for: error))"
+                    actionError = String(format: AppLocalization.string("Couldn't save the edit: %@"),
+                                         locale: AppLocalization.locale, UserFacingError.message(for: error))
                     AppLog.log("[KaPosts] Edit submit failed: %@", error.localizedDescription)
                 }
             }
@@ -3467,14 +3582,26 @@ struct KaPostsView: View {
         }
     }
 
-    /// Local follow toggle + on-chain K follow/unfollow when the target's compressed pubkey is
-    /// known (it comes from post data; profile-sheet follows without one stay local-only).
+    /// Local follow toggle + on-chain K follow/unfollow. The key comes from post data, else the
+    /// chain's follow list, else the person's own posts (`resolveKaPostsPubkey`); never a guessed
+    /// 02/03 (IOS-099). With none of those (no post names their key yet) the follow waits on this
+    /// phone and goes on chain at a later sync, once one does (`KaPostsFollowStore.syncFromChain`).
     private func toggleFollowSubmitting(address: String, pubkey: String?) {
         guard address != WalletManager.shared.currentWallet?.publicAddress else { return }
         let willFollow = !followStore.isFollowing(address)
         followStore.toggle(address)
-        guard let pubkey else { return }
         Task {
+            var key = pubkey ?? followStore.chainKeys[address]
+            if key == nil {
+                key = await Self.resolveKaPostsPubkey(address: address)
+                // Tapped again while the key was looked up: that tap sends its own.
+                guard followStore.isFollowing(address) == willFollow else { return }
+            }
+            guard let pubkey = key else {
+                followStore.setAwaitingKey(address, following: willFollow)
+                return
+            }
+            followStore.setAwaitingKey(address, following: false)
             do {
                 let txId = try await KaPostsAPIClient.shared.submitFollow(willFollow, followedPubkey: pubkey)
                 showActionToast(willFollow ? "Follow posted to the network" : "Unfollow posted to the network", txId: txId)
@@ -3866,14 +3993,14 @@ struct KaPostsView: View {
                     }
                 }
             } else {
-                threadToggleButton("View \(replyCount) \(replyCount == 1 ? "reply" : "replies")") {
+                threadToggleButton(replyCount == 1 ? "View \(replyCount) reply" : "View \(replyCount) replies") {
                     expandReplies(for: comment)
                 }
             }
         }
     }
 
-    private func threadToggleButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func threadToggleButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 1)
@@ -4824,10 +4951,10 @@ struct KaPostsView: View {
                         Image(systemName: emptyIcon)
                             .font(.scaled(size: 40))
                             .foregroundColor(.secondary)
-                        Text(emptyTitle)
+                        Text(LocalizedStringKey(emptyTitle))
                             .font(.headline)
                         if let emptyBody {
-                            Text(emptyBody)
+                            Text(LocalizedStringKey(emptyBody))
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
@@ -4960,9 +5087,9 @@ struct KaPostsView: View {
                         Image(systemName: kind.emptyIcon)
                             .font(.scaled(size: 44))
                             .foregroundColor(.secondary)
-                        Text("No \(kind.title.lowercased()) accounts")
+                        Text(kind == .muted ? "No muted accounts" : "No blocked accounts")
                             .font(.headline)
-                        Text(kind.emptyText)
+                        Text(LocalizedStringKey(kind.emptyText))
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -4983,7 +5110,7 @@ struct KaPostsView: View {
                                     .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
                                 Spacer()
-                                Button(kind.actionLabel) {
+                                Button(LocalizedStringKey(kind.actionLabel)) {
                                     Haptics.impact(.light)
                                     if kind == .muted {
                                         moderationStore.unmute(address)
@@ -4999,7 +5126,7 @@ struct KaPostsView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle(kind.title)
+            .navigationTitle(LocalizedStringKey(kind.title))
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
         }
@@ -5352,7 +5479,9 @@ struct KaPostsView: View {
                             // are posts, so they behave like posts, and the whole screen reads as
                             // one feed. Long ones truncate so the post you actually opened still
                             // owns the screen.
-                            ForEach(ancestorChain(for: post)) { ancestor in
+                            // Not a muted or blocked person's posts: the reply lists already
+                            // leave them out, and the chain above put them back.
+                            ForEach(ancestorChain(for: post).filter { !moderationStore.isHidden($0.posterAddress) }) { ancestor in
                                 threadCell(ancestor, truncates: true, onOpen: { jumpToAncestor(ancestor) })
                                     // X's thread line, and no divider: a rule between two posts
                                     // separates them, while the line running down the avatar
@@ -5384,7 +5513,9 @@ struct KaPostsView: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: "text.append")
                                         .font(.caption.weight(.semibold))
-                                    Text("\(isSelfThread ? "Thread" : "Conversation") · \(chain.count + 1) posts")
+                                    Text(isSelfThread
+                                         ? "Thread · \(chain.count + 1) posts"
+                                         : "Conversation · \(chain.count + 1) posts")
                                         .font(.subheadline.weight(.bold))
                                     Spacer()
                                 }
@@ -5500,8 +5631,8 @@ struct KaPostsView: View {
                             maxHeight: 92
                         )
                             .onChange(of: replyText) { newValue in
-                                if newValue.count > KaPostsView.postCharacterLimit {
-                                    replyText = String(newValue.prefix(KaPostsView.postCharacterLimit))
+                                if KaPostsView.postLength(newValue) > KaPostsView.postCharacterLimit {
+                                    replyText = KaPostsView.clampedToPostLimit(newValue)
                                 }
                             }
                             .padding(.horizontal, 14)
@@ -5509,7 +5640,7 @@ struct KaPostsView: View {
                             // A fixed radius, not a Capsule: a capsule's corners are half its
                             // height, so a grown multi-line field curves into its own text.
                             .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.12)))
-                        KaPostCharacterMeter(count: replyText.count)
+                        KaPostCharacterMeter(count: KaPostsView.postLength(replyText))
                         Button {
                             let trimmed = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !trimmed.isEmpty else { return }
@@ -5693,13 +5824,19 @@ private struct KaPostPollCard: View {
     }
 
     private var footer: String {
-        let votes = poll.total == 1 ? "1 vote" : "\(poll.total) votes"
-        if poll.isClosed { return "\(votes) · Final results" }
+        // Built here rather than in a `Text`, so each piece is looked up in the in-app language.
+        func localized(_ key: String, _ value: Int) -> String {
+            String(format: AppLocalization.string(key), locale: AppLocalization.locale, value)
+        }
+        let votes = poll.total == 1 ? AppLocalization.string("1 vote") : localized("%lld votes", poll.total)
+        if poll.isClosed {
+            return String(format: AppLocalization.string("%@ · Final results"), locale: AppLocalization.locale, votes)
+        }
         let left = poll.closesAt.timeIntervalSinceNow
         let remaining: String
-        if left >= 86_400 { remaining = "\(Int(left / 86_400))d left" }
-        else if left >= 3600 { remaining = "\(Int(left / 3600))h left" }
-        else { remaining = "\(max(1, Int(left / 60)))m left" }
+        if left >= 86_400 { remaining = localized("%lldd left", Int(left / 86_400)) }
+        else if left >= 3600 { remaining = localized("%lldh left", Int(left / 3600)) }
+        else { remaining = localized("%lldm left", max(1, Int(left / 60))) }
         return "\(votes) · \(remaining)"
     }
 }
@@ -5782,7 +5919,9 @@ private struct KaPostCellView: View {
     }
 
     private var translationKey: String {
-        PostTranslationService.translationKey(for: post.remoteId, localId: post.id)
+        PostTranslationService.translationKey(
+            for: post.remoteId, localId: post.id, editedText: post.editedAt == nil ? nil : post.text
+        )
     }
 
     /// The post text as it should render: the translation once one exists, the original until
@@ -5993,6 +6132,9 @@ private struct KaPostCellView: View {
     /// Observed for the Translate affordance. Like `scheduler`, this only changes when the user
     /// acts (taps Translate, or flips back to the original) - never while scrolling.
     @ObservedObject private var translation = PostTranslationService.shared
+    /// Observed for quote cards: the feeds drop a hidden person's own posts, but someone else
+    /// quoting them put their text and avatar back in front of you. Changes only on a mute or block.
+    @ObservedObject private var moderation = KaPostsModerationStore.shared
 
     /// Your own post: no follow affordance (you can't follow yourself).
     /// The bell: on says "you'll be notified when they post", off says it won't - for a moment,
@@ -6205,7 +6347,19 @@ private struct KaPostCellView: View {
 
                 // X-style quote embed: the quoted post in a bordered mini card under the
                 // text - tappable through to the quoted post's own thread.
-                if let quoted = post.quoted {
+                if let quoted = post.quoted, moderation.isHidden(quoted.posterAddress) {
+                    // Someone you muted or blocked: no text, name or avatar, and no way in.
+                    Text("You muted or blocked this account")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                        .padding(.top, 2)
+                } else if let quoted = post.quoted {
                     if let onOpenQuoted, let quotedId = quoted.remoteId {
                         Button {
                             onOpenQuoted(quotedId)
@@ -6838,14 +6992,15 @@ private struct KaPostCellView: View {
         case .unavailable(let reason):
             // Nothing a second tap can change - the pair is not served, the post is too long, the
             // post was already in the reader's language. Say so instead of inviting a retry.
-            Text(reason)
+            // The service's own reasons are English keys; a server message falls through as is.
+            Text(AppLocalization.string(reason))
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .padding(.top, 2)
         }
     }
 
-    private func translateLink(_ title: String, action: @escaping () -> Void) -> some View {
+    private func translateLink(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.footnote.weight(.semibold))
@@ -7551,7 +7706,8 @@ private struct KaPostTipSheet: View {
             do {
                 let max = try await ChatService.shared.estimateMaxPaymentAmount(
                     to: estimationContact, note: memo, sourceSpendingIndex: source.spendingIndex,
-                    manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi, tip: postTip
+                    manualUtxos: manualUtxos, extraFeeSompi: extraFeeSompi,
+                    feeMultiplier: customExtraFeeSompi == nil ? feeTier.multiplier : nil, tip: postTip
                 )
                 await MainActor.run {
                     // a newer Max (another speed tapped meanwhile) decides the amount
@@ -7600,7 +7756,7 @@ private struct KaPostTipSheet: View {
         } else if let created = try? ContactsManager.shared.addContact(address: address, alias: "", isAutoAdded: true) {
             recipient = created
         } else {
-            errorMessage = "Couldn't prepare the recipient."
+            errorMessage = AppLocalization.string("Couldn't prepare the recipient.")
             return
         }
         contact = recipient
@@ -7659,18 +7815,6 @@ private struct KaPostTipSheet: View {
 /// The X-style anchored repost menu's choices (see KaPostCellView's popover).
 enum KaPostRepostAction {
     case repost, removeRepost, quote
-}
-
-/// `.presentationCompactAdaptation(.popover)` is iOS 16.4+ — it makes the repost menu a real
-/// anchored bubble on iPhone. On 16.0-16.3 the popover falls back to a sheet, still functional.
-private struct CompactPopoverAdaptation: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 16.4, *) {
-            content.presentationCompactAdaptation(.popover)
-        } else {
-            content
-        }
-    }
 }
 
 /// Reusable @mention autocomplete for the comment/reply bar - the exact same suggestion
@@ -8111,9 +8255,9 @@ private struct KaPostComposerView: View {
             resolvedAnyDomain = resolution.fullName
         }
         .onChange(of: text) { newValue in
-            // Hard cap at the limit, X-style.
-            if newValue.count > KaPostsView.postCharacterLimit {
-                text = String(newValue.prefix(KaPostsView.postCharacterLimit))
+            // Hard cap at the limit, X-style (in bytes: see `postLength`).
+            if KaPostsView.postLength(newValue) > KaPostsView.postCharacterLimit {
+                text = KaPostsView.clampedToPostLimit(newValue)
             }
         }
     }
@@ -8306,7 +8450,7 @@ private struct KaPostComposerView: View {
     }
 
     private var characterMeter: some View {
-        KaPostCharacterMeter(count: text.count)
+        KaPostCharacterMeter(count: KaPostsView.postLength(text))
     }
 
     /// Poll and Schedule, as chips under the editor - only on a fresh post.
@@ -8714,6 +8858,8 @@ final class KaPostsFollowStore: ObservableObject {
         let normalized = address?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         walletAddress = (normalized?.isEmpty == false) ? normalized : nil
         chainSyncStarted = false
+        toggledThisSession = []
+        chainKeys = [:]
         guard let defaultsKey else {
             following = []
             return
@@ -8740,6 +8886,8 @@ final class KaPostsFollowStore: ObservableObject {
     static func removeAllData(forWalletAddress walletAddress: String) {
         let normalized = walletAddress.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         UserDefaults.standard.removeObject(forKey: "kachat_kaposts_following_\(normalized)")
+        UserDefaults.standard.removeObject(forKey: "kachat_kaposts_following_chain_\(normalized)")
+        UserDefaults.standard.removeObject(forKey: "kachat_kaposts_following_pending_\(normalized)")
         KaPostsTipSourceStore.removeAllData(forWalletAddress: walletAddress)
         KaPostsHeldPostStore.removeAllData(forWalletAddress: walletAddress)
         if shared.walletAddress == normalized { shared.following = [] }
@@ -8757,7 +8905,60 @@ final class KaPostsFollowStore: ObservableObject {
         } else {
             following.insert(address)
         }
+        toggledThisSession.insert(address)
         persist()
+    }
+
+    /// Addresses followed or unfollowed here this session: their state here wins over a chain
+    /// read that may not list the transaction yet.
+    private var toggledThisSession = Set<String>()
+
+    /// The keys the chain's follow list named, by address (from the last sync): an unfollow
+    /// signs the key the follow named.
+    private(set) var chainKeys: [String: String] = [:]
+
+    /// The follow list the last complete chain read gave: an address it listed that the next
+    /// one doesn't was unfollowed elsewhere (another device, KaChat).
+    private var chainListKey: String? { walletAddress.map { "kachat_kaposts_following_chain_\($0)" } }
+    private var pendingKey: String? { walletAddress.map { "kachat_kaposts_following_pending_\($0)" } }
+
+    /// Follows that couldn't go on chain: no post names the person's key yet, and Follow never
+    /// signs a guessed 02/03 (IOS-099). Each chain sync tries them again. Per account.
+    private var pendingChainFollows: Set<String> {
+        guard let pendingKey else { return [] }
+        return Set(UserDefaults.standard.stringArray(forKey: pendingKey) ?? [])
+    }
+
+    /// Marks a follow as waiting for the person's key (`following`), or no longer waiting.
+    func setAwaitingKey(_ address: String, following: Bool) {
+        guard let pendingKey else { return }
+        var pending = pendingChainFollows
+        guard following ? pending.insert(address).inserted : pending.remove(address) != nil else { return }
+        UserDefaults.standard.set(Array(pending).sorted(), forKey: pendingKey)
+    }
+
+    /// Puts waiting follows on chain once the person's key can be read from their posts.
+    private func submitPendingFollows(listedOnChain chain: Set<String>) async {
+        let wallet = walletAddress
+        for address in pendingChainFollows.sorted() {
+            guard walletAddress == wallet else { return }
+            // Unfollowed since, or on chain already (made elsewhere): nothing to send.
+            guard following.contains(address), !chain.contains(address) else {
+                setAwaitingKey(address, following: false)
+                continue
+            }
+            guard let key = await KaPostsView.resolveKaPostsPubkey(address: address),
+                  walletAddress == wallet, following.contains(address) else { continue }
+            do {
+                _ = try await KaPostsAPIClient.shared.submitFollow(true, followedPubkey: key)
+                setAwaitingKey(address, following: false)
+            } catch is SendOutcomeUnknownError {
+                // It may have landed: never sent twice.
+                setAwaitingKey(address, following: false)
+            } catch {
+                AppLog.log("[KaPosts] Waiting follow submit failed: %@", error.localizedDescription)
+            }
+        }
     }
 
     /// Scrubs a stale entry (used to drop any old self-follow left from before the
@@ -8771,9 +8972,9 @@ final class KaPostsFollowStore: ObservableObject {
     /// One-shot per session: rebuild this LOCAL set from the on-chain follow graph. Every
     /// Follow button and the Following feed filter read the local set, and it lives only in
     /// UserDefaults — so a reinstall/upgrade that cleared app data left users "following 0"
-    /// with Follow buttons beside people they already follow on-chain. Chain entries are only
-    /// ever ADDED (never removed), so a just-tapped local unfollow the indexer hasn't caught
-    /// up on can't be resurrected mid-session.
+    /// with Follow buttons beside people they already follow on-chain. A follow is removed only
+    /// when a full read stops listing what the previous one listed, and this session's own taps
+    /// always win, so a just-tapped follow or unfollow the indexer hasn't caught up on holds.
     private var chainSyncStarted = false
     func syncFromChain() {
         guard !chainSyncStarted else { return }
@@ -8782,6 +8983,8 @@ final class KaPostsFollowStore: ObservableObject {
             do {
                 let pubkey = try KaPostsAPIClient.shared.requesterPubkey()
                 var chain: Set<String> = []
+                var keys: [String: String] = [:]
+                var complete = false
                 var cursor: String? = nil
                 var pagesLeft = 10 // far beyond any real follow list
                 while pagesLeft > 0 {
@@ -8792,21 +8995,42 @@ final class KaPostsFollowStore: ObservableObject {
                     for user in result.users {
                         if let address = KaPostsAPIClient.kaspaAddress(fromPubkey: user.userPublicKey) {
                             chain.insert(address)
+                            keys[address] = user.userPublicKey
                         }
                     }
                     guard result.pagination?.hasMore == true,
-                          let next = result.pagination?.nextCursor else { break }
+                          let next = result.pagination?.nextCursor else {
+                        complete = true
+                        break
+                    }
                     cursor = next
                 }
                 let myAddress = WalletManager.shared.currentWallet?.publicAddress
                 // The account may have switched while the pages loaded; this graph belongs
                 // to the one that asked for it.
                 guard myAddress?.lowercased() == walletAddress else { return }
-                let merged = following.union(chain).subtracting([myAddress ?? ""])
+                chainKeys = keys
+                var merged = following.union(chain)
+                // Only adding left an unfollow made on another device or in KaChat as
+                // "Following" here for good. What the last full read listed and this one doesn't
+                // was unfollowed elsewhere; a follow only ever on this phone was never listed,
+                // so it stays. Only from a full read: a cut-off list proves nothing.
+                if complete, let chainListKey {
+                    if let last = UserDefaults.standard.stringArray(forKey: chainListKey) {
+                        merged.subtract(Set(last).subtracting(chain))
+                    }
+                    UserDefaults.standard.set(Array(chain).sorted(), forKey: chainListKey)
+                }
+                // This session's own taps win: the chain may not list them yet.
+                for address in toggledThisSession {
+                    if following.contains(address) { merged.insert(address) } else { merged.remove(address) }
+                }
+                merged.remove(myAddress ?? "")
                 if merged != following {
                     following = merged
                     persist()
                 }
+                await submitPendingFollows(listedOnChain: chain)
             } catch {
                 chainSyncStarted = false // network miss — retry on the next KaPosts open
             }
@@ -8866,8 +9090,10 @@ final class KaPostsWatchStore: ObservableObject {
     /// The watched authors as KaPosts pubkeys (66-hex compressed; the push service compares the
     /// x-only part), for the push registration.
     var watchedPubkeys: [String] {
-        watching.sorted().compactMap { address in
-            guard let parsed = KaspaAddress(address: address), parsed.type == .pubKey, parsed.payload.count == 32 else { return nil }
+        let blocked = Set(KaPostsModerationStore.shared.blocked.map { $0.lowercased() })
+        return watching.sorted().compactMap { address in
+            guard !blocked.contains(address),
+                  let parsed = KaspaAddress(address: address), parsed.type == .pubKey, parsed.payload.count == 32 else { return nil }
             return "02" + parsed.payload.map { String(format: "%02x", $0) }.joined()
         }
     }
@@ -8945,6 +9171,12 @@ final class KaPostsModerationStore: ObservableObject {
         // Block supersedes mute - no need to track both.
         muted.remove(address)
         persist()
+        // Their bell goes too: the push service sends every new post by a watched author, and
+        // a background push never passes the block list. Turning it off re-registers without
+        // them (and `watchedPubkeys` leaves out anyone blocked before this, at the next update).
+        if KaPostsWatchStore.shared.isWatching(address) {
+            KaPostsWatchStore.shared.toggle(address)
+        }
     }
 
     func unblock(_ address: String) {
@@ -9600,7 +9832,7 @@ struct KaPostsFollowListView: View {
                 .refreshable { await load() }
             }
         }
-        .navigationTitle(kind.title)
+        .navigationTitle(LocalizedStringKey(kind.title))
         .navigationBarTitleDisplayMode(.inline)
         .kaPostsStatusChrome()
         .task { await load() }
@@ -10178,9 +10410,10 @@ struct KaPostsPageView: View {
 
 
 /// X-style ring meter shared by the post composer and the reply bar: fills toward the
-/// 25,000-character limit, flips orange in the final 10% with a live remaining count, red at
-/// the wall. Hidden while empty.
+/// 25,000 limit, flips orange in the final 10% with a live remaining count, red at the wall.
+/// Hidden while empty.
 struct KaPostCharacterMeter: View {
+    /// `KaPostsView.postLength` of the text: bytes, one per English character.
     let count: Int
 
     var body: some View {

@@ -4,7 +4,6 @@ import Combine
 import UIKit
 import UserNotifications
 import CryptoKit
-import Intents
 
 // MARK: - Conversation state, message sending, handshake sending, fee estimation
 
@@ -23,9 +22,6 @@ extension ChatService {
             await self.fetchNewMessages(forActiveOnly: address)
         }
         loadReactions(for: address)
-        // Keep the Share Extension's "Recent" list fresh: opening a chat counts as touching it.
-        let alias = ContactsManager.shared.displayName(for: address)
-        SharedDataManager.recordRecentConversation(address: address, alias: alias)
     }
 
     /// Returns total number of stored messages using a background worker to avoid
@@ -1406,49 +1402,6 @@ extension ChatService {
         }
         if !isCallEnvelope { replyingTo = nil }
 
-        // Successful send: refresh the Share Extension's recents and donate an
-        // INSendMessageIntent so iOS can surface this conversation as a share-sheet
-        // direct target (requires IntentsSupported in the extension's Info.plist).
-        SharedDataManager.recordRecentConversation(address: contact.address, alias: contact.alias)
-        donateSendMessageIntent(for: contact)
-    }
-
-    /// Donates an INSendMessageIntent for this conversation. After a few donations iOS shows the
-    /// conversation as a suggested direct target in the system share sheet; the Share Extension
-    /// reads the donated `conversationIdentifier` (the contact address) back from
-    /// `extensionContext.intent` to pre-select the contact.
-    private func donateSendMessageIntent(for contact: Contact) {
-        let trimmedAlias = contact.alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = trimmedAlias.isEmpty ? Contact.generateDefaultAlias(from: contact.address) : trimmedAlias
-
-        let recipient = INPerson(
-            personHandle: INPersonHandle(value: contact.address, type: .unknown),
-            nameComponents: nil,
-            displayName: displayName,
-            image: nil,
-            contactIdentifier: nil,
-            customIdentifier: contact.address
-        )
-
-        let intent = INSendMessageIntent(
-            recipients: [recipient],
-            outgoingMessageType: .outgoingMessageText,
-            content: nil,
-            speakableGroupName: INSpeakableString(spokenPhrase: displayName),
-            conversationIdentifier: contact.address,
-            serviceName: "KaChat",
-            sender: nil,
-            attachments: nil
-        )
-
-        let interaction = INInteraction(intent: intent, response: nil)
-        interaction.groupIdentifier = contact.address
-        interaction.direction = .outgoing
-        interaction.donate { error in
-            if let error {
-                AppLog.log("[ChatService] INSendMessageIntent donation failed: %@", error.localizedDescription)
-            }
-        }
     }
 
     func sendAudio(
@@ -2143,7 +2096,7 @@ extension ChatService {
         let now = Date()
         pruneMessageUtxoCaches(confirmed: confirmed, now: now)
         let confirmedSpendable = confirmed
-            .filter { $0.blockDaaScore > 0 && !$0.isCoinbase }
+            .filter { $0.blockDaaScore > 0 && !$0.isCoinbase && $0.covenantId == nil }
         // A pending coin is only ever signed by the chatting key, so only coins locked to the
         // chatting address may be offered. The cache is shared and outlives an account switch;
         // a coin locked to another address, signed with this key, is rejected by the network
@@ -2176,7 +2129,7 @@ extension ChatService {
     /// Holds back coins by outpoint key ("txid:index"): what `NodePoolService` does with every
     /// transaction it submits, so no send path can leave its coins for the next one to pick.
     func reserveOutpointKeys(_ keys: [String]) {
-        let expiration = Date().addingTimeInterval(pendingMessageUtxoTTL)
+        let expiration = Date().addingTimeInterval(reservedOutpointTTL)
         for key in keys {
             reservedMessageOutpoints[key] = expiration
             pendingMessageUtxos.removeValue(forKey: key)
@@ -2184,8 +2137,31 @@ extension ChatService {
         invalidateUtxoCache()
     }
 
+    /// Holds a submit's coins while it is out (`NodePoolService.submitTransaction`). Sends that
+    /// skip `enqueueOutgoingTxOperation` (.kachat actions, KNS, scheduled posts) could otherwise
+    /// pick the same coins while it waits for the node. The pending-change list is left alone, so
+    /// a coin given back is offered again as before. Returns the keys it added (not already held),
+    /// for `releaseOutpointKeys` if nothing went out.
+    func holdOutpointKeysForSubmit(_ keys: [String]) -> [String] {
+        let now = Date()
+        let expiration = now.addingTimeInterval(reservedOutpointTTL)
+        let added = keys.filter { (reservedMessageOutpoints[$0] ?? .distantPast) <= now }
+        for key in added {
+            reservedMessageOutpoints[key] = expiration
+        }
+        return added
+    }
+
+    /// Gives back coins `holdOutpointKeysForSubmit` held for a submit that didn't go out, or
+    /// whose outcome is unknown (never held: see `recordPlainSend`).
+    func releaseOutpointKeys(_ keys: [String]) {
+        for key in keys {
+            reservedMessageOutpoints.removeValue(forKey: key)
+        }
+    }
+
     func reserveMessageOutpoints(_ utxos: [UTXO]) {
-        let expiration = Date().addingTimeInterval(pendingMessageUtxoTTL)
+        let expiration = Date().addingTimeInterval(reservedOutpointTTL)
         for utxo in utxos {
             reservedMessageOutpoints[outpointKey(utxo.outpoint)] = expiration
         }
@@ -2590,6 +2566,8 @@ extension ChatService {
 
         // Paid to the contact's chatting address (the memo is encrypted to its key).
         if let reason = KaspaAddress.otherNetworkReason(contact.address) { throw KasiaError.networkError(reason) }
+        // whatever handed it over (a name service, a link), only a valid address of this network
+        guard KaspaAddress.isValidOnActiveNetwork(contact.address) else { throw KasiaError.invalidAddress }
         let destinationAddress = contact.address
 
         /// The id this device computed for what it is about to submit (`acceptedTransactionId`).
@@ -2816,11 +2794,12 @@ extension ChatService {
         guard amountSompi > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
         }
-        guard KaspaAddress.scriptPublicKey(from: toAddress) != nil else {
-            throw KasiaError.invalidAddress
-        }
         // the script ignores the prefix: a kaspatest: address on mainnet would pay real KAS
         if let reason = KaspaAddress.otherNetworkReason(toAddress) { throw KasiaError.networkError(reason) }
+        // whatever handed it over (a name service, a link), only a valid address of this network
+        guard KaspaAddress.isValidOnActiveNetwork(toAddress) else {
+            throw KasiaError.invalidAddress
+        }
         guard let wallet = WalletManager.shared.currentWallet else {
             throw KasiaError.walletNotFound
         }
@@ -3064,10 +3043,13 @@ extension ChatService {
     }
 
     /// Leaves out coins a transaction from this app has just spent (`reservedMessageOutpoints`):
-    /// the node goes on listing them until that spend is in a block.
+    /// the node goes on listing them until that spend is in a block. Also coins that carry a
+    /// KIP-20 covenant: every send path here builds plain version-0 transactions, which must not
+    /// drag one in (the .kachat funding leaves them out for the same reason).
     func unreservedUtxos(_ utxos: [UTXO]) -> [UTXO] {
         let now = Date()
         return utxos.filter { utxo in
+            guard utxo.covenantId == nil else { return false }
             guard let until = reservedMessageOutpoints[outpointKey(utxo.outpoint)] else { return true }
             return until <= now
         }
@@ -3118,11 +3100,12 @@ extension ChatService {
         guard amountSompi > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
         }
-        guard KaspaAddress.scriptPublicKey(from: toAddress) != nil else {
-            throw KasiaError.invalidAddress
-        }
         // the script ignores the prefix: a kaspatest: address on mainnet would pay real KAS
         if let reason = KaspaAddress.otherNetworkReason(toAddress) { throw KasiaError.networkError(reason) }
+        // whatever handed it over (a name service, a link), only a valid address of this network
+        guard KaspaAddress.isValidOnActiveNetwork(toAddress) else {
+            throw KasiaError.invalidAddress
+        }
         guard let fromAddress = WalletManager.shared.spendingAddress(at: index),
               let privateKey = WalletManager.shared.spendingPrivateKey(at: index) else {
             throw KasiaError.keychainError("Could not derive this spending address")
@@ -3135,26 +3118,28 @@ extension ChatService {
         // not reach would strand the funds behind a pointer. A self-send (the Compound action)
         // moves nothing out of the address, so it neither splits its consolidation onto a fresh
         // address nor rotates.
-        var freshChangeIndex: Int?
-        var changeAddress: String?
-        // Only the primary rotates: a non-primary quantum source's slot is just revealed.
-        let sourceIsPrimary = index == WalletManager.shared.currentSpendingAddressIndex
-        let isSelfSend = toAddress.lowercased() == fromAddress.lowercased()
-        // A quantum source's change must NEVER return to it - the spend reveals its key, and
-        // change back would park funds on a revealed address (KIP-22). A legacy primary keeps
-        // rotating as before, onto a fresh quantum slot now. A self-send (Compound) still
-        // consolidates into the address itself, shield off.
-        if sendUsesFreshChange(index: index, isSelfSend: isSelfSend) {
-            if let slot = await WalletManager.shared.verifiedFreshQuantumSlot() {
-                freshChangeIndex = slot.index
-                changeAddress = slot.address
-            } else if WalletManager.isQuantumIndex(index) {
-                // never change back onto the key this spend reveals (IOS-104)
-                throw KasiaError.keychainError(AppLocalization.string("Couldn't prepare the next address. Try again."))
-            }
-        }
-
         return try await enqueueOutgoingTxOperation {
+            // Picked inside the queue, as `sendPaymentInternal` does: before it, an instant tip still
+            // running could hold the same unrevealed slot, and both changes landed on one address.
+            var freshChangeIndex: Int?
+            var changeAddress: String?
+            // Only the primary rotates: a non-primary quantum source's slot is just revealed.
+            let sourceIsPrimary = index == WalletManager.shared.currentSpendingAddressIndex
+            let isSelfSend = toAddress.lowercased() == fromAddress.lowercased()
+            // A quantum source's change must NEVER return to it - the spend reveals its key, and
+            // change back would park funds on a revealed address (KIP-22). A legacy primary keeps
+            // rotating as before, onto a fresh quantum slot now. A self-send (Compound) still
+            // consolidates into the address itself, shield off.
+            if self.sendUsesFreshChange(index: index, isSelfSend: isSelfSend) {
+                if let slot = await WalletManager.shared.verifiedFreshQuantumSlot() {
+                    freshChangeIndex = slot.index
+                    changeAddress = slot.address
+                } else if WalletManager.isQuantumIndex(index) {
+                    // never change back onto the key this spend reveals (IOS-104)
+                    throw KasiaError.keychainError(AppLocalization.string("Couldn't prepare the next address. Try again."))
+                }
+            }
+
             let rpcManager = NodePoolService.shared
             let settings = self.currentSettings
 
@@ -3767,7 +3752,11 @@ extension ChatService {
     }
 
     /// Calculate maximum sendable amount (balance - fee for send-all transaction with no change output)
-    func estimateMaxPaymentAmount(to contact: Contact, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, tip: KaPostTip? = nil) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
+    /// With a `feeMultiplier` (Fast, Priority), the extra is priced on this Max's own coins,
+    /// base × (multiplier − 1), the way the Review prices it; `extraFeeSompi` is then ignored. A
+    /// fixed extra taken from an earlier estimate fell short when Max needed more coins, and the
+    /// Review said "Insufficient funds" every time.
+    func estimateMaxPaymentAmount(to contact: Contact, note: String = "", sourceSpendingIndex: Int? = nil, manualUtxos: [UTXO]? = nil, extraFeeSompi: UInt64 = 0, feeMultiplier: UInt64? = nil, tip: KaPostTip? = nil) async throws -> (amountSompi: UInt64, cappedAtInputLimit: Bool) {
         // Same toggle-aware sourcing as `estimatePaymentFee` above - see its doc comment.
         let sourceAddress = try paymentFundingSourceAddress(spendingIndex: sourceSpendingIndex)
         guard let recipientPublicKey = KaspaAddress.publicKey(from: contact.address) else {
@@ -3808,7 +3797,8 @@ extension ChatService {
         )
 
         // Leave room for a Fast / Priority / custom extra on top of the base fee.
-        let totalFee = fee + extraFeeSompi
+        let extra = feeMultiplier.map { $0 > 1 ? fee.multipliedReportingOverflow(by: $0 - 1).partialValue : 0 } ?? extraFeeSompi
+        let totalFee = addSompiSafely(fee, extra)
         guard totalBalance > totalFee else {
             throw KasiaError.networkError("Balance too low to cover fee")
         }

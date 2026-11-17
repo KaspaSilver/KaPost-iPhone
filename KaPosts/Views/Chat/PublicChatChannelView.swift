@@ -607,7 +607,9 @@ struct PublicChatChannelView: View {
     /// Tap-a-reply-quote-to-jump-to-original - public chat has no pagination (the full room
     /// history is already in `messages`), so a jump either finds the target right away or it's
     /// genuinely gone (pruned/undelivered).
-    private func jumpToReplyOriginal(id: String, in messages: [PublicChatMessage], using proxy: ScrollViewProxy) {
+    private func jumpToReplyOriginal(id rawId: String, in messages: [PublicChatMessage], using proxy: ScrollViewProxy) {
+        // A reply to a hidden part of a long voice note goes to the note's one bubble.
+        let id = publicChatService.voiceNotes(forChannel: channelName).anchorIdByPartId[rawId] ?? rawId
         guard messages.contains(where: { $0.id == id }) else {
             showToast("Original message not available.")
             return
@@ -709,9 +711,10 @@ struct PublicChatChannelView: View {
 
     /// A long voice note's parts as its bubble plays them.
     private func makeVoiceNoteInput(for note: PublicChatVoiceNote) -> PublicChatVoiceNoteInput {
+        // Just the parts' text: the bubble's player decodes the audio off the main thread.
         PublicChatVoiceNoteInput(
             count: note.count,
-            parts: note.parts.compactMap { VoiceMessageSniff.decode($0.content)?.data }
+            partContents: note.parts.map(\.content)
         )
     }
 
@@ -1116,7 +1119,7 @@ struct PublicChatChannelView: View {
 
     /// "02:50", as KaChat's recording bar shows it.
     private func formatRecordingTime(_ duration: TimeInterval) -> String {
-        guard duration.isFinite else { return "--:--" }
+        guard duration.isFinite, duration >= 0, duration < 360_000 else { return "--:--" }
         let totalSeconds = Int(duration.rounded())
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
@@ -1443,7 +1446,7 @@ private struct PublicChatRoomTitleChip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Room info for #" + channelName)
+        .accessibilityLabel(Text("Room info for #\(channelName)"))
     }
 }
 
@@ -1996,13 +1999,14 @@ private struct PublicChatMessageRow: View, Equatable {
             // A dropped connection or a server briefly away: tapping again is the fix.
             translationLink("Translation unavailable - try again") { translate() }
         case .unavailable(let reason):
-            Text(reason)
+            // The service's own reasons are English keys; a server message falls through as is.
+            Text(AppLocalization.string(reason))
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
     }
 
-    private func translationLink(_ title: String, action: @escaping () -> Void) -> some View {
+    private func translationLink(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.caption.weight(.semibold))

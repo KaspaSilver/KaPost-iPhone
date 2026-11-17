@@ -63,7 +63,7 @@ struct PublicChatRoomInfoView: View {
     private var retentionDescription: String? {
         guard PublicChatService.isIndexerTracked(normalized) else { return nil }
         let days = Int((Double(PublicChatStore.indexerRetentionMillis) / 86_400_000).rounded())
-        return days == 1 ? "1 day" : "\(days) days"
+        return String(format: AppLocalization.string(days == 1 ? "%d day" : "%d days"), locale: AppLocalization.locale, days)
     }
 
     private var shareText: String {

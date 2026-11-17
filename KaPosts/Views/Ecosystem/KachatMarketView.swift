@@ -849,14 +849,16 @@ private struct KachatComingSoonPill: View {
 // MARK: - An address's .kachat names
 
 /// A wallet's Domains tab: the `.kachat` names the address holds, to look at only. Names are
-/// registered, renewed, sold and edited in KaChat Wallet, not here, so the tab says so and opens
-/// that app. `.kachat` is the only name service KaPosts reads - no .kas, .k or .kaspa.
+/// registered, renewed, sold and edited in KaPost's own Wallet > Your Domains > .kachat (every
+/// KaChat app has the full wallet since 2026-11-07), so the tab links there. `.kachat` is the
+/// only name service KaPosts reads - no .kas, .k or .kaspa.
 struct AddressDomainsTab: View {
     let address: String
 
-    /// nil while loading.
+    /// The bare names, nil while loading. Shown through `KachatNameLabel` when drawn.
     @State private var names: [String]?
-    @State private var walletAppMissing = false
+    /// Redraws the list when Show .kachat Endings flips.
+    @AppStorage(KachatNameLabel.showEndingsKey) private var showsEndings = true
 
     var body: some View {
         ScrollView {
@@ -870,7 +872,7 @@ struct AddressDomainsTab: View {
                             .padding(.vertical, 24)
                     } else {
                         ForEach(names, id: \.self) { name in
-                            DomainNameCardView(title: name)
+                            DomainNameCardView(title: KachatNameLabel.display(name))
                         }
                     }
                 } else {
@@ -884,31 +886,33 @@ struct AddressDomainsTab: View {
         .task(id: address) { await load() }
     }
 
+    /// The account's own .kachat list (the Chatting Address's, which holds the names and offers on
+    /// every address of this wallet): the same screen as Wallet > Your Domains > .kachat.
+    private var accountAddress: String? {
+        WalletManager.shared.currentWallet?.publicAddress
+    }
+
     private var manageNote: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Manage your domains in KaChat Wallet", systemImage: "wallet.bifold")
+            Label("Manage your domains", systemImage: "at")
                 .font(.headline)
-            Text("KaPost shows the .kachat names on this address. To register, renew, sell or edit them, use the KaChat Wallet app.")
+            Text("This tab shows the .kachat names on this address. To register, renew, sell or edit them, open Your Domains.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-            Button {
-                guard let url = URL(string: "kachatwallet://") else { return }
-                UIApplication.shared.open(url) { opened in
-                    walletAppMissing = !opened
+            if KachatNamesService.isEnabled, let accountAddress {
+                NavigationLink {
+                    KachatLiveDomainsTab(walletAddress: accountAddress)
+                        .navigationTitle(Text(verbatim: NameServiceTLD.kachat.suffix))
+                        .navigationBarTitleDisplayMode(.inline)
+                } label: {
+                    Text("Open Your Domains")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.accentColor))
                 }
-            } label: {
-                Text("Open KaChat Wallet")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.accentColor))
-            }
-            .buttonStyle(.plain)
-            if walletAppMissing {
-                Text("KaChat Wallet isn't installed on this iPhone.")
-                    .font(.footnote)
-                    .foregroundColor(.orange)
+                .buttonStyle(.plain)
             }
         }
         .padding(16)
@@ -919,39 +923,7 @@ struct AddressDomainsTab: View {
     private func load() async {
         let normalized = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let held = await NameServicesClient.shared.kachatNames(of: [normalized])
-        names = (held[normalized] ?? []).map(\.display)
-    }
-}
-
-struct KachatAddressDomainsList: View {
-    /// The address whose names to show. On testnet (live registry) the list is that address's
-    /// own .kachat names; nil, or mainnet, shows the "coming" note.
-    var address: String? = nil
-
-    var body: some View {
-        if let address, KachatNamesService.isEnabled {
-            KachatAddressLiveNamesList(address: address)
-        } else {
-            comingNote
-        }
-    }
-
-    private var comingNote: some View {
-        List {
-            VStack(spacing: 10) {
-                KachatTabIcon.view(side: 40)
-                Text("No .kachat names on this address")
-                    .font(.headline)
-                Text("Names this address claims or buys show here once .kachat names launch.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
-            .listRowBackground(Color.clear)
-        }
-        .listStyle(.insetGrouped)
+        names = (held[normalized] ?? []).map(\.name)
     }
 }
 

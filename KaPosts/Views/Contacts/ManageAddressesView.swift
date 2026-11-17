@@ -915,8 +915,11 @@ struct ManageAddressesView: View {
             // The count is addresses that hold a balance or a KNS domain - say so, rather than
             // "used", which is what the old high-water-mark number implied and was not.
             let summary = discovered == 0
-                ? "No addresses with a balance or domain found."
-                : "Found \(discovered) address\(discovered == 1 ? "" : "es") with a balance or domain."
+                ? AppLocalization.string("No addresses with a balance or domain found.")
+                : String(format: AppLocalization.string(discovered == 1
+                                                         ? "Found %lld address with a balance or domain."
+                                                         : "Found %lld addresses with a balance or domain."),
+                         locale: AppLocalization.locale, discovered)
             discoverySummary = summary
             // Closed the sheet and carried on? Then the summary above has nowhere to render, so
             // say it here instead of finishing silently.
@@ -931,11 +934,8 @@ struct ManageAddressesView: View {
     /// several separate transactions, one per source address.
     private func consolidateToPrimary(extraFeeSompi: UInt64 = 0) {
         guard !isConsolidating else { return }
-        // Every address's balance leaves at once, with no swipe to ask first: the phone's lock
-        // comes first. Declining leaves everything as it was.
-        DeviceAuth.authenticate(reason: AppLocalization.string("Confirm sending Kaspa")) {
-            sweepToPrimary(extraFeeSompi: extraFeeSompi)
-        }
+        // No Face ID: sends don't ask (owner's call, 2026-11-13), and this one stays in the account.
+        sweepToPrimary(extraFeeSompi: extraFeeSompi)
     }
 
     private func sweepToPrimary(extraFeeSompi: UInt64) {
@@ -1353,6 +1353,8 @@ struct SpendingAddressWithdrawView: View {
 
     @State private var isResolvingKNS = false
     @State private var resolvedAddress: String?
+    /// In full ("alice.kachat"); shown through `KachatNameLabel.shown`, so Show .kachat Endings
+    /// applies as it is now, not as it was when the name resolved.
     @State private var resolvedDomain: String?
     /// Every service's answer for a typed name and the one in use: the rest go under "Other domains".
     @State private var nameResolutions: [NameResolution] = []
@@ -1492,7 +1494,7 @@ struct SpendingAddressWithdrawView: View {
                         lockedAddress: isCompoundMode ? source.address : nil,
                         isResolving: isResolvingKNS,
                         resolvedAddress: resolvedAddress,
-                        resolvedName: resolvedDomain,
+                        resolvedName: resolvedDomain.map { KachatNameLabel.shown(fullName: $0) },
                         lookupError: knsError,
                         isValidAddress: isValidAddress,
                         onScan: { showQRScanner = true },
@@ -1674,6 +1676,12 @@ struct SpendingAddressWithdrawView: View {
 
     private func handleInputChange(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An upper-case address goes into the field in lower case; that change comes back here.
+        let lowered = lowercasedKaspaAddress(trimmed)
+        if lowered != trimmed {
+            addressInput = lowered
+            return
+        }
 
         resolvedAddress = nil
         resolvedDomain = nil
@@ -1687,7 +1695,7 @@ struct SpendingAddressWithdrawView: View {
             return
         }
 
-        if trimmed.hasPrefix("kaspa:") || trimmed.hasPrefix("kaspatest:") {
+        if trimmed.lowercased().hasPrefix("kaspa:") || trimmed.lowercased().hasPrefix("kaspatest:") {
             // the other network's address is the same key on another chain: refused
             isValidAddress = KaspaAddress.isValidOnActiveNetwork(trimmed)
             return
@@ -1704,8 +1712,16 @@ struct SpendingAddressWithdrawView: View {
     /// Use one service's answer (the priority one, or a pick from "Other domains").
     private func selectResolution(_ resolution: NameResolution) {
         guard let address = resolution.address else { return }
+        // Only an address of this network is an answer; anything else reads as not found.
+        guard KaspaAddress.isValidOnActiveNetwork(address) else {
+            resolvedAddress = nil
+            resolvedDomain = nil
+            selectedTLD = nil
+            knsError = NameServicesClient.notFoundMessage(typed: resolution.fullName, results: [])
+            return
+        }
         resolvedAddress = address
-        resolvedDomain = resolution.display
+        resolvedDomain = resolution.fullName
         selectedTLD = resolution.tld
         knsError = nil
     }
@@ -1750,6 +1766,7 @@ struct SpendingAddressWithdrawView: View {
             if let queryIndex = address.firstIndex(of: "?") {
                 address = String(address[..<queryIndex])
             }
+            address = lowercasedKaspaAddress(address)
         }
         addressInput = address
         handleInputChange(address)
@@ -2263,7 +2280,7 @@ struct SpendingAddressTransactionHistoryView: View {
                 onViewPrivateKey: {
                     afterAddressActions = {
                         if settingsViewModel.settings.biometricSpendingKeyEnabled {
-                            DeviceAuth.authenticate(reason: "Unlock to view this address's private key") {
+                            DeviceAuth.authenticate(reason: AppLocalization.string("Unlock to view this address's private key")) {
                                 showPrivateKeySheet = true
                             }
                         } else {

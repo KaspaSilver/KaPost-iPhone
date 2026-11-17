@@ -352,21 +352,6 @@ extension ChatService {
         let unreadCount: Int
     }
 
-    struct ChatHistoryArchive: Codable {
-        let schemaVersion: Int
-        let exportedAt: Date
-        let walletAddress: String?
-        let conversations: [ChatHistoryArchiveConversation]
-        // Cross-platform group key material (optional; older archives omit it). Carries the
-        // full bag - including the admin's groupSeed - so another device of the same account
-        // recovers admin groups that have no on-chain invite addressed to it.
-        let groups: [ChatHistoryArchiveGroup]?
-        // Deletion tombstones (optional; older archives omit it): addresses whose chats the
-        // user deleted. A restore - local file, Nextcloud, or any other transport - must
-        // never resurrect them, even on a fresh install with no local tombstones.
-        let deletedContactAddresses: [String]?
-    }
-
     struct ChatHistoryArchiveConversation: Codable {
         let conversationId: UUID?
         let contactAddress: String

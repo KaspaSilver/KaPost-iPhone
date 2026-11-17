@@ -207,12 +207,18 @@ final class NFCCardConnection {
         _ = try await command(0xD2, data: Data(SHA256.hash(data: backup)))
     }
 
+    /// The most a backup can be: READ's offset is two bytes. Today's applet holds 2048.
+    static let maxReadableBackup = 0xFFFF
+
     func readBackup() async throws -> Data {
         var backup = Data()
         while true {
             let chunk = try await command(0xB0, p1p2: backup.count, responseLength: 256)
             if chunk.isEmpty { return backup }
             backup.append(chunk)
+            // A faulty or hostile card that never sends the empty end would grow this until the
+            // session times out, and past two bytes the offset wraps and re-reads the start.
+            guard backup.count <= Self.maxReadableBackup else { throw NFCCardError.unreadableBackup }
         }
     }
 

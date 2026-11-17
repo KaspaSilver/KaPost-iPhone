@@ -23,8 +23,8 @@ struct KaPostsSettingsView: View {
 
     private static let fallbackTipKas = 1.0
 
-    /// Instant tips skip Face ID, so the most one may send: a bigger default tip opens the tip sheet,
-    /// whose swipe asks first.
+    /// Instant tips go on one tap, with no swipe, so the most one may send: a bigger default tip opens
+    /// the tip sheet, whose swipe is the confirmation.
     static let instantTipLimitSompi: UInt64 = 10 * 100_000_000
     static let instantTipLimitNotice = "Instant tips are limited to 10 KAS. Swipe up to send this one."
 
@@ -66,17 +66,13 @@ struct KaPostsSettingsView: View {
                     Toggle("Send a default tip instantly", isOn: $instantTipEnabled)
                         .onChange(of: instantTipEnabled) { enabled in
                             if enabled {
-                                // Sends without asking from then on, so turning it on asks once.
+                                // No Face ID: sends don't ask (owner's call, 2026-11-13).
                                 guard settingsViewModel.settings.kaPostsDefaultTipSompi == nil,
                                       settingsViewModel.settings.kaPostsDefaultTipFiat == nil else { return }
-                                DeviceAuth.authenticate(reason: AppLocalization.string("Turn on instant tips")) {
-                                    if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty {
-                                        defaultTipText = Self.trimmed(Self.fallbackTipKas)
-                                    }
-                                    commitDefaultTip()
-                                } onFailure: {
-                                    instantTipEnabled = false
+                                if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    defaultTipText = Self.trimmed(Self.fallbackTipKas)
                                 }
+                                commitDefaultTip()
                             } else {
                                 settingsViewModel.settings.kaPostsDefaultTipSompi = nil
                                 settingsViewModel.settings.kaPostsDefaultTipFiat = nil

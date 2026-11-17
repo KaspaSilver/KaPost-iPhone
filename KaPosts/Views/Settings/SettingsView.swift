@@ -191,7 +191,7 @@ struct SettingsView: View {
     /// The seed phrase, behind the biometric gate when enabled.
     private func unlockSeedPhrase(_ show: @escaping () -> Void) {
         if settingsViewModel.settings.biometricSeedPhraseEnabled {
-            DeviceAuth.authenticate(reason: "Unlock to view your 12 or 24 words", onSuccess: show)
+            DeviceAuth.authenticate(reason: AppLocalization.string("Unlock to view your 12 or 24 words"), onSuccess: show)
         } else {
             show()
         }
@@ -380,7 +380,7 @@ private struct AccountNamePage: View {
 /// The standard Settings category row: icon + title behind a NavigationLink. File-scope so the
 /// in-account SettingsView and the accounts-screen AppSettingsView render identical rows.
 fileprivate func settingsCategoryRow<Destination: View>(
-    _ title: String,
+    _ title: LocalizedStringKey,
     icon: String,
     tint: Color,
     @ViewBuilder destination: @escaping () -> Destination
@@ -420,12 +420,14 @@ struct SecuritySettingsPage: View {
     /// The Toggle is driven off a proxy binding rather than the setting: the write only happens
     /// after authentication succeeds, so a failed or cancelled prompt leaves the switch exactly
     /// where it was instead of flipping and flipping back.
-    private func biometricToggle(_ title: String, reason: String, isOn: Binding<Bool>) -> some View {
+    private func biometricToggle(_ title: LocalizedStringKey, reason: String, isOn: Binding<Bool>) -> some View {
         Toggle(title, isOn: Binding(
             get: { isOn.wrappedValue },
             set: { requested in
                 guard requested != isOn.wrappedValue else { return }
-                DeviceAuth.authenticate(reason: reason) {
+                // Face ID's prompt is UIKit, outside SwiftUI's locale: resolved against the
+                // in-app language here.
+                DeviceAuth.authenticate(reason: AppLocalization.string(reason)) {
                     isOn.wrappedValue = requested
                     settingsViewModel.saveSettings()
                 } onFailure: {
@@ -848,77 +850,6 @@ struct AppSettingsView: View {
     }
 }
 
-/// Lets the user customize the 6 emojis shown in the double-tap quick-reaction bar
-/// (`QuickReactionBarView`/Android's `QuickReactionBar`) - defaults to
-/// `AppSettings.defaultQuickReactionEmojis` until changed here.
-struct QuickReactionEmojisSettingsView: View {
-    @ObservedObject var settingsViewModel: SettingsViewModel
-    @State private var editingSlotIndex: Int?
-
-    private var emojis: [String] {
-        settingsViewModel.settings.effectiveQuickReactionEmojis
-    }
-
-    var body: some View {
-        List {
-            Section {
-                HStack(spacing: 14) {
-                    ForEach(emojis.indices, id: \.self) { index in
-                        Button {
-                            editingSlotIndex = index
-                        } label: {
-                            Text(emojis[index])
-                                .font(.scaled(size: 30))
-                                .frame(width: 44, height: 44)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(Color(.systemGray5))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-            } footer: {
-                Text("Tap an emoji to replace it with a different one.")
-            }
-
-            Section {
-                Button("Reset to Default", role: .destructive) {
-                    settingsViewModel.settings.quickReactionEmojis = AppSettings.defaultQuickReactionEmojis
-                    settingsViewModel.saveSettings()
-                }
-            }
-        }
-        .navigationTitle("Quick Reactions")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: Binding(
-            get: { editingSlotIndex.map { QuickReactionSlotSelection(index: $0) } },
-            set: { if $0 == nil { editingSlotIndex = nil } }
-        )) { selection in
-            NavigationStack {
-                DesktopEmojiPickerView { emoji in
-                    var updated = emojis
-                    updated[selection.index] = emoji
-                    settingsViewModel.settings.quickReactionEmojis = updated
-                    settingsViewModel.saveSettings()
-                    editingSlotIndex = nil
-                }
-                .padding()
-                .navigationTitle("Choose Emoji")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { editingSlotIndex = nil }
-                    }
-                }
-            }
-            .presentationDetents([.medium, .large])
-        }
-    }
-}
-
 private struct QuickReactionSlotSelection: Identifiable {
     let index: Int
     var id: Int { index }
@@ -1120,6 +1051,9 @@ struct KaPostsNotificationSettingsView: View {
                 Toggle("Mentions", isOn: $settingsViewModel.settings.kaPostsNotifyMentions)
                     .onChange(of: settingsViewModel.settings.kaPostsNotifyMentions) { _ in
                         settingsViewModel.saveSettings()
+                        // Sent with the other kinds (`kaposts_notify_mentions`), so the push
+                        // service can skip mention pushes while it's off, as for the rest.
+                        Task { await PushNotificationManager.shared.forceReregister(reason: "kaposts notification kinds changed") }
                     }
             }
         }
@@ -1148,7 +1082,10 @@ struct NotificationsSettingsView: View {
                         settingsViewModel.saveSettings()
                     }
             } footer: {
-                Text("How a notification from KaPost sounds and feels when it arrives.")
+                // Only `willPresent` reads these: KaPost has no notification extension, and the
+                // push service sends every push with the default sound, so a push that arrives
+                // in the background follows the app's iOS notification settings instead.
+                Text("These apply while KaPost is open. Notifications that arrive while it's closed or in the background use KaPost's settings in the iPhone Settings app, under Notifications.")
             }
         }
         .toast(message: toastMessage, style: toastStyle)
@@ -1672,7 +1609,7 @@ struct ConnectionSettingsView: View {
     @ViewBuilder
     private func httpsInlineError(for value: String) -> some View {
         if isCleartextHTTP(value) {
-            Text(Self.httpsRequiredError)
+            Text(LocalizedStringKey(Self.httpsRequiredError))
                 .font(.caption)
                 .foregroundColor(.red)
         }
@@ -3224,9 +3161,10 @@ struct CacheSettingsPage: View {
         .task { await cache.refreshSizes() }
         .sheet(item: $pendingClear) { category in
             ConfirmActionSheet(
-                title: "Clear \(category.title)?",
+                title: String(format: AppLocalization.string("Clear %@?"), locale: AppLocalization.locale, category.title),
                 confirmTitle: "Clear",
-                confirmSubtitle: "\(CacheManager.formatted(cache.sizes[category] ?? 0)) freed. \(category.detail)",
+                confirmSubtitle: String(format: AppLocalization.string("%@ freed. %@"), locale: AppLocalization.locale,
+                                        CacheManager.formatted(cache.sizes[category] ?? 0), category.detail),
                 confirmSystemImage: "trash"
             ) {
                 Task { await cache.clear(category) }
@@ -3236,7 +3174,8 @@ struct CacheSettingsPage: View {
             ConfirmActionSheet(
                 title: "Clear All Cache?",
                 confirmTitle: "Clear All",
-                confirmSubtitle: "Frees \(CacheManager.formatted(cache.totalBytes)). Your messages, contacts and keys are not touched.",
+                confirmSubtitle: String(format: AppLocalization.string("Frees %@. Your messages, contacts and keys are not touched."),
+                                        locale: AppLocalization.locale, CacheManager.formatted(cache.totalBytes)),
                 confirmSystemImage: "trash"
             ) {
                 Task { await cache.clearAll() }

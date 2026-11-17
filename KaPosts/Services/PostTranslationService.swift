@@ -87,8 +87,15 @@ final class PostTranslationService: ObservableObject {
 
     /// Stable per-post key. On-chain posts key by their txid so a translation survives the feed
     /// being re-sorted or re-paged; local session posts fall back to their UUID.
-    static func translationKey(for remoteId: String?, localId: UUID) -> String {
-        remoteId ?? localId.uuidString
+    ///
+    /// An edited post (`editedText`, its current text) adds a hash of that text: keyed by txid
+    /// alone, a translation made before the edit kept showing over the new text. The text rather
+    /// than the edit time, since this phone's own copy and the indexer's carry different times
+    /// for the same edit. (States live in memory only, so a per-run hash is enough.)
+    static func translationKey(for remoteId: String?, localId: UUID, editedText: String? = nil) -> String {
+        let base = remoteId ?? localId.uuidString
+        guard let editedText else { return base }
+        return base + "#" + String(editedText.hashValue, radix: 36)
     }
 
     /// Detection results cached by post text.
@@ -292,7 +299,11 @@ final class PostTranslationService: ObservableObject {
         if case .translating? = states[key] { return }
         showingOriginal.remove(key)
         states[key] = .translating
-        Task { await perform(key: key, text: text, postId: postId) }
+        // An edited post's key isn't its bare txid (`translationKey`). The server caches by txid
+        // for good, so it would answer with the text before the edit: sent with no id, it is
+        // translated fresh, uncached, until the server keys its cache by edit too.
+        let cacheId = postId.flatMap { $0 == key ? $0 : nil }
+        Task { await perform(key: key, text: text, postId: cacheId) }
     }
 
     func showOriginal(key: String) { showingOriginal.insert(key) }

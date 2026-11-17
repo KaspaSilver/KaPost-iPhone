@@ -52,7 +52,7 @@ struct DesktopEmojiPickerView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text(category.title))
+                .accessibilityLabel(Text(LocalizedStringKey(category.title)))
             }
         }
     }

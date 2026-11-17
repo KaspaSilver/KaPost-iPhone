@@ -851,51 +851,58 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     ///   - network: Network type (mainnet or testnet) - ignored, uses settings
     /// - Returns: KNSDomainResolution with owner address, or nil if not found
     func resolveDomain(_ domain: String, network: NetworkType = .mainnet) async -> KNSDomainResolution? {
-        guard Self.isEnabled else { return nil }
+        await resolveDomainLookup(domain, network: network).resolution
+    }
+
+    /// `resolveDomain`, telling a lookup that couldn't be made (`failed`: KNS unreachable, an odd
+    /// answer) from a domain with no owner.
+    func resolveDomainLookup(_ domain: String, network: NetworkType = .mainnet) async -> (resolution: KNSDomainResolution?, failed: Bool) {
+        guard Self.isEnabled else { return (nil, false) }
         // Ensure domain has .kas suffix
         let fullDomain = domain.lowercased().hasSuffix(".kas") ? domain.lowercased() : "\(domain.lowercased()).kas"
 
         // URL encode the domain name
         guard let encodedDomain = fullDomain.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            return nil
+            return (nil, false)
         }
 
-        guard var components = URLComponents(string: baseURL) else { return nil }
+        guard var components = URLComponents(string: baseURL) else { return (nil, true) }
         components.path += "/\(encodedDomain)/owner"
-        guard let url = components.url else { return nil }
+        guard let url = components.url else { return (nil, false) }
 
         do {
             let (data, response) = try await fetchData(from: url)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                return nil
+                return (nil, true)
             }
 
             // 404 means domain not found
             if httpResponse.statusCode == 404 {
-                return nil
+                return (nil, false)
             }
 
             guard httpResponse.statusCode == 200 else {
-                return nil
+                return (nil, true)
             }
 
             let result = try JSONDecoder().decode(KNSDomainOwnerResponse.self, from: data)
             guard result.success,
                   let ownerData = result.data,
-                  let ownerAddress = ownerData.owner,
-                  ownerData.asset == fullDomain else {
-                return nil
+                  let ownerAddress = ownerData.owner else {
+                return (nil, false)
             }
+            // an answer for another domain is no answer
+            guard ownerData.asset == fullDomain else { return (nil, true) }
 
-            return KNSDomainResolution(
+            return (KNSDomainResolution(
                 domain: fullDomain,
                 ownerAddress: ownerAddress,
                 inscriptionId: ownerData.id
-            )
+            ), false)
         } catch {
             AppLog.log("[KNS] Domain resolution error for %@: %@", domain, error.localizedDescription)
-            return nil
+            return (nil, true)
         }
     }
 
@@ -1133,12 +1140,6 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
         // the trim does nothing, a second re-render of every avatar/name reader per fetch.
         if domainCache.count > maxCacheEntries { trimCacheIfNeeded(&domainCache) }
         persistCache()
-        // The wallet's OWN primary domain just (re)loaded - push it to the App Group so the
-        // notification extension's mentions-only gate can match Android-composed @domain
-        // mention tokens (see SharedDataManager.syncOwnKNSDomainForExtension).
-        if address == WalletManager.shared.currentWallet?.publicAddress {
-            SharedDataManager.syncOwnKNSDomainForExtension()
-        }
     }
 
     private func fetchProfileInternal(for address: String, network: NetworkType) async -> (info: KNSAddressProfileInfo?, hadError: Bool) {
@@ -2561,16 +2562,16 @@ enum KNSProfileFieldKey: String, CaseIterable, Codable {
 
     var displayName: String {
         switch self {
-        case .redirectUrl: return String(localized: "Redirect")
-        case .avatarUrl: return String(localized: "Avatar")
-        case .bannerUrl: return String(localized: "Banner")
-        case .bio: return String(localized: "Bio")
-        case .x: return String(localized: "X")
-        case .website: return String(localized: "Website")
-        case .telegram: return String(localized: "Telegram")
-        case .discord: return String(localized: "Discord")
-        case .contactEmail: return String(localized: "Email")
-        case .github: return String(localized: "GitHub")
+        case .redirectUrl: return AppLocalization.string("Redirect")
+        case .avatarUrl: return AppLocalization.string("Avatar")
+        case .bannerUrl: return AppLocalization.string("Banner")
+        case .bio: return AppLocalization.string("Bio")
+        case .x: return AppLocalization.string("X")
+        case .website: return AppLocalization.string("Website")
+        case .telegram: return AppLocalization.string("Telegram")
+        case .discord: return AppLocalization.string("Discord")
+        case .contactEmail: return AppLocalization.string("Email")
+        case .github: return AppLocalization.string("GitHub")
         }
     }
 }

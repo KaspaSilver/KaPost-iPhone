@@ -259,12 +259,20 @@ struct PublicChatAudioBubble: View {
 struct PublicChatVoiceNoteInput: Equatable {
     /// How many parts the note has in all.
     let count: Int
-    /// The parts present, in index order.
-    let parts: [Data]
+    /// The parts present, in index order, as their messages read (the voice-message JSON). The
+    /// audio is decoded only off the main thread, when the player needs it: decoding every part
+    /// here ran on each pass of the room's body, and a room with more notes than the decode cache
+    /// holds did it again every time.
+    let partContents: [String]
 
-    var isComplete: Bool { parts.count >= count }
+    var isComplete: Bool { partContents.count >= count }
     /// Changes whenever a part arrives.
-    var signature: String { parts.map { String($0.count) }.joined(separator: ",") }
+    var signature: String { partContents.map { String($0.utf8.count) }.joined(separator: ",") }
+
+    /// The parts' audio, in order. Off the main thread only.
+    static func decodedParts(_ contents: [String]) -> [Data] {
+        contents.compactMap { VoiceMessageSniff.decode($0)?.data }
+    }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.count == rhs.count && lhs.signature == rhs.signature
@@ -296,8 +304,9 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
         guard loadedSignature != signature, !isPlaying else { return }
         loadedSignature = signature
         isLoading = duration == nil
-        let parts = input.parts
+        let contents = input.partContents
         Task.detached(priority: .userInitiated) { [weak self] in
+            let parts = PublicChatVoiceNoteInput.decodedParts(contents)
             let decoded = try? WebMOpusDecoder.decodePartsToPCMFile(parts: parts)
             if let url = decoded?.url { try? FileManager.default.removeItem(at: url) }
             await MainActor.run {
@@ -330,8 +339,9 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
         pendingSeekFraction = seek
         isLoading = true
         let signature = input.signature
-        let parts = input.parts
+        let contents = input.partContents
         Task.detached(priority: .userInitiated) { [weak self] in
+            let parts = PublicChatVoiceNoteInput.decodedParts(contents)
             let decoded = try? WebMOpusDecoder.decodePartsToPCMFile(parts: parts)
             await MainActor.run {
                 guard let self else {
@@ -482,7 +492,7 @@ struct PublicChatVoiceNoteBubble: View {
                     Text(player.durationText)
                         .monospacedDigit()
                     if !input.isComplete {
-                        Text("Receiving… \(input.parts.count) of \(input.count)")
+                        Text("Receiving… \(input.partContents.count) of \(input.count)")
                     }
                 }
                 .font(.caption)

@@ -25,6 +25,13 @@ final class KaPostsIndexerHealth: ObservableObject {
     private var probeTask: Task<Void, Never>?
     private var failuresInARow = 0
     private var lastFailureAt = Date.distantPast
+    /// Probes answered in a row while down, with no failed read between them.
+    private var probePassesInARow = 0
+    /// The probe is one tiny read: in a partial outage it can pass while real pages still fail,
+    /// and ending the outage on one pass reloaded everything, failed three times and went down
+    /// again about once a minute. Two passes in a row with no failure between (or one real read
+    /// that succeeds, `noteAnswered`) end it.
+    private static let probePassesToRecover = 2
     private static let probeIntervalNanos: UInt64 = 60 * 1_000_000_000
     private static let failuresToGoDown = 3
     /// Failures further apart than this aren't a run.
@@ -40,6 +47,8 @@ final class KaPostsIndexerHealth: ObservableObject {
     }
 
     func noteFailure() {
+        // A read that fails while down breaks the probe's run, even inside the spacing below.
+        probePassesInARow = 0
         let now = Date()
         guard now.timeIntervalSince(lastFailureAt) >= Self.minFailureSpacing else { return }
         if now.timeIntervalSince(lastFailureAt) > Self.failureWindow { failuresInARow = 0 }
@@ -68,6 +77,7 @@ final class KaPostsIndexerHealth: ObservableObject {
     private func markDown() {
         guard !isDown else { return }
         isDown = true
+        probePassesInARow = 0
         AppLog.log("[KaPosts] The indexer isn't answering: saved pages and the chain from here")
         KaPostsLiveChainFeed.shared.setActive(true)
         NotificationCenter.default.post(name: .kaPostsIndexerAvailabilityChanged, object: nil)
@@ -76,7 +86,11 @@ final class KaPostsIndexerHealth: ObservableObject {
                 try? await Task.sleep(nanoseconds: Self.probeIntervalNanos)
                 guard !Task.isCancelled else { return }
                 guard UIApplication.shared.applicationState == .active else { continue }
-                if await KaPostsAPIClient.shared.probeIndexer() { self?.noteAnswered() }
+                let passed = await KaPostsAPIClient.shared.probeIndexer()
+                guard let self, !Task.isCancelled, self.isDown else { return }
+                guard passed else { self.probePassesInARow = 0; continue }
+                self.probePassesInARow += 1
+                if self.probePassesInARow >= Self.probePassesToRecover { self.noteAnswered() }
             }
         }
     }
@@ -181,7 +195,7 @@ enum KaPostsChainPosts {
         var repeatKey: String { xOnly(post.userPublicKey) + ":" + signature.lowercased() }
     }
 
-    /// A post, reply or quote from a decoded payload, or nil for anything else: another action,
+    /// A post, reply, quote or poll from a decoded payload, or nil for anything else: another action,
     /// another app's post (no KaChat marker), a repost with no text, or a bad signature.
     static func verifiedPost(payload: String, txId: String, timestampMs: Int64) -> VerifiedPost? {
         guard payload.hasPrefix(KaPostsProtocol.prefix) else { return nil }
@@ -191,11 +205,23 @@ enum KaPostsChainPosts {
         let b64: String, signingString: String
         var parent: String?
         var mentionsJSON = "[]"
+        var poll: KaPostsAPIClient.KPoll?
         switch action {
         case "post":
             b64 = fields[3]
             mentionsJSON = fields[4]
             signingString = KaPostsProtocol.postSigningString(b64Message: b64, mentionsJSON: mentionsJSON)
+        case "poll":
+            // A poll is a post whose text is the question (KAPOSTS_INDEXER.md §5.9). The votes
+            // are counted by the indexer only, so from the chain it shows its options and closing
+            // time with nothing counted yet; a vote cast meanwhile still goes on chain.
+            guard fields.count >= 7, let closesAtMs = Int64(fields[5]) else { return nil }
+            let options = fields[4].split(separator: ",").map(String.init)
+            guard (2...4).contains(options.count), decodedMentions(fields[6]) != nil else { return nil }
+            b64 = fields[3]
+            mentionsJSON = fields[6]
+            signingString = KaPostsProtocol.pollSigningString(b64Question: b64, optionsCSV: fields[4], closesAtMs: closesAtMs, mentionsJSON: mentionsJSON)
+            poll = KaPostsAPIClient.KPoll(options: options, counts: nil, total: nil, closesAt: closesAtMs, myVote: nil)
         case "reply":
             guard fields.count >= 6 else { return nil }
             b64 = fields[4]
@@ -218,7 +244,7 @@ enum KaPostsChainPosts {
             id: txId, userPublicKey: pubkey, postContent: b64, timestamp: timestampMs,
             repliesCount: nil, quotesCount: nil, upVotesCount: nil, downVotesCount: nil, tipsCount: nil,
             parentPostId: parent, mentionedPubkeys: decodedMentions(mentionsJSON) ?? [], isUpvoted: nil, isDownvoted: nil, blockedUser: nil,
-            contentType: action, isQuote: action == "quote", quote: nil, editedAt: nil, poll: nil
+            contentType: action, isQuote: action == "quote", quote: nil, editedAt: nil, poll: poll
         )
         return VerifiedPost(post: post, signature: signature)
     }
@@ -227,35 +253,52 @@ enum KaPostsChainPosts {
         try? JSONDecoder().decode([String].self, from: Data(json.utf8))
     }
 
-    /// A verified `delete:` or `edit:` record, by the key `pubkey` only: the indexer applies these
-    /// the same way, and without them a deleted post comes back for as long as it's down.
-    private enum Amendment {
+    /// A verified `delete:` or `edit:` record. It counts only on a post by the key that signed it:
+    /// the indexer applies these the same way, and without them a deleted post comes back for as
+    /// long as it's down.
+    enum Amendment {
         case delete(postId: String)
         case edit(postId: String, b64: String, mentions: [String], timestampMs: Int64)
     }
 
     private static func verifiedAmendment(payload: String, timestampMs: Int64, ofPubkey pubkey: String) -> Amendment? {
+        signedAmendment(payload: payload, timestampMs: timestampMs, onlyBy: pubkey)?.amendment
+    }
+
+    /// A delete or edit and the key that signed it (`authorPubkey`), whoever that is: the block
+    /// stream doesn't know a post's author until it is matched (`KaPostsLiveChainFeed`).
+    /// `onlyBy` skips the signature check for anyone else's.
+    static func signedAmendment(payload: String, timestampMs: Int64, onlyBy pubkey: String? = nil) -> (authorPubkey: String, amendment: Amendment)? {
         guard payload.hasPrefix(KaPostsProtocol.prefix) else { return nil }
         let fields = payload.dropFirst(KaPostsProtocol.prefix.count).components(separatedBy: ":")
-        guard fields.count >= 4, xOnly(fields[1]) == xOnly(pubkey) else { return nil }
+        guard fields.count >= 4 else { return nil }
+        if let pubkey, xOnly(fields[1]) != xOnly(pubkey) { return nil }
         switch fields[0] {
         case "delete":
             guard signatureIsValid(fields[2], signingString: KaPostsProtocol.deleteSigningString(postId: fields[3]), pubkey: fields[1]) else { return nil }
-            return .delete(postId: fields[3])
+            return (fields[1], .delete(postId: fields[3]))
         case "edit":
             guard fields.count >= 6, let mentions = decodedMentions(fields[5]),
                   let bytes = Data(base64Encoded: fields[4]), let text = String(data: bytes, encoding: .utf8),
                   KaPostsAPIClient.isKaChatContent(text),
                   !KaPostsAPIClient.stripMarker(text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   signatureIsValid(fields[2], signingString: KaPostsProtocol.editSigningString(postId: fields[3], b64Message: fields[4], mentionsJSON: fields[5]), pubkey: fields[1]) else { return nil }
-            return .edit(postId: fields[3], b64: fields[4], mentions: mentions, timestampMs: timestampMs)
+            return (fields[1], .edit(postId: fields[3], b64: fields[4], mentions: mentions, timestampMs: timestampMs))
         default:
             return nil
         }
     }
 
+    /// Whether an edit made at `editedAtMs` counts on `post`: within the indexer's edit window,
+    /// and never on a poll (§5.9: its options are what people voted on).
+    static func editApplies(to post: KaPostsAPIClient.KPost, atMs editedAtMs: Int64) -> Bool {
+        post.contentType != "poll" && post.poll == nil
+            && editedAtMs >= post.timestamp
+            && editedAtMs - post.timestamp <= Int64(KaPostsAPIClient.editWindow * 1000)
+    }
+
     /// `post` as a later edit left it.
-    private static func edited(_ post: KaPostsAPIClient.KPost, b64: String, mentions: [String], atMs: Int64) -> KaPostsAPIClient.KPost {
+    static func edited(_ post: KaPostsAPIClient.KPost, b64: String, mentions: [String], atMs: Int64) -> KaPostsAPIClient.KPost {
         KaPostsAPIClient.KPost(
             id: post.id, userPublicKey: post.userPublicKey, postContent: b64, timestamp: post.timestamp,
             repliesCount: post.repliesCount, quotesCount: post.quotesCount, upVotesCount: post.upVotesCount,
@@ -265,7 +308,7 @@ enum KaPostsChainPosts {
         )
     }
 
-    private static func signatureIsValid(_ signature: String, signingString: String, pubkey: String) -> Bool {
+    static func signatureIsValid(_ signature: String, signingString: String, pubkey: String) -> Bool {
         guard pubkey.count == 66, let key = Data(hexString: String(pubkey.dropFirst(2))), key.count == 32,
               let signatureBytes = Data(hexString: signature), signatureBytes.count == 64 else { return false }
         let digest = Blake2b.hash(Data(signingString.utf8), digestLength: 32, key: "PersonalMessageSigningHash")
@@ -320,13 +363,11 @@ enum KaPostsChainPosts {
         to found: [VerifiedPost]
     ) -> [KaPostsAPIClient.KPost] {
         var seen = Set<String>()
-        let editWindowMs = Int64(KaPostsAPIClient.editWindow * 1000)
         return found.sorted { $0.post.timestamp < $1.post.timestamp }
             .filter { seen.insert($0.repeatKey).inserted && !deleted.contains($0.post.id) }
             .map { verified -> KaPostsAPIClient.KPost in
                 let post = verified.post
-                guard let edit = latestEdits[post.id], edit.timestampMs >= post.timestamp,
-                      edit.timestampMs - post.timestamp <= editWindowMs else { return post }
+                guard let edit = latestEdits[post.id], editApplies(to: post, atMs: edit.timestampMs) else { return post }
                 return edited(post, b64: edit.b64, mentions: edit.mentions, atMs: edit.timestampMs)
             }
             .sorted { $0.timestamp > $1.timestamp }
@@ -355,15 +396,42 @@ final class KaPostsLiveChainFeed: ObservableObject {
 
     /// Newest first.
     @Published private(set) var posts: [KaPostsAPIClient.KPost] = []
+    /// Deletes and edits seen on the stream during the outage, keyed by `amendmentKey` (post id
+    /// and the x-only key that signed it): one counts only on a post by that key, as on the
+    /// indexer, so a stranger's signed "delete" of someone else's post is never matched.
+    @Published private(set) var amendments: [String: LiveAmendment] = [:]
     private var handlerId: UUID?
     private var active = false
     /// Every copy of a signed payload after the first is a replay (`VerifiedPost.repeatKey`).
+    /// Capped, oldest out first (`seenOrder`): during a long outage it grew by every post
+    /// streamed while `posts` stayed at `keep`. The cap is far past `keep`, so a replay is only
+    /// missed for a post long gone from the stream.
     private var seenPayloads = Set<String>()
+    private var seenOrder: [String] = []
     private static let keep = 300
+    private static let keepSeen = 3000
+    private static let keepAmendments = 1000
     private static let client = "kaposts-chain-feed"
     private nonisolated static let scanQueue = DispatchQueue(label: "com.kachat.kaposts.chainfeed", qos: .utility)
-    private nonisolated static let prefixes: [String] = ["post:", "reply:", "quote:"].map { action in
+    private nonisolated static let prefixes: [String] = ["post:", "reply:", "quote:", "poll:", "delete:", "edit:"].map { action in
         (KaPostsProtocol.prefix + action).utf8.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A delete (`edit` nil) or the latest edit of one post by one key.
+    struct LiveAmendment {
+        let edit: (b64: String, mentions: [String], timestampMs: Int64)?
+        let seenAtMs: Int64
+    }
+
+    /// What one block held for this feed.
+    private struct Scan {
+        var posts: [KaPostsChainPosts.VerifiedPost] = []
+        var amendments: [(key: String, amendment: LiveAmendment)] = []
+        var isEmpty: Bool { posts.isEmpty && amendments.isEmpty }
+    }
+
+    nonisolated static func amendmentKey(postId: String, authorPubkey: String) -> String {
+        postId + ":" + KaPostsChainPosts.xOnly(authorPubkey)
     }
 
     private init() {}
@@ -385,25 +453,85 @@ final class KaPostsLiveChainFeed: ObservableObject {
         } else {
             // The indexer has these now. The handler stays, as for rooms: `add` ignores it.
             posts = []
+            amendments = [:]
             seenPayloads = []
+            seenOrder = []
             Task { await NodePoolService.shared.unsubscribeBlockAdded(client: Self.client) }
         }
     }
 
-    private nonisolated static func extract(_ block: ScannedBlock) -> [KaPostsChainPosts.VerifiedPost] {
-        block.transactions.compactMap { tx in
-            guard prefixes.contains(where: tx.payloadHex.hasPrefix),
-                  let bytes = CryptoUtils.hexToData(tx.payloadHex),
-                  let payload = String(data: bytes, encoding: .utf8) else { return nil }
-            return KaPostsChainPosts.verifiedPost(payload: payload, txId: tx.txId, timestampMs: tx.blockTime)
-        }
+    /// `post` as the stream last saw it: nil once its author deleted it, their latest edit in
+    /// place. Reads served while down (a saved page, Kaspa REST) go through this too, so a post
+    /// deleted during the outage doesn't come back on the next refresh.
+    func amended(_ post: KaPostsAPIClient.KPost) -> KaPostsAPIClient.KPost? {
+        guard let amendment = amendments[Self.amendmentKey(postId: post.id, authorPubkey: post.userPublicKey)] else { return post }
+        guard let edit = amendment.edit else { return nil }
+        guard KaPostsChainPosts.editApplies(to: post, atMs: edit.timestampMs),
+              edit.timestampMs > (post.editedAt ?? .min) else { return post }
+        return KaPostsChainPosts.edited(post, b64: edit.b64, mentions: edit.mentions, atMs: edit.timestampMs)
     }
 
-    private func add(_ found: [KaPostsChainPosts.VerifiedPost]) {
+    func amended(_ posts: [KaPostsAPIClient.KPost]) -> [KaPostsAPIClient.KPost] {
+        amendments.isEmpty ? posts : posts.compactMap { amended($0) }
+    }
+
+    private nonisolated static func extract(_ block: ScannedBlock) -> Scan {
+        var scan = Scan()
+        for tx in block.transactions {
+            guard prefixes.contains(where: tx.payloadHex.hasPrefix),
+                  let bytes = CryptoUtils.hexToData(tx.payloadHex),
+                  let payload = String(data: bytes, encoding: .utf8) else { continue }
+            if let verified = KaPostsChainPosts.verifiedPost(payload: payload, txId: tx.txId, timestampMs: tx.blockTime) {
+                scan.posts.append(verified)
+            } else if let signed = KaPostsChainPosts.signedAmendment(payload: payload, timestampMs: tx.blockTime) {
+                switch signed.amendment {
+                case .delete(let postId):
+                    scan.amendments.append((amendmentKey(postId: postId, authorPubkey: signed.authorPubkey),
+                                            LiveAmendment(edit: nil, seenAtMs: tx.blockTime)))
+                case .edit(let postId, let b64, let mentions, let timestampMs):
+                    scan.amendments.append((amendmentKey(postId: postId, authorPubkey: signed.authorPubkey),
+                                            LiveAmendment(edit: (b64, mentions, timestampMs), seenAtMs: tx.blockTime)))
+                }
+            }
+        }
+        return scan
+    }
+
+    private func add(_ scan: Scan) {
         guard active else { return }
+        if !scan.amendments.isEmpty {
+            var updated = amendments
+            for (key, amendment) in scan.amendments {
+                // A delete stands; a later edit replaces an earlier one.
+                if let existing = updated[key] {
+                    guard let existingEdit = existing.edit else { continue }
+                    if let edit = amendment.edit, edit.timestampMs < existingEdit.timestampMs { continue }
+                }
+                updated[key] = amendment
+            }
+            if updated.count > Self.keepAmendments {
+                for (key, _) in updated.sorted(by: { $0.value.seenAtMs < $1.value.seenAtMs }).prefix(updated.count - Self.keepAmendments) {
+                    updated[key] = nil
+                }
+            }
+            amendments = updated
+        }
         let known = Set(posts.map(\.id))
-        let fresh = found.filter { !known.contains($0.post.id) && seenPayloads.insert($0.repeatKey).inserted }.map(\.post)
-        guard !fresh.isEmpty else { return }
-        posts = Array((fresh + posts).sorted { $0.timestamp > $1.timestamp }.prefix(Self.keep))
+        let fresh = scan.posts.filter { !known.contains($0.post.id) && firstSighting($0.repeatKey) }.map(\.post)
+        let next = amended(Array((fresh + posts).sorted { $0.timestamp > $1.timestamp }.prefix(Self.keep)))
+        if fresh.isEmpty && scan.amendments.isEmpty { return }
+        posts = next
+    }
+
+    /// False for a replay of a payload already streamed.
+    private func firstSighting(_ repeatKey: String) -> Bool {
+        guard seenPayloads.insert(repeatKey).inserted else { return false }
+        seenOrder.append(repeatKey)
+        if seenOrder.count > Self.keepSeen {
+            let dropped = seenOrder.count - Self.keepSeen
+            seenPayloads.subtract(seenOrder.prefix(dropped))
+            seenOrder.removeFirst(dropped)
+        }
+        return true
     }
 }

@@ -43,6 +43,18 @@ final class PushNotificationManager: ObservableObject {
     private let registeredBuildDefaultsKey = "push_registered_build"
     private let legacyKasiaUnregisterDoneKey = "push_legacy_kasia_unregister_done"
     private let deviceAuthCounterDefaultsKey = "push_device_auth_counter"
+    /// Set while a Log Out / account-removal unregister hasn't reached the service; kept on disk
+    /// so a relaunch still finishes it (`retryPendingUnregisterIfNeeded`).
+    private let pendingUnregisterDefaultsKey = "push_pending_signout_unregister"
+    private var pendingUnregisterTask: Task<Void, Never>?
+    private var pendingUnregisterAttempt = 0
+    /// Bumped by every accepted register, so an unregister started before it can't mark the newer
+    /// registration gone.
+    private var registrationGeneration = 0
+    /// The unregister on its way, shared by every caller. A register waits for it: its DELETE
+    /// landing after the register (Log Out stops waiting after 4 s) would remove the next
+    /// account's registration.
+    private var unregisterTask: Task<Bool, Never>?
 
     private var deviceToken: String?
     /// The PushKit VoIP token, alongside the APNs one: the push service rings this device
@@ -181,6 +193,11 @@ final class PushNotificationManager: ObservableObject {
     }
 
     func refreshRegistrationIfNeeded() {
+        // A sign-out unregister that got no answer is retried on every foreground too, whatever
+        // the notification settings: the service is still pushing to this device.
+        if pendingUnregisterTask == nil, UserDefaults.standard.bool(forKey: pendingUnregisterDefaultsKey) {
+            Task { await retryPendingUnregisterIfNeeded() }
+        }
         let settings = AppSettings.load()
         guard settings.notificationMode == .remotePush else { return }
         // No push service on this network (testnet has none yet). The service this device
@@ -349,6 +366,9 @@ final class PushNotificationManager: ObservableObject {
         guard let token = deviceToken else {
             throw PushError.noDeviceToken
         }
+        if let pendingUnregister = unregisterTask {
+            _ = await pendingUnregister.value
+        }
         guard !registrationInFlight else {
             return
         }
@@ -446,6 +466,7 @@ final class PushNotificationManager: ObservableObject {
             kapostsNotifyComments: kinds.kaPostsNotifyComments,
             kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
             kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
+            kapostsNotifyMentions: kinds.kaPostsNotifyMentions,
             kapostsWatchAuthors: collectKaPostsWatchAuthors(),
             primaryAddress: primaryAddress,
             aliases: aliases,
@@ -476,8 +497,12 @@ final class PushNotificationManager: ObservableObject {
         primaryAddress: String?
     ) {
         isRegistered = true
+        registrationGeneration += 1
         lastError = nil
         persistRegistrationStatus(true)
+        // This registration replaced the logged-out account's record for the device token, so
+        // a sign-out unregister still waiting must not run: it would remove this one.
+        clearPendingUnregister()
         UserDefaults.standard.set(AppSettings.load().pushIndexerURL, forKey: registeredBaseURLDefaultsKey)
         UserDefaults.standard.set(ApnsEnvironment.current.rawValue, forKey: registeredApnsEnvironmentDefaultsKey)
         UserDefaults.standard.set(Self.currentBuildIdentifier, forKey: registeredBuildDefaultsKey)
@@ -491,8 +516,6 @@ final class PushNotificationManager: ObservableObject {
         lastWatchedUpdateSuccessAt = Date()
         pendingWatchedSignature = nil
         inFlightWatchedSignature = nil
-
-        SharedDataManager.syncContactsForExtension()
 
         AppLog.log("[Push] Registered with indexer, watching %d addresses", watchedAddresses.count)
         if registrationContinuation != nil {
@@ -740,6 +763,7 @@ final class PushNotificationManager: ObservableObject {
             kapostsNotifyComments: kinds.kaPostsNotifyComments,
             kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
             kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
+            kapostsNotifyMentions: kinds.kaPostsNotifyMentions,
             kapostsWatchAuthors: collectKaPostsWatchAuthors(),
             primaryAddress: primaryAddress,
             aliases: aliases,
@@ -810,9 +834,6 @@ final class PushNotificationManager: ObservableObject {
                 return
             }
 
-            // Sync contacts to shared container
-            SharedDataManager.syncContactsForExtension()
-
             lastWatchedSignature = signature
             lastWatchedUpdateSuccessAt = Date()
             // Success - reset the failure backoff.
@@ -882,7 +903,7 @@ final class PushNotificationManager: ObservableObject {
         // this device, so a change to either is a change worth an update even when the forced
         // re-registration behind the switch could not run (permission, wallet-binding cooldown).
         let kinds = AppSettings.load()
-        let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows]
+        let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows, kinds.kaPostsNotifyMentions]
             .map { $0 ? "1" : "0" }.joined()
         // KaPosts has no groups.
         let silentGroups = ""
@@ -951,19 +972,109 @@ final class PushNotificationManager: ObservableObject {
         AppLog.log("[Push] No push service on this network; sent unregister to %@", registeredBase)
     }
 
-    func unregister() async {
-        guard let token = deviceToken else { return }
+    /// Log Out and account removal: unregister, and if the service gave no answer (offline, 5xx)
+    /// keep trying with backoff until it does. Without this the service kept sending the
+    /// logged-out account's KaPost and room pushes, which ring in the background, until some
+    /// later settings change or foreground happened to retry.
+    func unregisterForSignOut() async {
+        guard deviceToken != nil, hasPushService else {
+            await unregister()
+            return
+        }
+        UserDefaults.standard.set(true, forKey: pendingUnregisterDefaultsKey)
+        pendingUnregisterAttempt = 0
+        pendingUnregisterTask?.cancel()
+        pendingUnregisterTask = nil
+        if await unregister() {
+            clearPendingUnregister()
+        } else {
+            schedulePendingUnregisterRetry()
+        }
+    }
+
+    /// Runs a sign-out unregister that hasn't reached the service yet. Only while no account is
+    /// signed in: once one is, its own registration replaces this device's record on the
+    /// service, and unregistering then would remove the new account's pushes.
+    func retryPendingUnregisterIfNeeded() async {
+        guard UserDefaults.standard.bool(forKey: pendingUnregisterDefaultsKey) else { return }
+        guard WalletManager.shared.currentWallet == nil else {
+            clearPendingUnregister()
+            return
+        }
+        guard !registrationInFlight else {
+            schedulePendingUnregisterRetry()
+            return
+        }
+        if await unregister() {
+            clearPendingUnregister()
+        } else {
+            schedulePendingUnregisterRetry()
+        }
+    }
+
+    private func schedulePendingUnregisterRetry() {
+        guard UserDefaults.standard.bool(forKey: pendingUnregisterDefaultsKey) else { return }
+        pendingUnregisterTask?.cancel()
+        pendingUnregisterAttempt += 1
+        // 15 s, 30 s, 1 min, ... up to 10 min between tries.
+        let exponent = min(pendingUnregisterAttempt - 1, 6)
+        let delay = min(15.0 * pow(2.0, Double(exponent)), 600)
+        AppLog.log("[Push] Sign-out unregister not answered - retrying in %.0fs", delay)
+        pendingUnregisterTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.pendingUnregisterTask = nil
+            await self.retryPendingUnregisterIfNeeded()
+        }
+    }
+
+    private func clearPendingUnregister() {
+        UserDefaults.standard.removeObject(forKey: pendingUnregisterDefaultsKey)
+        pendingUnregisterAttempt = 0
+        pendingUnregisterTask?.cancel()
+        pendingUnregisterTask = nil
+    }
+
+    /// True once there is nothing left to retry: the service answered 200 or a 4xx (the record
+    /// is gone or this request can never succeed), there is no service to tell, or a register
+    /// accepted meanwhile owns the device's record. False when it gave no answer or a 5xx.
+    /// Joins the unregister already under way rather than sending a second DELETE.
+    @discardableResult
+    func unregister() async -> Bool {
+        await startUnregister().value
+    }
+
+    /// Starts the unregister, or joins the one under way. Synchronous, so a register started
+    /// right after already sees it in `unregisterTask` and waits.
+    private func startUnregister() -> Task<Bool, Never> {
+        if let running = unregisterTask { return running }
+        let generation = registrationGeneration
+        let task = Task { @MainActor [weak self] () -> Bool in
+            guard let self else { return true }
+            let done = await self.performUnregister(generation: generation)
+            self.unregisterTask = nil
+            return done
+        }
+        unregisterTask = task
+        return task
+    }
+
+    private func performUnregister(generation: Int) async -> Bool {
+        guard let token = deviceToken else { return true }
         guard hasPushService else {
             await leavePushServiceOfOtherNetworkIfNeeded()
-            return
+            return true
         }
 
         let settings = AppSettings.load()
 
         guard let url = URL(string: "\(settings.pushIndexerURL)\(unregisterEndpoint)") else {
             AppLog.log("[Push] Invalid push service URL: %@", settings.pushIndexerURL)
-            return
+            return true
         }
+        // A register accepted meanwhile owns the device's record: this answer can't undo it,
+        // and there is nothing left to retry.
+        var superseded: Bool { self.registrationGeneration != generation }
 
         do {
             let auth: PushAuthRequest?
@@ -978,9 +1089,25 @@ final class PushNotificationManager: ObservableObject {
                     aliases: []
                 )
             } catch {
-                // Best-effort fallback for mixed/legacy backend mode.
-                AppLog.log("[Push] Failed to build auth for unregister, trying unsigned request: %@", error.localizedDescription)
-                auth = nil
+                if WalletManager.shared.currentWallet == nil {
+                    // A retry after Log Out: the account's key is gone, so prove the request with
+                    // this device's own push key, which the service accepts for unregister. An
+                    // unsigned request would only be refused; try again later instead.
+                    do {
+                        auth = try await buildDeviceOnlyPushAuth(
+                            method: "DELETE",
+                            path: unregisterEndpoint,
+                            deviceToken: token
+                        )
+                    } catch {
+                        AppLog.log("[Push] Failed to build device auth for unregister: %@", error.localizedDescription)
+                        return false
+                    }
+                } else {
+                    // Best-effort fallback for mixed/legacy backend mode.
+                    AppLog.log("[Push] Failed to build auth for unregister, trying unsigned request: %@", error.localizedDescription)
+                    auth = nil
+                }
             }
 
             var urlRequest = URLRequest(url: url)
@@ -994,18 +1121,21 @@ final class PushNotificationManager: ObservableObject {
             let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
             guard let httpResponse = response as? HTTPURLResponse else {
                 AppLog.log("[Push] Error unregistering: invalid response")
-                return
+                return superseded
             }
             if httpResponse.statusCode == 200 {
+                guard !superseded else { return true }
                 isRegistered = false
                 persistRegistrationStatus(false)
                 lastError = nil
                 clearWalletBindingConflictCooldown()
                 AppLog.log("[Push] Unregistered from indexer")
-                return
+                return true
             }
 
             let reason = parseIndexerError(from: responseData) ?? "unknown"
+            AppLog.log("[Push] Failed to unregister: status=%d reason=%@", httpResponse.statusCode, reason)
+            guard !superseded else { return true }
             if isWalletBindingConflict(statusCode: httpResponse.statusCode, reason: reason) {
                 activateWalletBindingConflictCooldown(reason: reason)
             }
@@ -1013,11 +1143,56 @@ final class PushNotificationManager: ObservableObject {
                 // Local token/state is stale or invalid for this backend; stop retry loops.
                 isRegistered = false
                 persistRegistrationStatus(false)
+                return true
             }
-            AppLog.log("[Push] Failed to unregister: status=%d reason=%@", httpResponse.statusCode, reason)
+            return false
         } catch {
             AppLog.log("[Push] Error unregistering: %@", error.localizedDescription)
+            return superseded
         }
+    }
+
+    /// Unregister proof from this device's push key alone, for a retry after Log Out, when the
+    /// account's key is no longer on the phone. The service takes wallet OR device auth for
+    /// unregister (kachat-indexer `authenticate_unregister_request`): the wallet fields stay
+    /// empty, so its wallet check fails quietly and the device key, bound at registration,
+    /// decides.
+    private func buildDeviceOnlyPushAuth(
+        method: String,
+        path: String,
+        deviceToken: String
+    ) async throws -> PushAuthRequest {
+        let challenge = try await fetchPushChallenge(baseURL: AppSettings.load().pushIndexerURL)
+        let normalizedDeviceToken = try normalizeDeviceTokenForAuth(deviceToken)
+        let localTimestampMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        let timestampMs = min(
+            max(localTimestampMs, challenge.issuedAtMs),
+            challenge.expiresAtMs
+        )
+        let proof = try buildDeviceAuthProof(
+            nonce: challenge.nonce,
+            method: method,
+            path: path,
+            normalizedDeviceToken: normalizedDeviceToken,
+            timestampMs: timestampMs,
+            expiresAtMs: challenge.expiresAtMs
+        )
+        return PushAuthRequest(
+            walletPubkey: "",
+            walletAddress: "",
+            nonce: challenge.nonce,
+            timestampMs: timestampMs,
+            expiresAtMs: challenge.expiresAtMs,
+            signature: "",
+            devicecheckToken: await generateDeviceCheckToken(),
+            deviceAuth: PushDeviceAuthRequest(
+                scheme: proof.scheme,
+                keyId: proof.keyId,
+                pubkey: proof.pubkey,
+                counter: proof.counter,
+                signature: proof.signature
+            )
+        )
     }
 
     /// Handle an incoming remote push payload and update chats immediately.
@@ -2101,12 +2276,15 @@ struct PushRegistrationRequest: Codable {
     /// (PUSH_EXTENSIONS.md §3). KaPosts pushes are plain alerts with no mutable-content, so the
     /// notification service extension never runs for them and cannot filter on the device;
     /// registering the kinds is the only way a switched-off kind stops arriving in the background.
-    /// Mentions are deliberately not switchable.
     let kapostsNotifyLikes: Bool
     let kapostsNotifyDislikes: Bool
     let kapostsNotifyComments: Bool
     let kapostsNotifyReposts: Bool
     let kapostsNotifyFollows: Bool
+    /// Settings > KaPost > Mentions. The service doesn't read it yet (a mention push has action
+    /// "mention", which its per-kind filter lets through); serde ignores the unknown field until
+    /// then, and once it reads it a switched-off Mentions stops ringing in the background too.
+    let kapostsNotifyMentions: Bool
     /// Authors whose new posts this device wants a push for - the bell beside Follow
     /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
     let kapostsWatchAuthors: [String]
@@ -2134,6 +2312,7 @@ struct PushRegistrationRequest: Codable {
         case kapostsNotifyComments = "kaposts_notify_comments"
         case kapostsNotifyReposts = "kaposts_notify_reposts"
         case kapostsNotifyFollows = "kaposts_notify_follows"
+        case kapostsNotifyMentions = "kaposts_notify_mentions"
         case kapostsWatchAuthors = "kaposts_watch_authors"
         case primaryAddress = "primary_address"
         case aliases
@@ -2151,12 +2330,16 @@ struct PushUpdateRequest: Codable {
     let watchedPublicChatChannels: [String]
     let hiddenPublicChatSenders: [String: [String]]
     let kapostsPubkey: String?
-    /// See PushRegistrationRequest: the same five switches, kept current on every update.
+    /// See PushRegistrationRequest: the same six switches, kept current on every update.
     let kapostsNotifyLikes: Bool
     let kapostsNotifyDislikes: Bool
     let kapostsNotifyComments: Bool
     let kapostsNotifyReposts: Bool
     let kapostsNotifyFollows: Bool
+    /// Settings > KaPost > Mentions. The service doesn't read it yet (a mention push has action
+    /// "mention", which its per-kind filter lets through); serde ignores the unknown field until
+    /// then, and once it reads it a switched-off Mentions stops ringing in the background too.
+    let kapostsNotifyMentions: Bool
     /// Authors whose new posts this device wants a push for - the bell beside Follow
     /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
     let kapostsWatchAuthors: [String]
@@ -2182,6 +2365,7 @@ struct PushUpdateRequest: Codable {
         case kapostsNotifyComments = "kaposts_notify_comments"
         case kapostsNotifyReposts = "kaposts_notify_reposts"
         case kapostsNotifyFollows = "kaposts_notify_follows"
+        case kapostsNotifyMentions = "kaposts_notify_mentions"
         case kapostsWatchAuthors = "kaposts_watch_authors"
         case primaryAddress = "primary_address"
         case aliases
@@ -2275,7 +2459,7 @@ enum PushError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noPushService:
-            return NSLocalizedString("This network has no push service yet.", comment: "Push error: the current network has no push service address")
+            return AppLocalization.string("This network has no push service yet.")
         case .permissionDenied:
             return "Notification permission denied"
         case .noDeviceToken:

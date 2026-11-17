@@ -102,7 +102,7 @@ struct ComposerTextView: UIViewRepresentable {
     /// keystroke (the 1:1 chat) still lays out again when a line is added or removed.
     var onHeightChange: ((CGFloat) -> Void)? = nil
     var onSubmit: () -> Void
-    var placeholder: String = String(localized: "Message")
+    var placeholder: String = AppLocalization.string("Message")
     var maxLines: Int = 5
     var insertionRequest: TextInsertionRequest? = nil
     var onInsertionHandled: ((UUID) -> Void)? = nil

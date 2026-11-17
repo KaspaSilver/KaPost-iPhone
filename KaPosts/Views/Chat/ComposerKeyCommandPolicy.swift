@@ -55,14 +55,3 @@ enum ComposerKeyCommandPolicy {
         )
     ]
 }
-
-enum ChatSendKeyboardShortcutPolicy {
-    static func shouldInstallReturnShortcut(
-        hasPendingPhoto: Bool,
-        isSending: Bool,
-        isCompressingPhoto: Bool,
-        isDeclined: Bool
-    ) -> Bool {
-        hasPendingPhoto && !isSending && !isCompressingPhoto && !isDeclined
-    }
-}

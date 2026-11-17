@@ -8,6 +8,8 @@ import CryptoKit
 
 extension ChatService {
     func checkIndexerForHandshake(txId: String, myAddress: String) async -> HandshakeResponse? {
+        // No handshakes without 1:1 chats: skip the three tries and their 4 s of waiting.
+        guard ChatService.oneToOneChatsEnabled else { return nil }
         guard apiClient.hasIndexer else { return nil }
         // Query recent incoming handshakes from the indexer
         // Use a 60-second lookback window to narrow the search
@@ -1600,7 +1602,11 @@ extension ChatService {
     /// Requires REST API because we need sender address from resolved inputs
     /// (Mempool entries don't include sender address - see MESSAGING.md)
     func resolveTransactionInfo(txId: String, ourAddress: String) async -> TransactionResolveInfo? {
-        if let indexerInfo = await resolveTransactionInfoFromIndexer(txId: txId, ourAddress: ourAddress) {
+        // The indexer's payments read is a 1:1 endpoint, and with 1:1 sync off `lastPollTime`
+        // never moves, so it reads from block time 0 and misses any payment past the first
+        // 100. Kaspa REST resolves a plain payment on its own.
+        if ChatService.oneToOneChatsEnabled,
+           let indexerInfo = await resolveTransactionInfoFromIndexer(txId: txId, ourAddress: ourAddress) {
             return indexerInfo
         }
         if let restInfo = await resolveTransactionInfoFromKaspaRest(txId: txId, ourAddress: ourAddress) {
@@ -2907,6 +2913,11 @@ extension ChatService {
 
             // Check if this payment is actually a handshake (REST API payload detection)
             if let payload = payment.messagePayload, !payload.isEmpty, isHandshakePayload(payload) {
+                // 1:1 chats are switched off: no alias, conversation id or request to record.
+                guard ChatService.oneToOneChatsEnabled else {
+                    AppLog.log("[ChatService] Payment %@ has handshake payload - ignored, 1:1 chats are off", String(payment.txId.prefix(16)))
+                    continue
+                }
                 AppLog.log("[ChatService] Payment %@ has handshake payload - processing as handshake", String(payment.txId.prefix(16)))
                 var handshakeContent = "[Handshake]"
                 if !isOutgoing, let privKey = privateKey {
@@ -2951,7 +2962,8 @@ extension ChatService {
             if let payload = payment.messagePayload, !payload.isEmpty {
                 if isContextualPayload(payload) {
                     AppLog.log("[ChatService] Payment %@ has contextual payload - skipping as payment", String(payment.txId.prefix(16)))
-                    if let privateKey,
+                    if ChatService.oneToOneChatsEnabled,
+                       let privateKey,
                        shouldAttemptSelfStashDecryption(payloadHex: payload, contactAddress: contactAddress),
                        let decrypted = await decryptContextualMessageFromRawPayload(payload, privateKey: privateKey) {
                         let message = ChatMessage(
@@ -3735,11 +3747,11 @@ extension ChatService {
         let raw = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if message.messageType == .handshake {
             return raw == "[Request accepted]"
-                ? NSLocalizedString("Accepted your request to communicate", comment: "Banner body when a contact accepts a handshake")
-                : NSLocalizedString("Started a conversation", comment: "Push body for handshake notification")
+                ? AppLocalization.string("Accepted your request to communicate")
+                : AppLocalization.string("Started a conversation")
         }
         if raw == "[Encrypted message]" {
-            return NSLocalizedString("Sent you a message", comment: "Banner body for a message that could not be decrypted")
+            return AppLocalization.string("Sent you a message")
         }
         return formatNotificationBody(message.content)
     }

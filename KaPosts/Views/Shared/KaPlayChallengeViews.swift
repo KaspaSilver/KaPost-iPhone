@@ -76,9 +76,14 @@ struct KaPlayBotChallenge: Equatable {
     /// "Beat Coderofstuff (Level 3) in 14 moves", or "Challenge: beat Coderofstuff (Level 3)"
     /// without a move count.
     var title: String {
-        let bot = botName.map { "\($0) (Level \(level))" } ?? "the Level \(level) bot"
-        guard let moves else { return "Challenge: beat \(bot)" }
-        return "Beat \(bot) in \(moves) \(moves == 1 ? "move" : "moves")"
+        let locale = AppLocalization.locale
+        let bot = botName.map { String(format: AppLocalization.string("%@ (Level %lld)"), locale: locale, $0, level) }
+            ?? String(format: AppLocalization.string("the Level %lld bot"), locale: locale, level)
+        guard let moves else {
+            return String(format: AppLocalization.string("Challenge: beat %@"), locale: locale, bot)
+        }
+        let key = moves == 1 ? "Beat %@ in %lld move" : "Beat %@ in %lld moves"
+        return String(format: AppLocalization.string(key), locale: locale, bot, moves)
     }
 
     // MARK: Detection inside post text

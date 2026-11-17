@@ -120,12 +120,20 @@ blocks the lost-answer check only when it is about the transaction itself (`isVe
 
 Coins: posts, likes, room messages, tips, Send and .kachat combining all draw from one ledger in
 `ChatService` (`prepareMessageUtxos`, `unreservedUtxos`, `recordPlainSend`). What a send spent stays
-reserved until it is in a block, so the next action never picks it again. An unknown outcome is deliberately
+reserved until it is in a block, so the next action never picks it again (`reservedOutpointTTL`, 10 min:
+the node stops listing a spent coin once its spend is in a block, so the hold only has to outlast the
+mempool). Coins carrying a KIP-20 covenant are never offered to these plain sends (`unreservedUtxos`).
+A post or room message uses at most `maxInputsPerTransaction` coins and 100,000 grams; past that it
+asks the person to compound. An unknown outcome is deliberately
 not held (`recordPlainSend` with a nil `txId`): a send made after "Not confirmed" picks the same coins, so only
 one of the two can land.
-`NodePoolService.submitTransaction` and `submitRpcTransaction(_:expectedTxId:)` reserve every submitted
-transaction's inputs themselves (`ChatService.reserveOutpointKeys`), so KNS, .kachat and any new path are
-covered too.
+`NodePoolService.submitTransaction` and `submitRpcTransaction(_:expectedTxId:)` hold every transaction's
+inputs from before the submit (`ChatService.holdOutpointKeysForSubmit`), since .kachat, KNS, scheduled
+posts and the self-stash don't go through the send queue, and reserve them on success
+(`reserveOutpointKeys`), so KNS, .kachat and any new path are covered too. A definite failure gives them
+back unless the node said they are spent; an unknown outcome gives them back too (the rule above).
+Whether a send went out is decided only from a mempool entry whose recomputed id matches and that isn't
+an orphan; after a rejection it takes two nodes or the built-in REST server.
 Fee estimates price the speed's extra in the shape the send builds, and Max stops at one transaction's
 `maxInputsPerTransaction` coins (the tip sheet too). A failed fee estimate shows Try Again. Available,
 Compound and Coin Control count only what a send may spend (`withdrawalSpendable`); Max at Fast or Priority
@@ -139,14 +147,17 @@ A failed key write puts the previous slot back. A record with no keys first trie
 the recovery screen, and import or Log Out clears a stale recovery. The passphrase search holds Import for
 at most 12 s, with Skip and Search Again. The NFC PIN is typed twice. The Passcode Required alert has its own
 window. A node's "already accepted" answer counts only when it names the id
-this device computed (`acceptedTransactionId(from:expected:)`). Instant default tips skip Face ID, so they
+this device computed (`acceptedTransactionId(from:expected:)`). Instant default tips go on one tap with no swipe, so they
 are capped at 10 KAS (`KaPostsSettingsView.instantTipLimitSompi`; a bigger one opens the tip sheet),
-turning them on asks first, a fiat tip needs a price under ten minutes old (`KaspaPriceService.freshPrice`),
+turning them on doesn't ask for Face ID, a fiat tip needs a price under ten minutes old (`KaspaPriceService.freshPrice`),
 and a second tap while one is going out is ignored.
 
-Same rules as KaChat and KaPay. Swiping up asks for the device lock first (`SwipeUpToSendScrollView`), which
-covers Send Kaspa, a tip with a chosen amount and .kachat actions; default instant tips, posts and room
-messages don't ask. Delete Account asks too. A submit with no answer ends in `SendOutcomeUnknownError`: the
+Same rules as KaChat and KaPay. Sends don't ask for Face ID (owner's call, 2026-11-13): the swipe is the
+confirmation (`SwipeUpToSendScrollView`, which switches to sending at once so a second swipe can't send
+twice), for Send Kaspa, a tip with a chosen amount and Consolidate to Primary; instant tips, posts and room
+messages never asked. Still asking for the device lock: .kachat actions (the swipe's `authReason`), Send
+Domain, setting the primary domain, Delete Account, the keys-missing screen's Remove,
+signing in to a saved account and revealing the 12 or 24 words or a private key. A submit with no answer ends in `SendOutcomeUnknownError`: the
 screen says "Not confirmed" and offers only Done, since Try Again could pay twice. A node's answer must carry
 the locally computed id. The words and passphrase are readable only while the phone is unlocked, so nothing
 that runs in the background may need them (`allSpendingAddresses` reads the address cache). Keys left by an
@@ -184,7 +195,9 @@ where it can, shows what it saved where it can't, and recovers by itself (`Servi
 - From the chain, first pages only: a person's posts and replies from Kaspa REST (`KaPostsChainPosts`), the
   Following feed from the people followed (the first 20), and new posts and replies from the block stream
   (`KaPostsLiveChainFeed`, only while down). Every one must pass its Schnorr signature, since a payload can
-  name anyone. Nothing but the indexer lists every post, or who reacted to yours, so the global feed is the
+  name anyone. So must a single post opened by link or shown in a link card when the indexer doesn't have
+  it yet (`KaPostChainReader`, via `KaPostsProtocol.parseChainPayload`), and it must carry the KaChat
+  marker. Nothing but the indexer lists every post, or who reacted to yours, so the global feed is the
   saved page plus what's new, and notifications are the saved page until it returns.
 - The feed says so while it lasts. When the indexer answers, the feed, your profile and notifications reload,
   and every load gate is cleared, so it has the final word.
@@ -204,13 +217,19 @@ bytes (0.083 KAS each), 12 parts and 0.976 KAS at 2:50. A note of one part or le
 voice message; a longer one goes as `voicePart`-tagged parts, one transaction each
 (`PublicChatService.sendPublicChatVoiceParts`: the balance for all parts first, then in order, never
 a reply). Parts belong together by (room, sender, id, count) (`PublicChatVoiceParts`, worked out in
-`reloadMessages`): one bubble at the first part with gapless playback and one scrubber
-(`PublicChatVoiceNoteBubble`), "Receiving… N of M" until all are in, one status, Retry resends only
-the failed parts, and unread counts the note once. Room pushes come from the indexer, one per part
-("Voice message"), and KaPost has no notification extension to read a part's tag. While the app
-is open, `RoomVoicePushBursts` (KaPostsApp.swift) applies KaChat's burst rule: a voice push from the
-same sender in the same room within 60 s of the last is listed quietly, and the quiet one before it
-removed. In the background or closed, every part's push rings.
+`reloadMessages`): one bubble at the lowest-index part present (not the earliest row, which hopped
+while a note sent) with gapless playback and one scrubber (`PublicChatVoiceNoteBubble`), "Receiving…
+N of M" until all are in, one status, Retry resends only the failed parts (a second tap while they
+resend does nothing), and unread counts the note once. Replies and reactions aimed at a hidden part go
+to the bubble (`anchorIdByPartId`). Sending stops between parts if the account logs out or switches.
+If the app dies mid-note, the next launch marks the parts after the one in flight Failed, since they
+never left the phone (`PublicChatStore.settlePendingMessages`), so Retry finishes the note; the one in
+flight shows "Not confirmed" like any send whose outcome is unknown. Room pushes come from the indexer, which since 2026-11-11 rings
+only for the first part of a note (or of a multi-part photo) to arrive (kachat-indexer
+`docs/ROOM_VOICE_PART_PUSHES.md`). KaPost has no notification extension to read a part's tag. While
+the app is open, `RoomVoicePushBursts` (KaPostsApp.swift) still applies KaChat's burst rule: a voice
+push from the same sender in the same room within 60 s of the last is listed quietly, and the quiet
+one before it removed.
 
 ## KaPost links in rooms
 
@@ -248,12 +267,13 @@ target automatically (no pbxproj edits for new files). Exceptions (Info.plist, e
 Version.xcconfig) are listed in the project's exception set.
 
 ```bash
-xcodebuild -project KaPosts.xcodeproj -scheme KaPosts -destination 'platform=iOS Simulator,id=48DEB003-C22C-433B-80B8-8BE35D3019CC' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
+xcodebuild -project KaPosts.xcodeproj -scheme KaPosts -destination 'platform=iOS Simulator,id=96B8FC9A-7D4C-4545-B4CC-7B0E0931657A' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
 ```
 
-KaPosts is tested on the **iPhone 17 Pro** simulator (iOS 26.5, UDID
-`48DEB003-C22C-433B-80B8-8BE35D3019CC`). Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
-owner's.
+KaPosts is tested on the **iPhone 15** simulator (UDID `96B8FC9A-7D4C-4545-B4CC-7B0E0931657A`).
+Claude builds only when the owner asks ("rebuild" or "r": build, then launch there); otherwise code
+changes are checked with `xcrun swiftc -parse` and the owner tests. Device and App Store builds are
+the owner's.
 
 ## Protocol and servers
 

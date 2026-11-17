@@ -218,6 +218,8 @@ final class AddressActivityNotifier: ObservableObject {
         guard let utxos = try? await NodePoolService.shared.getUtxosByAddresses(Array(watched)) else {
             return
         }
+        // signed out or switched during a read: this account's catch-up is over
+        guard isSignedIn(wallet.publicAddress) else { return }
         var currentBalances: [String: UInt64] = [:]
         for address in watched { currentBalances[address] = 0 }
         for utxo in utxos where currentBalances[utxo.address] != nil {
@@ -247,6 +249,7 @@ final class AddressActivityNotifier: ObservableObject {
                     delta: balance - previous,
                     walletAddress: wallet.publicAddress
                 )
+                guard isSignedIn(wallet.publicAddress) else { return }
             }
             baselines[address] = balance
         }
@@ -268,7 +271,6 @@ final class AddressActivityNotifier: ObservableObject {
         defer { inFlightTxIds.remove(txId) }
 
         var isSelfSend = false
-        var hits = hits
         let fullTx = await ChatService.shared.fetchKaspaFullTransaction(
             txId: txId,
             retries: 4,
@@ -276,42 +278,53 @@ final class AddressActivityNotifier: ObservableObject {
         )
         // Those retries take up to ~12 s, and an account switch meanwhile makes this someone
         // else's receive: nothing below may record or announce it.
-        guard WalletManager.shared.currentWallet?.publicAddress == walletAddress else { return }
-        if let fullTx {
-            let inputAddresses = (fullTx.inputs ?? [])
-                .compactMap { $0.previousOutpointAddress }
-                .filter { !$0.isEmpty }
-            if !inputAddresses.isEmpty {
-                isSelfSend = inputAddresses.contains { ownAddresses.contains($0) }
-            }
-        }
-        // The chatting address notifies only for a plain transfer we could read: a chat payment
-        // or a handshake (a payload) is the chat's news, and an unreadable one stays quiet.
-        if fullTx.map({ !Self.isPlainTransfer($0) }) ?? true {
-            hits.removeAll { $0.address == walletAddress }
-        }
-        guard !hits.isEmpty else {
-            markHandled(txId: txId, wallet: walletAddress)
-            await refreshBaselines(for: [walletAddress], wallet: walletAddress)
+        guard isSignedIn(walletAddress) else { return }
+        // Unreadable tx: the amount would be one node's word alone. Nothing is announced and the
+        // baseline is left as it was, so the next catch-up finds the increase and attributes it
+        // from the REST history.
+        guard let fullTx else {
+            AppLog.log("[AddressActivity] Receive %@ unconfirmed by REST; left to the catch-up", String(txId.prefix(12)))
+            NotificationCenter.default.post(name: .ownAddressActivity, object: nil)
             return
         }
-        // Unresolvable txs still notify: the removed-set fast path already suppressed every
-        // self-send whose inputs we watch (which is all of them), so an unknown-input tx here
-        // is overwhelmingly external - missing real funds is worse than a rare duplicate.
+        let inputAddresses = (fullTx.inputs ?? [])
+            .compactMap { $0.previousOutpointAddress }
+            .filter { !$0.isEmpty }
+        if !inputAddresses.isEmpty {
+            isSelfSend = inputAddresses.contains { ownAddresses.contains($0) }
+        }
+
+        // The amounts come from the tx itself, not from the node's batch.
+        let notifiable = notifiableAddressSet(walletAddress: walletAddress)
+        var paid: [String: UInt64] = [:]
+        for output in fullTx.outputs {
+            guard let address = output.scriptPublicKeyAddress, notifiable.contains(address) else { continue }
+            paid[address, default: 0] += output.amount
+        }
+        // The chatting address notifies only for a plain transfer: a chat payment or a handshake
+        // (a payload) is the chat's news.
+        if !Self.isPlainTransfer(fullTx) { paid[walletAddress] = nil }
+        let txHits = paid.map { (address: $0.key, amount: $0.value) }.filter { $0.amount > 0 }
 
         guard !handledTxIds.contains(txId) else { return }
         markHandled(txId: txId, wallet: walletAddress)
 
-        if !isSelfSend {
-            postReceiveNotification(hits: hits, dedupeKey: txId)
-            AppLog.log("[AddressActivity] Notified external receive %@ (%d output(s) to own addresses)",
-                  String(txId.prefix(12)), hits.count)
-        } else {
+        if isSelfSend {
             AppLog.log("[AddressActivity] Suppressed self-send %@ after input resolve", String(txId.prefix(12)))
+        } else if txHits.isEmpty {
+            AppLog.log("[AddressActivity] Receive %@ not in the tx's outputs; not announced", String(txId.prefix(12)))
+        } else {
+            postReceiveNotification(hits: txHits, dedupeKey: txId)
+            AppLog.log("[AddressActivity] Notified external receive %@ (%d output(s) to own addresses)",
+                  String(txId.prefix(12)), txHits.count)
         }
 
         await refreshBaselines(for: Set(hits.map { $0.address }), wallet: walletAddress)
         NotificationCenter.default.post(name: .ownAddressActivity, object: nil)
+    }
+
+    private func isSignedIn(_ walletAddress: String) -> Bool {
+        WalletManager.shared.currentWallet?.publicAddress == walletAddress
     }
 
     // MARK: - Catch-up attribution
@@ -328,6 +341,7 @@ final class AddressActivityNotifier: ObservableObject {
             pageSize: 10,
             maxTransactions: 10
         )
+        guard isSignedIn(walletAddress) else { return }
         // the chatting address: only plain transfers newer than what was already looked at
         let floorKey = chattingCatchUpFloorKey(walletAddress)
         let floor = UInt64(max(0, UserDefaults.standard.double(forKey: floorKey)))

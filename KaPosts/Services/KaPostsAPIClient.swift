@@ -50,10 +50,13 @@ final class KaPostsAPIClient: ObservableObject {
         case missingWallet
         /// No KaPost indexer on this network (testnet has none yet).
         case noIndexer
+        /// The payload can't fit one transaction (`payloadFitsOneTransaction`).
+        case tooLong
 
         var errorDescription: String? {
             switch self {
             case .noIndexer: return "KaPost isn't available on Testnet yet"
+            case .tooLong: return AppLocalization.string("This post is too long for one transaction. Shorten it and try again.")
             case .badURL: return "Invalid KaPost indexer URL"
             case .api(_, let message): return message
             case .badResponse: return "Unexpected response from the KaPost indexer"
@@ -387,15 +390,19 @@ final class KaPostsAPIClient: ObservableObject {
         read: () async throws -> (posts: [KPost], pagination: KPagination?),
         chain: () async -> [KPost]
     ) async throws -> (posts: [KPost], pagination: KPagination?) {
+        // Deletes and edits the block stream saw during the outage apply to the saved page and
+        // the chain rows alike (`KaPostsLiveChainFeed.amended`); otherwise a post deleted while
+        // it's down came back on every refresh.
+        let live = KaPostsLiveChainFeed.shared
         do {
             let page = try await read()
             guard before == nil, KaPostsIndexerHealth.shared.isDown else { return page }
-            return (Self.mergedNewestFirst(page.posts, await chain()), nil)
+            return (live.amended(Self.mergedNewestFirst(page.posts, await chain())), nil)
         } catch {
             guard before == nil, KaPostsIndexerHealth.shared.isDown else { throw error }
             let rows = await chain()
             if rows.isEmpty { throw error }
-            return (Self.mergedNewestFirst([], rows), nil)
+            return (live.amended(Self.mergedNewestFirst([], rows)), nil)
         }
     }
 
@@ -810,6 +817,13 @@ enum KaPostsProtocol {
         guard fields.count > messageIndex,
               let data = Data(base64Encoded: fields[messageIndex]),
               let decoded = String(data: data, encoding: .utf8) else { return nil }
+        // A payload can name anyone as its author, so the signature must verify against the key
+        // it names - the same check the indexer makes before it shows a post. Without it, a
+        // shared link to a forged transaction would open as someone else's post, with their
+        // name, avatar, Tip and Follow. Only KaPost messages count, as in the feed fallback.
+        guard KaPostsAPIClient.isKaChatContent(decoded),
+              let signingString = chainSigningString(action: action, fields: fields),
+              KaPostsChainPosts.signatureIsValid(fields[2], signingString: signingString, pubkey: pubkey) else { return nil }
         // An empty message is legitimate - a quote with no added comment is just a repost - so
         // this returns the record and lets the caller decide what to show for it.
         let text = KaPostsAPIClient.stripMarker(decoded).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -820,6 +834,27 @@ enum KaPostsProtocol {
             // Field 2 for both shapes that have one; a plain post references nothing.
             referencedId: action == "post" || action == "poll" ? nil : (fields[3].isEmpty ? nil : fields[3])
         )
+    }
+
+    /// What the author signed for a message-carrying payload, rebuilt from its fields; nil when
+    /// the fields don't have the shape the action needs.
+    private static func chainSigningString(action: String, fields: [String]) -> String? {
+        switch action {
+        case "post":
+            guard fields.count >= 5 else { return nil }
+            return postSigningString(b64Message: fields[3], mentionsJSON: fields[4])
+        case "reply":
+            guard fields.count >= 6 else { return nil }
+            return replySigningString(postId: fields[3], b64Message: fields[4], mentionsJSON: fields[5])
+        case "quote":
+            guard fields.count >= 6 else { return nil }
+            return quoteSigningString(contentId: fields[3], b64Message: fields[4], quotedAuthorPubkey: fields[5])
+        case "poll":
+            guard fields.count >= 7, let closesAtMs = Int64(fields[5]) else { return nil }
+            return pollSigningString(b64Question: fields[3], optionsCSV: fields[4], closesAtMs: closesAtMs, mentionsJSON: fields[6])
+        default:
+            return nil
+        }
     }
 
     // Full payloads:
@@ -937,11 +972,7 @@ extension KaPostsAPIClient {
         let pubkey = try requesterPubkey()
         // Client-resolved @mentions: dedupe, drop bad shapes and self, then serialize into the
         // signed mentioned_pubkeys array. The indexer turns each into a `mention` notification.
-        let me = pubkey.lowercased()
-        let clean = Array(Set(mentionedPubkeys
-            .map { $0.lowercased() }
-            .filter { $0.range(of: "^0[23][0-9a-f]{64}$", options: .regularExpression) != nil && $0 != me }))
-        let mentions = "[" + clean.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let mentions = Self.mentionsJSON(mentionedPubkeys, me: pubkey)
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.postSigningString(b64Message: b64, mentionsJSON: mentions),
             mode: .kaspaPersonalMessage
@@ -987,12 +1018,20 @@ extension KaPostsAPIClient {
         return try await get("get-poll", query: query)
     }
 
-    /// The mentions array a post/poll signs: deduped, valid shapes only, never self.
+    /// The mentions array a post, reply, edit or poll signs: valid shapes only, in order, one per
+    /// person, never self. Both checks are on the x-only key: a key worked out from an address is
+    /// "02" + x, so with exact matching an author holding an 03 key slipped past the self check,
+    /// and one person could be listed under both spellings.
     static func mentionsJSON(_ mentionedPubkeys: [String], me: String) -> String {
-        let mine = me.lowercased()
-        let clean = Array(Set(mentionedPubkeys
+        let mine = KaPostsChainPosts.xOnly(me)
+        var seen = Set<String>()
+        let clean = mentionedPubkeys
             .map { $0.lowercased() }
-            .filter { $0.range(of: "^0[23][0-9a-f]{64}$", options: .regularExpression) != nil && $0 != mine }))
+            .filter {
+                $0.range(of: "^0[23][0-9a-f]{64}$", options: .regularExpression) != nil
+                    && KaPostsChainPosts.xOnly($0) != mine
+                    && seen.insert(KaPostsChainPosts.xOnly($0)).inserted
+            }
         return "[" + clean.map { "\"\($0)\"" }.joined(separator: ",") + "]"
     }
 
@@ -1023,9 +1062,34 @@ extension KaPostsAPIClient {
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
         }
+        if let script = KaspaAddress.scriptPublicKey(from: wallet.publicAddress),
+           !Self.payloadFitsOneTransaction(payload, scriptPubKey: script) {
+            throw KaPostsAPIError.tooLong
+        }
+        // Through the send queue, like every other send: built outside it, a like or tip made
+        // at the same moment could pick the same coin, and the scheduled post would then fail at
+        // its time. Its coins are held before the queue moves on; the scheduled store holds them
+        // for good once `add` records the entry, right after.
+        return try await ChatService.shared.enqueueOutgoingTxOperation {
+            let scheduled = try await Self.buildScheduledTransaction(
+                payload: payload, address: wallet.publicAddress, privateKey: privateKey
+            )
+            ChatService.shared.reserveOutpointKeys(scheduled.spentOutpoints)
+            return scheduled
+        }
+    }
+
+    /// A coin set aside for one scheduled post when the wallet would otherwise have to hand it
+    /// every coin it has: 1 KAS, well over any post's fee and big enough that its storage mass
+    /// stays small.
+    private static let scheduledPostCoinSompi: UInt64 = 100_000_000
+
+    @MainActor
+    private static func buildScheduledTransaction(payload: String, address: String, privateKey: Data) async throws -> ScheduledTransaction {
+        let payloadData = Data(payload.utf8)
         // Nor coins a send still in flight spent.
         let utxos = ChatService.shared.unreservedUtxos(KaPostsScheduledStore.shared.excludingReserved(
-            try await NodePoolService.shared.getUtxosByAddresses([wallet.publicAddress])
+            try await NodePoolService.shared.getUtxosByAddresses([address])
         ))
         // Confirmed coins only: a transaction that will sit for hours must not chain on an
         // unconfirmed change output. And the SMALLEST single coin that can carry it: the
@@ -1033,25 +1097,70 @@ extension KaPostsAPIClient {
         // biggest one (the builder's own choice is largest-first).
         let confirmed = utxos.filter { $0.blockDaaScore > 0 && !$0.isCoinbase }.sorted { $0.amount < $1.amount }
         var single: KaspaRpcTransaction?
+        var singleCoin: UTXO?
         for candidate in confirmed {
             if let tx = try? KasiaTransactionBuilder.buildPayloadSelfSendTx(
-                from: wallet.publicAddress, senderPrivateKey: privateKey, utxos: [candidate], payload: Data(payload.utf8)
+                from: address, senderPrivateKey: privateKey, utxos: [candidate], payload: payloadData
             ) {
                 single = tx
+                singleCoin = candidate
                 break
             }
         }
+
+        // The only way to carry it would hold every confirmed coin until the post's time - one
+        // coin, or all of them together: the whole balance frozen for hours. Split a small coin
+        // off first and schedule on that; the rest comes straight back as change.
+        let holdsEverything = single == nil || (confirmed.count == 1 && singleCoin != nil)
+        let total = confirmed.reduce(UInt64(0)) { ChatService.shared.addSompiSafely($0, $1.amount) }
+        if holdsEverything, total > scheduledPostCoinSompi * 2,
+           let coin = try? await splitOffScheduledPostCoin(from: confirmed, address: address, privateKey: privateKey),
+           let tx = try? KasiaTransactionBuilder.buildPayloadSelfSendTx(
+               from: address, senderPrivateKey: privateKey, utxos: [coin], payload: payloadData
+           ) {
+            return scheduledTransaction(tx, payload: payload)
+        }
+
         let signedTx: KaspaRpcTransaction
         if let single {
             signedTx = single
         } else {
             signedTx = try KasiaTransactionBuilder.buildPayloadSelfSendTx(
-                from: wallet.publicAddress, senderPrivateKey: privateKey, utxos: confirmed, payload: Data(payload.utf8)
+                from: address, senderPrivateKey: privateKey, utxos: confirmed, payload: payloadData
             )
         }
+        return scheduledTransaction(signedTx, payload: payload)
+    }
+
+    private static func scheduledTransaction(_ signedTx: KaspaRpcTransaction, payload: String) -> ScheduledTransaction {
         let txId = KasiaTransactionBuilder.computeTransactionId(signedTx)
         let spent = signedTx.inputs.map { "\($0.previousOutpoint.transactionId):\($0.previousOutpoint.index)" }
-        return ScheduledTransaction(txId: txId, payload: payload, spentOutpoints: spent, restJSON: Self.restJSON(for: signedTx), transaction: signedTx)
+        return ScheduledTransaction(txId: txId, payload: payload, spentOutpoints: spent, restJSON: restJSON(for: signedTx), transaction: signedTx)
+    }
+
+    /// Sends `scheduledPostCoinSompi` to this wallet's own address and returns that output as a
+    /// coin. It is unconfirmed for a second or so, which is fine: the post spending it goes out
+    /// hours later. Nil when the split couldn't be built or sent.
+    @MainActor
+    private static func splitOffScheduledPostCoin(from confirmed: [UTXO], address: String, privateKey: Data) async throws -> UTXO? {
+        guard let script = KaspaAddress.scriptPublicKey(from: address) else { return nil }
+        let split = try KasiaTransactionBuilder.buildPlainTransferTx(
+            from: address, to: address, amount: scheduledPostCoinSompi,
+            senderPrivateKey: privateKey, utxos: confirmed
+        )
+        guard let index = split.outputs.firstIndex(where: { $0.value == scheduledPostCoinSompi && $0.scriptPublicKey.script == script }) else {
+            return nil
+        }
+        let (txId, _) = try await NodePoolService.shared.submitTransaction(split, allowOrphan: false)
+        AppLog.log("[KaPosts] Split a coin off for a scheduled post: %@", String(txId.prefix(12)))
+        return UTXO(
+            address: address,
+            outpoint: UTXO.Outpoint(transactionId: txId, index: UInt32(index)),
+            amount: scheduledPostCoinSompi,
+            scriptPublicKey: script,
+            blockDaaScore: 0,
+            isCoinbase: false
+        )
     }
 
     /// The Kaspa REST `POST /transactions` body for a signed transaction - what the indexer
@@ -1164,12 +1273,7 @@ extension KaPostsAPIClient {
         let marked = Self.kaChatMarker + text
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
-        let me = pubkey.lowercased()
-        var seen = Set<String>()
-        let clean = ([parentAuthorPubkey].compactMap { $0 } + mentionedPubkeys)
-            .map { $0.lowercased() }
-            .filter { $0.range(of: "^0[23][0-9a-f]{64}$", options: .regularExpression) != nil && $0 != me && seen.insert($0).inserted }
-        let mentions = "[" + clean.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let mentions = Self.mentionsJSON([parentAuthorPubkey].compactMap { $0 } + mentionedPubkeys, me: pubkey)
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.replySigningString(postId: postId, b64Message: b64, mentionsJSON: mentions),
             mode: .kaspaPersonalMessage
@@ -1189,12 +1293,7 @@ extension KaPostsAPIClient {
         let marked = Self.kaChatMarker + text
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
-        let me = pubkey.lowercased()
-        var seen = Set<String>()
-        let clean = mentionedPubkeys
-            .map { $0.lowercased() }
-            .filter { $0.range(of: "^0[23][0-9a-f]{64}$", options: .regularExpression) != nil && $0 != me && seen.insert($0).inserted }
-        let mentions = "[" + clean.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let mentions = Self.mentionsJSON(mentionedPubkeys, me: pubkey)
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.editSigningString(postId: postId, b64Message: b64, mentionsJSON: mentions),
             mode: .kaspaPersonalMessage
@@ -1294,9 +1393,22 @@ extension KaPostsAPIClient {
         let payload = KaPostsProtocol.postPayload(
             pubkey: dummyPubkey, signature: dummySignature, b64Message: b64, mentionsJSON: "[]"
         )
+        // No fee for a post no node would take.
+        guard payloadFitsOneTransaction(payload, scriptPubKey: script) else { return nil }
         return KasiaTransactionBuilder.estimateContextualMessageFee(
             payload: Data(payload.utf8), inputCount: 1, senderScriptPubKey: script
         )
+    }
+
+    /// Whether `payload` fits one transaction with one input: its fee mass (2 grams a byte,
+    /// `KaspaFeePolicy`) within the node's 100,000-gram limit. The composer's byte cap
+    /// (`KaPostsView.postLength`) keeps posts well inside it; this stops anything that got past
+    /// it before a fee is shown or a coin is spent, with a reason instead of "too many coins".
+    static func payloadFitsOneTransaction(_ payload: String, scriptPubKey: Data) -> Bool {
+        let fee = KasiaTransactionBuilder.estimateContextualMessageFee(
+            payload: Data(payload.utf8), inputCount: 1, senderScriptPubKey: scriptPubKey
+        )
+        return fee / KaspaFeePolicy.minimumRelayFeePerGramSompi <= KasiaTransactionBuilder.maxStandardMass
     }
 
     /// Shared write core: build the self-send tx from the chatting address's UTXOs with the K
@@ -1309,6 +1421,10 @@ extension KaPostsAPIClient {
         guard let wallet = WalletManager.shared.currentWallet,
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
+        }
+        if let script = KaspaAddress.scriptPublicKey(from: wallet.publicAddress),
+           !Self.payloadFitsOneTransaction(payload, scriptPubKey: script) {
+            throw KaPostsAPIError.tooLong
         }
         let chatService = ChatService.shared
         // One outgoing transaction at a time, in line with rooms and sends: picking coins and
@@ -1456,7 +1572,7 @@ final class KaPostsNotificationService {
 
     private func pollOnce() async {
         let settings = AppSettings.load()
-        guard WalletManager.shared.currentWallet != nil,
+        guard let pollAddress = WalletManager.shared.currentWallet?.publicAddress,
               let key = lastSeenKey else { return }
         // Notifications off: nothing here would be shown, so the indexer isn't asked.
         guard settings.notificationsEnabled else { return }
@@ -1475,6 +1591,9 @@ final class KaPostsNotificationService {
                     pages += 1
                 }
             }
+            // The account may have changed while the pages loaded: these rows (and `key`) belong
+            // to the old one, and counting them now would add them to the new account's bell.
+            guard WalletManager.shared.currentWallet?.publicAddress == pollAddress else { return }
             // Remote-push mode: the push service delivers KaPosts pings (registered via
             // kaposts_pubkey) while the app is backgrounded or closed.
             guard settings.notificationsEnabled else { return }

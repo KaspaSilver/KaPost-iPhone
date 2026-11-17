@@ -58,7 +58,8 @@ struct KNSAvatarView: View {
         if let cached = Self.backupPhotoCache.object(forKey: key) { return cached }
         // the same limit as a downloaded avatar, as base64 (4 characters per 3 bytes)
         guard base64.utf8.count <= KNSProfileImageCache.maxImageBytes / 3 * 4,
-              let data = Data(base64Encoded: base64), let image = UIImage(data: data) else { return nil }
+              let data = Data(base64Encoded: base64),
+              let image = KNSProfileImageCache.decodeImage(data, maxPixelSize: nil) else { return nil }
         Self.backupPhotoCache.setObject(image, forKey: key, cost: data.count)
         return image
     }
@@ -262,138 +263,6 @@ struct KNSBannerImageView: View {
 
         loadedImage = image
         didFail = image == nil
-        lastLoadedIdentity = image == nil ? nil : descriptor.cacheIdentity
-        isLoading = false
-    }
-}
-
-struct KNSAvatarFullscreenView: View {
-    let avatarURLString: String?
-    let fallbackText: String
-    var title: String = "Avatar"
-    /// Kaspa address behind this avatar, so the placeholder falls back the same way as
-    /// everywhere else while/if the KNS image isn't available.
-    var contactAddress: String? = nil
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var loadedImage: UIImage?
-    @State private var isLoading = false
-    @State private var showShareSheet = false
-    @State private var lastLoadedIdentity: String?
-
-    private var avatarURL: URL? {
-        KNSProfileLinkBuilder.websiteURL(from: avatarURLString)
-    }
-
-    private var canShare: Bool {
-        loadedImage != nil || avatarURL != nil
-    }
-
-    private var shareItems: [Any] {
-        if let loadedImage {
-            return [loadedImage]
-        }
-        if let avatarURL {
-            return [avatarURL]
-        }
-        return []
-    }
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            Group {
-                if let loadedImage {
-                    Image(uiImage: loadedImage)
-                        .resizable()
-                        .scaledToFit()
-                } else {
-                    KNSAvatarView(
-                        avatarURLString: avatarURLString,
-                        fallbackText: fallbackText,
-                        size: 220,
-                        contactAddress: contactAddress
-                    )
-                }
-            }
-            .padding(20)
-
-            if isLoading && loadedImage == nil {
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(1.1)
-            }
-        }
-        .overlay(alignment: .top) {
-            HStack(spacing: 12) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.18))
-                        .clipShape(Circle())
-                }
-
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button {
-                    showShareSheet = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.18))
-                        .clipShape(Circle())
-                }
-                .disabled(!canShare)
-                .opacity(canShare ? 1 : 0.45)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-        }
-        .task(id: avatarURL?.absoluteString) {
-            await loadRemoteAvatarIfNeeded()
-        }
-        .sheet(isPresented: $showShareSheet) {
-            if shareItems.isEmpty {
-                EmptyView()
-            } else {
-                KNSAvatarShareSheet(activityItems: shareItems)
-            }
-        }
-    }
-
-    @MainActor
-    private func loadRemoteAvatarIfNeeded() async {
-        guard let descriptor = KNSProfileImageDescriptor.from(raw: avatarURLString) else {
-            loadedImage = nil
-            lastLoadedIdentity = nil
-            isLoading = false
-            return
-        }
-
-        if lastLoadedIdentity == descriptor.cacheIdentity, loadedImage != nil {
-            return
-        }
-
-        if lastLoadedIdentity != descriptor.cacheIdentity {
-            loadedImage = nil
-        }
-
-        isLoading = true
-        let image = await KNSProfileImageCache.shared.image(for: descriptor)
-        guard !Task.isCancelled else { return }
-
-        loadedImage = image
         lastLoadedIdentity = image == nil ? nil : descriptor.cacheIdentity
         isLoading = false
     }
@@ -968,25 +837,25 @@ private actor KNSProfileImageCache {
         return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    /// Full decode when `maxPixelSize` is nil; otherwise an ImageIO thumbnail, which decodes
-    /// straight to the target size instead of materialising the full bitmap and scaling it
-    /// (same approach as `MessageBubbleView`'s photo thumbnails). Falls back to a plain decode
-    /// for formats ImageIO won't thumbnail.
-    private static func decodeImage(_ data: Data, maxPixelSize: Int?) -> UIImage? {
-        guard let maxPixelSize else { return UIImage(data: data) }
+    /// The largest side any avatar decodes to, the full-screen viewer included.
+    static let maxDecodedPixelSize = 2048
+
+    /// Always an ImageIO thumbnail, which decodes straight to the target size instead of
+    /// materialising the full bitmap and scaling it (same approach as `MessageBubbleView`'s photo
+    /// thumbnails). Avatars come from strangers' profiles: a small file can claim a huge bitmap,
+    /// so even the full-size view (`maxPixelSize` nil) stops at `maxDecodedPixelSize`, and an image
+    /// ImageIO won't thumbnail shows the glyph rather than a full `UIImage(data:)` decode.
+    fileprivate static func decodeImage(_ data: Data, maxPixelSize: Int?) -> UIImage? {
+        let pixelSize = min(maxPixelSize ?? maxDecodedPixelSize, maxDecodedPixelSize)
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-            return UIImage(data: data)
-        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize)
+            kCGImageSourceThumbnailMaxPixelSize: max(1, pixelSize)
         ] as CFDictionary
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
-            return UIImage(data: data)
-        }
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
         return UIImage(cgImage: cgImage)
     }
 
@@ -1091,46 +960,6 @@ private func sha256Hex(_ text: String) -> String {
 private func sha256Hex(_ data: Data) -> String {
     let digest = SHA256.hash(data: data)
     return digest.map { String(format: "%02x", $0) }.joined()
-}
-
-enum KNSProfileImagePrefetcher {
-    static func preload(rawURLStrings: [String], maxConcurrent: Int = 6) async {
-        let uniqueDescriptors: [KNSProfileImageDescriptor] = {
-            var seen: Set<String> = []
-            var descriptors: [KNSProfileImageDescriptor] = []
-            for raw in rawURLStrings {
-                guard let descriptor = KNSProfileImageDescriptor.from(raw: raw) else { continue }
-                guard !seen.contains(descriptor.cacheIdentity) else { continue }
-                seen.insert(descriptor.cacheIdentity)
-                descriptors.append(descriptor)
-            }
-            return descriptors
-        }()
-        guard !uniqueDescriptors.isEmpty else { return }
-
-        // A sliding window of `maxConcurrent` in-flight loads: one finishes, the next starts.
-        // The previous version sliced into batches and then awaited each item in turn, so it
-        // was fully sequential and `maxConcurrent` did nothing. Prefetch feeds the chat list,
-        // so it warms the row-sized variant.
-        let concurrency = max(1, maxConcurrent)
-        let thumbnailSize = KNSProfileImageCache.rowThumbnailMaxPixelSize
-        await withTaskGroup(of: Void.self) { group in
-            var iterator = uniqueDescriptors.makeIterator()
-            var running = 0
-            while running < concurrency, let descriptor = iterator.next() {
-                group.addTask {
-                    _ = await KNSProfileImageCache.shared.image(for: descriptor, maxPixelSize: thumbnailSize)
-                }
-                running += 1
-            }
-            while await group.next() != nil {
-                guard let descriptor = iterator.next() else { continue }
-                group.addTask {
-                    _ = await KNSProfileImageCache.shared.image(for: descriptor, maxPixelSize: thumbnailSize)
-                }
-            }
-        }
-    }
 }
 
 private struct KNSAvatarShareSheet: UIViewControllerRepresentable {

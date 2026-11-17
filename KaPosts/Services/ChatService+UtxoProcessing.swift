@@ -428,7 +428,8 @@ extension ChatService {
                     // Contact's self-stash - might be a message to us
                     // Check if sender is the same as receiver (self-stash pattern)
                     let contactIsSpending = txRemovedAddresses.contains(utxoAddress) || allRemovedAddresses.contains(utxoAddress)
-                    if contactIsSpending {
+                    // A contact's self-stash is a 1:1 message; with 1:1 chats off nothing reads it.
+                    if contactIsSpending && ChatService.oneToOneChatsEnabled {
                         if await findLocalMessage(txId: txId) != nil {
                             continue
                         }
@@ -924,6 +925,9 @@ extension ChatService {
             }
             AppLog.log("[ChatService] Incoming payment %@ resolved as handshake", String(txId.prefix(12)))
             removeMessage(txId: txId)
+            // 1:1 chats are switched off: a chat request isn't a payment, and there is no chat
+            // to open it in, so it is dropped without building conversation state.
+            guard ChatService.oneToOneChatsEnabled else { return true }
             let handshake = HandshakeResponse(
                 txId: txId,
                 sender: senderAddress,
@@ -944,7 +948,8 @@ extension ChatService {
         if isContextualPayload(payloadHex) {
             AppLog.log("[ChatService] Incoming payment %@ resolved as contextual - replacing", String(txId.prefix(12)))
             removeMessage(txId: txId)
-            if let privateKey,
+            if ChatService.oneToOneChatsEnabled,
+               let privateKey,
                let senderAddress,
                shouldAttemptSelfStashDecryption(payloadHex: payloadHex, contactAddress: senderAddress),
                let decrypted = await decryptContextualMessageFromRawPayload(payloadHex, privateKey: privateKey) {
