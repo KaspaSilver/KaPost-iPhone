@@ -393,7 +393,7 @@ struct KasiaTransactionBuilder {
         guard amount > 0 else {
             throw KasiaError.networkError("Amount must be greater than zero")
         }
-        let (amountToCover, coverOverflow) = amount.addingReportingOverflow(extraFeeSompi)
+        let (_, coverOverflow) = amount.addingReportingOverflow(extraFeeSompi)
         guard !coverOverflow else {
             throw KasiaError.networkError("Amount plus priority fee overflows")
         }
@@ -432,15 +432,18 @@ struct KasiaTransactionBuilder {
             changeScriptPubKey = senderScriptPubKey
         }
 
-        // Selection covers amount + priority tip; the recipient output below still carries only
-        // `amount`, so the extra stays unclaimed by outputs and becomes miner fee (change is
-        // computed net of it).
+        // The priority tip goes in as fee, not as part of the amount, the way
+        // `buildPlainTransferTx` and `estimatePaymentFeeEstimate` pass it: the storage-mass check
+        // then sees the outputs this transaction really holds ([amount, change]), and the fold
+        // rule weighs the same with-change fee the Review priced, so both pick the same coins.
+        // The recipient output carries only `amount`; the extra stays unclaimed and becomes fee.
         let selection = try selectUtxosForPayment(
             utxos: utxos,
-            amount: amountToCover,
+            amount: amount,
             payload: paymentPayload,
             recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: changeScriptPubKey
+            senderScriptPubKey: changeScriptPubKey,
+            extraFeeSompi: extraFeeSompi
         )
 
         #if DEBUG
@@ -595,105 +598,6 @@ struct KasiaTransactionBuilder {
 
         return try signTransaction(unsignedTx, privateKey: senderPrivateKey, utxos: selection.utxos,
                                    redeemScript: senderRedeemScript)
-    }
-
-    /// Result of building (but not signing) a transfer — used for cold storage / watch-only
-    /// sends where no private key is available locally; signing happens on an external device
-    /// (KasSigner) via the KSPT QR round trip.
-    struct UnsignedTransferResult {
-        let transaction: KaspaRpcTransaction
-        /// Same order as transaction.inputs — needed since a RawInput alone (just an outpoint +
-        /// empty signatureScript) doesn't carry the amount/scriptPublicKey a signer needs.
-        let inputUtxos: [UTXO]
-        let feeSompi: UInt64
-        let changeSompi: UInt64
-    }
-
-    /// Same UTXO selection/fee logic as buildPlainTransferTx, but stops short of signing and
-    /// returns the unsigned transaction plus the UTXOs it spends. KasSigner's KSPT wire format
-    /// carries no BIP32 derivation path per input — the device presumably resolves a signing key
-    /// per input by matching its scriptPublicKey against its own derived address set, but
-    /// nothing in the format lets KaChat *tell* it which path to use. To stay unambiguous, every
-    /// input in a single send is sourced from exactly one address (the `from` address), never
-    /// aggregated across several.
-    static func buildUnsignedPlainTransferTx(
-        from senderAddress: String,
-        to recipientAddress: String,
-        amount: UInt64,
-        utxos: [UTXO],
-        extraFeeSompi: UInt64 = 0,
-        changeAddress: String? = nil
-    ) throws -> UnsignedTransferResult {
-        guard amount > 0 else {
-            throw KasiaError.networkError("Amount must be greater than zero")
-        }
-
-        guard let recipientScriptPubKey = KaspaAddress.scriptPublicKey(from: recipientAddress) else {
-            throw KasiaError.invalidAddress
-        }
-        guard let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: senderAddress) else {
-            throw KasiaError.invalidAddress
-        }
-        let changeScriptPubKey: Data
-        if let changeAddress {
-            guard let script = KaspaAddress.scriptPublicKey(from: changeAddress) else {
-                throw KasiaError.invalidAddress
-            }
-            changeScriptPubKey = script
-        } else {
-            changeScriptPubKey = senderScriptPubKey
-        }
-
-        let selection = try selectUtxosForPayment(
-            utxos: utxos,
-            amount: amount,
-            payload: Data(),
-            recipientScriptPubKey: recipientScriptPubKey,
-            senderScriptPubKey: changeScriptPubKey,
-            extraFeeSompi: extraFeeSompi
-        )
-
-        var outputs: [KaspaRpcTransactionOutput] = [
-            KaspaRpcTransactionOutput(
-                value: amount,
-                scriptPublicKey: KaspaScriptPublicKey(version: 0, script: recipientScriptPubKey)
-            )
-        ]
-        var changeSompi: UInt64 = 0
-        if selection.keepsChange(withRecipientAmount: amount) {
-            changeSompi = selection.change
-            outputs.append(KaspaRpcTransactionOutput(
-                value: selection.change,
-                scriptPublicKey: KaspaScriptPublicKey(version: 0, script: changeScriptPubKey)
-            ))
-        }
-
-        let unsignedTx = KaspaRpcTransaction(
-            version: 0,
-            inputs: selection.utxos.map { utxo in
-                KaspaRpcTransactionInput(
-                    previousOutpoint: utxo.outpoint,
-                    signatureScript: Data(),
-                    sequence: 0,
-                    sigOpCount: 1
-                )
-            },
-            outputs: outputs,
-            lockTime: 0,
-            subnetworkId: standardSubnetworkId,
-            gas: 0,
-            payload: Data()
-        )
-
-        let totalIn = try selection.utxos.reduce(UInt64(0)) { try addSompiChecked($0, $1.amount, context: "unsigned transfer total") }
-        let fee = totalIn - amount - changeSompi
-
-        return UnsignedTransferResult(
-            transaction: unsignedTx,
-            inputUtxos: selection.utxos,
-            feeSompi: fee,
-            changeSompi: changeSompi
-        )
     }
 
     /// Estimate fee for a plain transfer (no payload). `extraFeeSompi` is the same optional

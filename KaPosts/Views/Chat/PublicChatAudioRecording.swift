@@ -19,11 +19,35 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
     private static let sampleRate: Double = 48_000
 
     @Published private(set) var state: State = .idle
+    /// Whole seconds recorded, from the recorder's own clock (`currentTime`): what the 2:50
+    /// cut-off and the live fee go by, so it can't drift from what the file holds.
     @Published private(set) var elapsedSeconds: TimeInterval = 0
+    /// A call, Siri or another app took the microphone: the recording stopped there and what was
+    /// recorded so far waits for Send or the trash.
+    @Published private(set) var wasInterrupted = false
 
     private var recorder: AVAudioRecorder?
     private var timer: Timer?
     private var pcmURL: URL?
+    private var interruptionObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            MainActor.assumeIsolated { self?.handleInterruption() }
+        }
+    }
+
+    deinit {
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        timer?.invalidate()
+    }
 
     func start() {
         guard state == .idle else { return }
@@ -74,6 +98,7 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
             self.recorder = recorder
             self.pcmURL = url
             self.elapsedSeconds = 0
+            self.wasInterrupted = false
             self.state = .recording
             startTimer()
         } catch {
@@ -81,16 +106,47 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
         }
     }
 
+    /// Reads the recorder's clock a few times a second, in the common run loop mode so it keeps
+    /// going while the room is scrolled (the default mode pauses timers during a scroll, which
+    /// held the count - and the 2:50 cut-off - back).
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.elapsedSeconds += 1
-            }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func tick() {
+        guard state == .recording, let recorder else { return }
+        // Only forward: a stopped recorder reads 0.
+        let whole = recorder.currentTime.rounded(.down)
+        if whole > elapsedSeconds { elapsedSeconds = whole }
+    }
+
+    /// The microphone was taken away: the file is closed where it got to, and the bar keeps
+    /// Send and the trash for it.
+    private func handleInterruption() {
+        guard state == .recording, let recorder, !wasInterrupted else { return }
+        tick()
+        timer?.invalidate()
+        timer = nil
+        recorder.stop()
+        wasInterrupted = true
+        releaseAudioSession()
+    }
+
+    /// Gives the audio session back to what it was before recording (other apps' audio may
+    /// resume). Playing a voice bubble sets its own category again.
+    private func releaseAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        try? session.setCategory(.soloAmbient)
     }
 
     func cancel() {
+        let wasActive = recorder != nil
         timer?.invalidate()
         timer = nil
         recorder?.stop()
@@ -102,6 +158,8 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
         pcmURL = nil
         state = .idle
         elapsedSeconds = 0
+        wasInterrupted = false
+        if wasActive { releaseAudioSession() }
     }
 
     /// Stops recording and encodes it as the parts it goes as: at most 14.5 s each (one part,
@@ -114,8 +172,12 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
             throw KasiaError.networkError("Not recording")
         }
         state = .encoding
+        let interrupted = wasInterrupted
         recorder.stop()
         self.recorder = nil
+        wasInterrupted = false
+        // An interruption already gave the session back.
+        if !interrupted { releaseAudioSession() }
 
         defer {
             try? FileManager.default.removeItem(at: pcmURL)

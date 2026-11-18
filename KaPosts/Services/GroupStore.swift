@@ -108,22 +108,6 @@ final class GroupStore {
         return ok
     }
 
-    func deleteGroup(id: String) {
-        let context = viewContext
-        context.performAndWait {
-            guard let row = fetchGroup(id: id, in: context) else { return }
-            context.delete(row)
-            let messageRequest = NSFetchRequest<NSFetchRequestResult>(entityName: CDGroupMessage.entityName)
-            messageRequest.predicate = NSPredicate(format: "groupId == %@", id)
-            let deleteRequest = NSBatchDeleteRequest(fetchRequest: messageRequest)
-            _ = try? context.execute(deleteRequest)
-            let reactionRequest = NSFetchRequest<NSFetchRequestResult>(entityName: CDGroupReaction.entityName)
-            reactionRequest.predicate = NSPredicate(format: "groupId == %@", id)
-            _ = try? context.execute(NSBatchDeleteRequest(fetchRequest: reactionRequest))
-            save(context)
-        }
-    }
-
     func group(id: String) -> GroupChat? {
         guard isLoaded else { return nil }
         var result: GroupChat?
@@ -131,19 +115,6 @@ final class GroupStore {
         context.performAndWait {
             guard let row = fetchGroup(id: id, in: context) else { return }
             result = Self.makeGroup(from: row)
-        }
-        return result
-    }
-
-    func allGroups() -> [GroupChat] {
-        guard isLoaded else { return [] }
-        var result: [GroupChat] = []
-        let context = viewContext
-        context.performAndWait {
-            let request = NSFetchRequest<CDGroup>(entityName: CDGroup.entityName)
-            request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
-            let rows = (try? context.fetch(request)) ?? []
-            result = rows.map(Self.makeGroup)
         }
         return result
     }
@@ -288,75 +259,6 @@ final class GroupStore {
         }
     }
 
-    /// Raw rows for a group, oldest first - callers decrypt via GroupCipher using the group's
-    /// per-epoch root key(s) held in Keychain.
-    ///
-    /// Runs on a background context. This used to be `performAndWait` on the view context - the
-    /// main queue - and it fetches a group's ENTIRE history: `loadMessages` calls it for every
-    /// group at login and again whenever a thread opens, so that was a full-table read on the
-    /// main thread per group. The comment there called it a fast read; the decrypt had been moved
-    /// off-main, the fetch had not.
-    ///
-    /// `newestLimit` keeps only the newest N rows (still returned oldest first). The login loop
-    /// passes the same window the 1:1 side trims to, so every group is no longer resident in
-    /// full for the process lifetime. Opening a thread passes nil: the group thread has no
-    /// "load older" paging to fall back on, so a cap there would simply lose history from the
-    /// screen rather than defer it.
-    func messageRows(forGroup groupId: String, newestLimit: Int? = nil) async -> [CDGroupMessageSnapshot] {
-        guard isLoaded else { return [] }
-        let context = container.newBackgroundContext()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<[CDGroupMessageSnapshot], Never>) in
-            context.perform {
-                let request = NSFetchRequest<CDGroupMessage>(entityName: CDGroupMessage.entityName)
-                request.predicate = NSPredicate(format: "groupId == %@", groupId)
-                // A window is expressed to SQLite as newest-first with a limit, then flipped back
-                // to the oldest-first order every caller expects.
-                let newestFirst = newestLimit != nil
-                request.sortDescriptors = [NSSortDescriptor(key: "blockTime", ascending: !newestFirst)]
-                if let newestLimit { request.fetchLimit = newestLimit }
-                let rows = (try? context.fetch(request)) ?? []
-                var result = rows.map { row in
-                    CDGroupMessageSnapshot(
-                        txId: row.txId,
-                        groupId: row.groupId,
-                        senderAddress: row.senderAddress,
-                        senderIdHex: row.senderIdHex,
-                        epoch: row.epoch < 0 ? 0 : UInt64(row.epoch),
-                        msgIdHex: row.msgIdHex,
-                        contentEncrypted: row.contentEncrypted ?? Data(),
-                        blockTime: row.blockTime,
-                        isOutgoing: row.isOutgoing,
-                        deliveryStatus: ChatMessage.DeliveryStatus(rawValue: row.deliveryStatus ?? "") ?? .sent,
-                        isImportedPlaintext: row.epoch < 0
-                    )
-                }
-                if newestFirst { result.reverse() }
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    /// The newest `limit` txIds of messages this wallet sent, across every group, read straight
-    /// from the store. The extension's "is this reaction to one of mine" list used to be built
-    /// from the in-memory arrays, which only works while every group's full history is resident -
-    /// and after the window above, it is not. A single indexed fetch of one column, off-main.
-    func ownOutgoingTxIds(limit: Int) async -> [String] {
-        guard isLoaded else { return [] }
-        let context = container.newBackgroundContext()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<[String], Never>) in
-            context.perform {
-                let request = NSFetchRequest<NSDictionary>(entityName: CDGroupMessage.entityName)
-                request.resultType = .dictionaryResultType
-                request.propertiesToFetch = ["txId"]
-                request.predicate = NSPredicate(format: "isOutgoing == YES AND NOT (txId BEGINSWITH %@)", "pending_")
-                request.sortDescriptors = [NSSortDescriptor(key: "blockTime", ascending: false)]
-                request.fetchLimit = limit
-                let rows = (try? context.fetch(request)) ?? []
-                continuation.resume(returning: rows.compactMap { $0["txId"] as? String })
-            }
-        }
-    }
-
     // MARK: - Reactions (CDGroupReaction)
 
     /// Plain snapshot of a `CDGroupReaction` row, safe to pass across contexts/actors.
@@ -376,81 +278,7 @@ final class GroupStore {
         var blockTime: Int64 = 0
     }
 
-    /// Replaces any existing reaction `reactorAddress` left on `targetTxId` with `emoji` - one
-    /// reaction per (message, reactor), mirroring `MessageStore.upsertReaction`'s 1:1 shape.
-    func upsertGroupReaction(targetTxId: String, groupId: String, reactorAddress: String, emoji: String, reactionTxId: String?, blockTime: Int64, deliveryStatus: String? = nil, failedAction: String? = nil) {
-        guard isLoaded else { return }
-        let context = viewContext
-        context.performAndWait {
-            let request = NSFetchRequest<CDGroupReaction>(entityName: CDGroupReaction.entityName)
-            request.predicate = NSPredicate(format: "targetTxId == %@ AND reactorAddress == %@", targetTxId, reactorAddress)
-            let existing = (try? context.fetch(request)) ?? []
-            let reaction = existing.first ?? CDGroupReaction(context: context)
-            for duplicate in existing.dropFirst() {
-                context.delete(duplicate)
-            }
-            reaction.targetTxId = targetTxId
-            reaction.groupId = groupId
-            reaction.reactorAddress = reactorAddress
-            reaction.emoji = emoji
-            reaction.reactionTxId = reactionTxId
-            reaction.blockTime = blockTime
-            reaction.deliveryStatus = deliveryStatus
-            reaction.failedAction = failedAction
-            save(context)
-        }
-    }
-
     // MARK: - Edits (CDGroupMessageEdit)
-
-    /// Records the newest edit of `targetTxId` - newest by block time wins, except that the
-    /// local user's own in-flight edit is replaced by its own outcome.
-    func upsertGroupEdit(targetTxId: String, groupId: String, text: String, editTxId: String?, blockTime: Int64, deliveryStatus: String? = nil) {
-        guard isLoaded else { return }
-        let context = viewContext
-        context.performAndWait {
-            let request = NSFetchRequest<CDGroupMessageEdit>(entityName: CDGroupMessageEdit.entityName)
-            request.predicate = NSPredicate(format: "targetTxId == %@", targetTxId)
-            let existing = (try? context.fetch(request)) ?? []
-            if let current = existing.first, current.deliveryStatus == nil || current.deliveryStatus == "sent",
-               current.blockTime > blockTime, current.editTxId != editTxId {
-                return
-            }
-            let edit = existing.first ?? CDGroupMessageEdit(context: context)
-            for duplicate in existing.dropFirst() {
-                context.delete(duplicate)
-            }
-            edit.targetTxId = targetTxId
-            edit.groupId = groupId
-            edit.text = text
-            edit.editTxId = editTxId
-            edit.blockTime = blockTime
-            edit.deliveryStatus = deliveryStatus
-            save(context)
-        }
-    }
-
-    /// All edits for `groupId`, keyed by the message they change.
-    func fetchGroupEdits(groupId: String) -> [String: MessageEditSnapshot] {
-        guard isLoaded else { return [:] }
-        var edits: [String: MessageEditSnapshot] = [:]
-        let context = viewContext
-        context.performAndWait {
-            edits = Self.editSnapshots(groupId: groupId, in: context)
-        }
-        return edits
-    }
-
-    /// `fetchGroupEdits` on a background context: opening a group read the whole group's edits
-    /// and reactions synchronously on the main thread while the thread slid in.
-    func fetchGroupEditsAsync(groupId: String) async -> [String: MessageEditSnapshot] {
-        guard isLoaded else { return [:] }
-        return await withCheckedContinuation { continuation in
-            container.performBackgroundTask { context in
-                continuation.resume(returning: Self.editSnapshots(groupId: groupId, in: context))
-            }
-        }
-    }
 
     private static func editSnapshots(groupId: String, in context: NSManagedObjectContext) -> [String: MessageEditSnapshot] {
         var edits: [String: MessageEditSnapshot] = [:]
@@ -468,42 +296,6 @@ final class GroupStore {
             edits[record.targetTxId] = MessageEditSnapshot(targetTxId: record.targetTxId, text: text, editTxId: record.editTxId, blockTime: record.blockTime, deliveryStatus: status)
         }
         return edits
-    }
-
-    /// Deletes `reactorAddress`'s reaction on `targetTxId`, if any.
-    func removeGroupReaction(targetTxId: String, reactorAddress: String) {
-        guard isLoaded else { return }
-        let context = viewContext
-        context.performAndWait {
-            let request = NSFetchRequest<CDGroupReaction>(entityName: CDGroupReaction.entityName)
-            request.predicate = NSPredicate(format: "targetTxId == %@ AND reactorAddress == %@", targetTxId, reactorAddress)
-            let existing = (try? context.fetch(request)) ?? []
-            for record in existing {
-                context.delete(record)
-            }
-            save(context)
-        }
-    }
-
-    /// All reactions for `groupId`, grouped by the message they target.
-    func fetchGroupReactions(groupId: String) -> [String: [ReactionSnapshot]] {
-        guard isLoaded else { return [:] }
-        var grouped: [String: [ReactionSnapshot]] = [:]
-        let context = viewContext
-        context.performAndWait {
-            grouped = Self.reactionSnapshots(groupId: groupId, in: context)
-        }
-        return grouped
-    }
-
-    /// `fetchGroupReactions` on a background context - see `fetchGroupEditsAsync`.
-    func fetchGroupReactionsAsync(groupId: String) async -> [String: [ReactionSnapshot]] {
-        guard isLoaded else { return [:] }
-        return await withCheckedContinuation { continuation in
-            container.performBackgroundTask { context in
-                continuation.resume(returning: Self.reactionSnapshots(groupId: groupId, in: context))
-            }
-        }
     }
 
     private static func reactionSnapshots(groupId: String, in context: NSManagedObjectContext) -> [String: [ReactionSnapshot]] {
@@ -657,23 +449,6 @@ final class GroupStore {
         }
         return attribute
     }
-}
-
-/// Plain snapshot of a `CDGroupMessage` row, safe to pass across contexts/actors.
-struct CDGroupMessageSnapshot: Sendable {
-    let txId: String
-    let groupId: String
-    let senderAddress: String?
-    let senderIdHex: String
-    let epoch: UInt64
-    let msgIdHex: String
-    let contentEncrypted: Data
-    let blockTime: Int64
-    let isOutgoing: Bool
-    let deliveryStatus: ChatMessage.DeliveryStatus
-    // Imported-from-backup rows carry decrypted plaintext under a negative-epoch sentinel;
-    // `contentEncrypted` is then the UTF-8 bytes of the message, not ciphertext.
-    var isImportedPlaintext: Bool = false
 }
 
 // GroupStore only touches Core Data via context.performAndWait on its own contexts;

@@ -18,13 +18,21 @@ final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendab
         case truncate
     }
 
+    /// Decides each redirect: the request to follow (possibly changed, e.g. without its Referer),
+    /// or nil to stop there. Stopping hands the 3xx itself back as the response, so a caller that
+    /// wants a 2xx shows nothing.
+    typealias RedirectPolicy = @Sendable (_ newRequest: URLRequest, _ originalRequest: URLRequest?) -> URLRequest?
+
+    /// `redirectPolicy` nil follows every redirect, as URLSession does (KNS avatars). Link
+    /// previews always pass one: their allowlist has to hold for every hop, not only the first.
     static func data(
         for request: URLRequest,
         session: URLSession,
         maxBytes: Int,
-        onOverflow overflow: Overflow = .reject
+        onOverflow overflow: Overflow = .reject,
+        redirectPolicy: RedirectPolicy? = nil
     ) async throws -> (Data, URLResponse) {
-        let download = BoundedDownload(maxBytes: maxBytes, overflow: overflow)
+        let download = BoundedDownload(maxBytes: maxBytes, overflow: overflow, redirectPolicy: redirectPolicy)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 download.start(request, session: session, continuation: continuation)
@@ -36,6 +44,7 @@ final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendab
 
     private let maxBytes: Int
     private let overflow: Overflow
+    private let redirectPolicy: RedirectPolicy?
     private let lock = NSLock()
     private var buffer = Data()
     private var response: URLResponse?
@@ -43,9 +52,10 @@ final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
     private var isCancelled = false
 
-    private init(maxBytes: Int, overflow: Overflow) {
+    private init(maxBytes: Int, overflow: Overflow, redirectPolicy: RedirectPolicy?) {
         self.maxBytes = maxBytes
         self.overflow = overflow
+        self.redirectPolicy = redirectPolicy
     }
 
     private func start(_ request: URLRequest, session: URLSession, continuation: CheckedContinuation<(Data, URLResponse), Error>) {
@@ -89,6 +99,18 @@ final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendab
             return
         }
         completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let redirectPolicy else {
+            completionHandler(request)
+            return
+        }
+        let followed = redirectPolicy(request, task.originalRequest)
+        if followed == nil {
+            AppLog.log("[LinkPreview] redirect refused to %@", request.url.map(LinkPreviewService.logLabel) ?? "(no url)")
+        }
+        completionHandler(followed)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -746,9 +768,159 @@ final class KaPostLinkPreviewCache: ObservableObject {
 
 }
 
+/// Which web links in a KaPost may draw a preview card (owner's call, 2026-11-18). Only a poster
+/// with a `.kachat` name gets previews at all, and then only for popular, mainstream sites on
+/// this list, so a preview never fetches from an unknown server or shows adult content. Anything
+/// else stays a plain link. A host matches itself and its subdomains (www., m., mobile.).
+/// The same list holds for every hop: a redirect is followed only to an allowed https page
+/// (`allowsRedirect`), and a preview's image loads only from the site or a known image server of
+/// it (`allowsImage`).
+enum KaPostLinkPreviewPolicy {
+    static let allowedDomains: Set<String> = [
+        // social and video
+        "x.com", "twitter.com", "youtube.com", "youtu.be", "instagram.com", "facebook.com",
+        "linkedin.com", "tiktok.com", "threads.net",
+        // code, reference and writing
+        "github.com", "wikipedia.org", "medium.com", "substack.com", "apple.com",
+        // news
+        "bbc.com", "bbc.co.uk", "reuters.com", "bloomberg.com", "cnbc.com", "cnn.com",
+        "nytimes.com", "theguardian.com", "forbes.com", "apnews.com",
+        // crypto news and data
+        "coindesk.com", "cointelegraph.com", "decrypt.co", "theblock.co",
+        "coingecko.com", "coinmarketcap.com",
+        // Kaspa and KaChat
+        "kaspa.org", "kas.fyi", "kaspa.stream", "kachat.app",
+    ]
+
+    // Every endpoint a preview fetches is on `allowedDomains` itself, so there is no list of
+    // extra endpoints: YouTube's oEmbed (`https://www.youtube.com/oembed`,
+    // `LinkPreviewService.fetchYouTubeOEmbed`) is youtube.com; Instagram and Facebook are scraped
+    // at the link itself, only with Meta's crawler User-Agent; X has no special endpoint. A new
+    // special endpoint may only be the platform's own domain, listed here explicitly.
+
+    /// The image servers of the allowed sites, for a preview's `og:image` (and the YouTube
+    /// thumbnail). Each matches itself and its subdomains. Subdomains of an allowed site need no
+    /// entry (miro.medium.com, media.cnn.com, imageio.forbes.com, dims.apnews.com,
+    /// images.cointelegraph.com, img.decrypt.co, coin-images.coingecko.com, s2.coinmarketcap.com).
+    /// Left out on purpose: shared hosting that serves anyone's files (S3 buckets, sanity.io,
+    /// arcpublishing.com, raw.githubusercontent.com, googleusercontent.com beyond YouTube's).
+    static let imageCDNDomains: Set<String> = [
+        // X, YouTube, Meta (Instagram, Facebook, Threads), LinkedIn, TikTok
+        "twimg.com", "ytimg.com", "ggpht.com", "yt3.googleusercontent.com",
+        "cdninstagram.com", "fbcdn.net", "licdn.com", "tiktokcdn.com", "tiktokcdn-us.com",
+        // GitHub, Substack, Wikipedia, Apple
+        "githubassets.com", "avatars.githubusercontent.com", "repository-images.githubusercontent.com",
+        "substackcdn.com", "wikimedia.org", "mzstatic.com",
+        // BBC, New York Times, Guardian, CNBC, Bloomberg, The Block
+        "bbci.co.uk", "nyt.com", "guim.co.uk", "cnbcfm.com", "bwbx.io", "tbstat.com",
+    ]
+
+    /// Words that keep a link on an allowed site from previewing anyway (a path or query on a
+    /// mainstream host can still point at adult content). Matched anywhere in the decoded,
+    /// lowercased URL: none of them sits inside an ordinary word.
+    private static let blockedSubstrings = ["porn", "xxx", "nsfw", "nude", "hentai", "onlyfans"]
+    /// Matched only as a whole word (between non-letters), so Sussex, Essex and unisex pass.
+    private static let blockedTokens: Set<String> = ["sex", "sexy"]
+
+    struct Match {
+        let url: URL
+        /// The exact substring matched, which the post leaves out of its text: the card shows it.
+        let matchedText: String
+    }
+
+    private final class MatchBox: NSObject {
+        let value: Match?
+        init(_ value: Match?) { self.value = value }
+    }
+
+    /// Same caching as `KaChatSiteLink.match`: this runs from post cell bodies.
+    private static let matchCache: NSCache<NSString, MatchBox> = {
+        let cache = NSCache<NSString, MatchBox>()
+        cache.countLimit = 2_048
+        return cache
+    }()
+
+    /// The first http(s) link in `text` that is written as a link (`isExplicitLink`), with the
+    /// text it was written as. A bare domain in prose ("I left facebook.com") is skipped, so it
+    /// stays a word in the text and draws no card.
+    static func firstLink(in text: String) -> Match? {
+        let key = text as NSString
+        if let cached = matchCache.object(forKey: key) { return cached.value }
+        var found: Match?
+        if let detector = SharedDetectors.link {
+            let ns = text as NSString
+            detector.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, stop in
+                guard let match, let url = match.url, let scheme = url.scheme?.lowercased(),
+                      scheme == "http" || scheme == "https" else { return }
+                let matchedText = ns.substring(with: match.range)
+                guard isExplicitLink(matchedText) else { return }
+                found = Match(url: url, matchedText: matchedText)
+                stop.pointee = true
+            }
+        }
+        matchCache.setObject(MatchBox(found), forKey: key)
+        return found
+    }
+
+    /// True when a link detector's match was written as a link: it starts with http://, https://
+    /// or www. (any case). `NSDataDetector` also turns bare domains ("x.com") into URLs; those
+    /// never preview.
+    static func isExplicitLink(_ matchedText: String) -> Bool {
+        let lowered = matchedText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lowered.hasPrefix("http://") || lowered.hasPrefix("https://") || lowered.hasPrefix("www.")
+    }
+
+    static func allows(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              url.user == nil, url.password == nil, url.port == nil,
+              let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        guard matches(host, in: allowedDomains) else { return false }
+        return !hasBlockedWords(url)
+    }
+
+    /// A page a preview may fetch: an allowed site or KaChat's own.
+    static func allowsPage(_ url: URL) -> Bool {
+        allows(url) || KaChatSiteLink.isSiteLink(url)
+    }
+
+    /// A redirect a page fetch may follow: https, to a page `allowsPage` takes.
+    static func allowsRedirect(to url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && allowsPage(url)
+    }
+
+    /// An image a preview of `page` may load: https only (no http:, file: or data:), no
+    /// credentials or port, no adult words, from an allowed site, KaChat's own or one of their
+    /// image servers (`imageCDNDomains`), for a page that is itself allowed. Anything else draws
+    /// the card without its image. Redirects of an image fetch are held to the same rule.
+    static func allowsImage(_ url: URL, forPage page: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", url.user == nil, url.password == nil, url.port == nil,
+              let host = url.host?.lowercased(), !host.isEmpty,
+              allowsPage(page), !hasBlockedWords(url) else { return false }
+        return matches(host, in: allowedDomains) || matches(host, in: imageCDNDomains)
+    }
+
+    private static func matches(_ host: String, in domains: Set<String>) -> Bool {
+        domains.contains(where: { host == $0 || host.hasSuffix("." + $0) })
+    }
+
+    /// The URL decoded (twice-encoded too, "%2570orn"), lowercased, then checked: the
+    /// unambiguous words anywhere, the rest only as whole words.
+    private static func hasBlockedWords(_ url: URL) -> Bool {
+        var text = url.absoluteString
+        for _ in 0..<3 {
+            guard let decoded = text.removingPercentEncoding, decoded != text else { break }
+            text = decoded
+        }
+        text = text.lowercased()
+        if blockedSubstrings.contains(where: text.contains) { return true }
+        let tokens = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        return tokens.contains(where: { blockedTokens.contains(String($0)) })
+    }
+}
+
 /// A link to KaChat's own site (`home.kachat.app`, any page). Unlike a stranger's link it previews
 /// by itself: fetching it tells nobody but us who is reading, so a post draws it as a card, and a
-/// public chat room doesn't wait for a tap as it does for other links (see `LinkPreviewCardView`).
+/// public chat room previews it for a sender with a `.kachat` name (see `LinkPreviewCardView`).
 enum KaChatSiteLink {
     static let host = "home.kachat.app"
 
@@ -848,10 +1020,11 @@ enum NextcloudMediaKind: String, Equatable {
     case file
 }
 
-/// Fetches Open Graph preview metadata for links sent in chat messages. Auto-fetch on render is
-/// gated by sender trust (see `LinkPreviewCardView.autoFetch`): accepted 1:1 contacts and group
-/// chats fetch automatically; non-accepted senders and public chat rooms fetch only when the user
-/// taps the placeholder card. Each recipient's own device does this fetch when the message
+/// Fetches Open Graph preview metadata for links in posts and Public Chats rooms. A card is only
+/// made for a poster or sender with a `.kachat` name and a link to KaChat's site or an allowed site
+/// (`KaPostLinkPreviewPolicy`), and then fetches by itself on render; `fetchPreview` refuses any
+/// other page, every redirect is held to the same list, and images to `allowsImage`, so an unknown
+/// server is never contacted. Each reader's own device does this fetch when the post
 /// renders, rather than the sender embedding preview data in the encrypted message payload, so
 /// link previews never bloat the on-chain/indexer payload. Mirrors `KNSService`'s async-fetch
 /// shape (`KNSService.swift` `fetchPrimaryNameResult`) and `MessageTextRenderPlan`'s `NSCache`
@@ -901,14 +1074,21 @@ actor LinkPreviewService {
     private let fetchTimeout: TimeInterval = 8
     private let maxBodyBytes = 1_000_000
     private let maxImageBytes = 5_000_000
+    private let maxOEmbedBytes = 100_000
 
     /// Fetches a preview image's bytes using the same browser User-Agent as the scrape, plus a
-    /// `Referer` (the page the image belongs to). Image CDNs like cdninstagram/fbcdn reject bare
-    /// requests (no browser UA / no Referer) with a 403, which is why `AsyncImage` - which sends
-    /// neither - silently failed for Instagram. Returns nil on any failure (card shows no image).
+    /// `Referer` (the page the image belongs to) when the image is on the page's own host. Image
+    /// CDNs like cdninstagram/fbcdn reject bare requests (no browser UA) with a 403, which is why
+    /// `AsyncImage` silently failed for Instagram. Returns nil on any failure (card shows no image),
+    /// and makes no request at all for an image `KaPostLinkPreviewPolicy.allowsImage` refuses: only
+    /// https, from the allowed sites and their image servers, redirects included.
     /// `maxBytes` overrides the default 5 MB cap — the Nextcloud full-quality photo viewer
     /// passes a much higher limit since it deliberately fetches the original file.
     func imageData(_ url: URL, referer: URL, maxBytes: Int? = nil) async -> Data? {
+        guard KaPostLinkPreviewPolicy.allowsImage(url, forPage: referer) else {
+            AppLog.log("[LinkPreview] image host not allowed: %@", Self.logLabel(url))
+            return nil
+        }
         // Keyed by URL and cap: the full-quality Nextcloud fetch must not be answered from a
         // capped request's bytes (or vice versa).
         let key = "\(url.absoluteString)|\(maxBytes ?? maxImageBytes)"
@@ -921,10 +1101,10 @@ actor LinkPreviewService {
 
         let task = Task<Data?, Never> { [weak self] in
             guard let self else { return nil }
-            // First: browser UA (session default) + Referer. Fallback: Meta's crawler UA with no Referer -
+            // First: browser UA (session default) + Referer (same host only). Fallback: Meta's crawler UA with no Referer -
             // some cdninstagram/fbcdn image URLs 403 the browser-UA/Referer combo but serve that crawler.
-            if let data = await self.fetchImageBytes(url, userAgentOverride: nil, referer: referer, maxBytes: maxBytes) { return data }
-            return await self.fetchImageBytes(url, userAgentOverride: Self.facebookExternalHitUserAgent, referer: nil, maxBytes: maxBytes)
+            if let data = await self.fetchImageBytes(url, page: referer, userAgentOverride: nil, sendsReferer: true, maxBytes: maxBytes) { return data }
+            return await self.fetchImageBytes(url, page: referer, userAgentOverride: Self.facebookExternalHitUserAgent, sendsReferer: false, maxBytes: maxBytes)
         }
         imageInFlight[key] = task
         let data = await task.value
@@ -936,13 +1116,23 @@ actor LinkPreviewService {
         return data
     }
 
-    private func fetchImageBytes(_ url: URL, userAgentOverride: String?, referer: URL?, maxBytes: Int? = nil) async -> Data? {
+    /// The Referer goes only to the page's own host: another host (a CDN) isn't told which post
+    /// it was shown in. A redirect is followed only to an image `allowsImage` takes, and loses the
+    /// Referer if it leaves the page's host.
+    private func fetchImageBytes(_ url: URL, page: URL, userAgentOverride: String?, sendsReferer: Bool, maxBytes: Int? = nil) async -> Data? {
         var request = URLRequest(url: url)
         if let userAgentOverride { request.setValue(userAgentOverride, forHTTPHeaderField: "User-Agent") }
-        if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
+        if sendsReferer, Self.sameHost(url, page) { request.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
         request.setValue("image/avif,image/webp,image/png,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        let redirectPolicy: BoundedDownload.RedirectPolicy = { newRequest, _ in
+            guard let target = newRequest.url, KaPostLinkPreviewPolicy.allowsImage(target, forPage: page) else { return nil }
+            var followed = newRequest
+            if !Self.sameHost(target, page) { followed.setValue(nil, forHTTPHeaderField: "Referer") }
+            return followed
+        }
         do {
-            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBytes ?? maxImageBytes)
+            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBytes ?? maxImageBytes,
+                                                                  redirectPolicy: redirectPolicy)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else { return nil }
             return data
@@ -963,6 +1153,19 @@ actor LinkPreviewService {
     /// no picture). Used for the scrape on Meta hosts, and as the image-load fallback everywhere.
     static let facebookExternalHitUserAgent = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
 
+    private nonisolated static func sameHost(_ a: URL, _ b: URL) -> Bool {
+        guard let hostA = a.host?.lowercased(), let hostB = b.host?.lowercased() else { return false }
+        return hostA == hostB
+    }
+
+    /// Every page fetch (the scrape, YouTube's oEmbed, the share probes) follows a redirect only
+    /// to an https page on the allowed list (`KaPostLinkPreviewPolicy.allowsRedirect`); anything
+    /// else stops there and the 3xx shows no preview. Image fetches pass their own rule.
+    static let pageRedirectPolicy: BoundedDownload.RedirectPolicy = { newRequest, _ in
+        guard let target = newRequest.url, KaPostLinkPreviewPolicy.allowsRedirect(to: target) else { return nil }
+        return newRequest
+    }
+
     private static let metaScrapeHosts: Set<String> = [
         "instagram.com", "www.instagram.com", "m.instagram.com",
         "facebook.com", "www.facebook.com", "m.facebook.com", "fb.watch"
@@ -976,7 +1179,9 @@ actor LinkPreviewService {
             "User-Agent": Self.browserUserAgent,
             "Accept-Language": "en-US,en;q=0.9"
         ]
-        return URLSession(configuration: config)
+        // The session's own delegate holds redirects to the page rule for any request that
+        // doesn't bring its own (the share probes); `BoundedDownload` tasks decide for themselves.
+        return URLSession(configuration: config, delegate: LinkPreviewRedirectGuard(), delegateQueue: nil)
     }()
 
     private init() {}
@@ -1224,6 +1429,12 @@ actor LinkPreviewService {
             AppLog.log("[LinkPreview] rejected non-http(s) scheme for %@", LinkPreviewService.logLabel(url))
             return nil
         }
+        // The callers only ask for allowed links; this holds the rule here too, so no path can
+        // make a preview contact a server off the list.
+        guard KaPostLinkPreviewPolicy.allowsPage(url) else {
+            AppLog.log("[LinkPreview] host not on the allowed list: %@", LinkPreviewService.logLabel(url))
+            return nil
+        }
 
         // Nextcloud public shares are media files, not pages — no Open Graph to scrape. Type
         // comes from a HEAD on the raw-file endpoint instead (see fetchNextcloudPreview).
@@ -1255,7 +1466,8 @@ actor LinkPreviewService {
 
             // Stops once `maxBodyBytes` have arrived and keeps those: the tags a preview reads
             // are at the top of the page, and a server can send as much as it likes.
-            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBodyBytes, onOverflow: .truncate)
+            let (data, response) = try await BoundedDownload.data(for: request, session: session, maxBytes: maxBodyBytes, onOverflow: .truncate,
+                                                                  redirectPolicy: Self.pageRedirectPolicy)
             guard let httpResponse = response as? HTTPURLResponse else {
                 AppLog.log("[LinkPreview] non-HTTP response for %@", LinkPreviewService.logLabel(url))
                 return nil
@@ -1334,7 +1546,10 @@ actor LinkPreviewService {
         guard let oEmbedURL = components.url else { return nil }
 
         do {
-            let (data, response) = try await session.data(from: oEmbedURL)
+            // youtube.com itself (on the allowed list), bounded and held to the page redirect rule
+            // like the scrape.
+            let (data, response) = try await BoundedDownload.data(for: URLRequest(url: oEmbedURL), session: session,
+                                                                  maxBytes: maxOEmbedBytes, redirectPolicy: Self.pageRedirectPolicy)
             guard let httpResponse = response as? HTTPURLResponse else { return nil }
             AppLog.log("[LinkPreview] YouTube oEmbed HTTP %d, %d bytes for %@", httpResponse.statusCode, data.count, LinkPreviewService.logLabel(url))
             guard (200..<300).contains(httpResponse.statusCode) else { return nil }
@@ -1425,6 +1640,14 @@ actor LinkPreviewService {
             return raw
         }
         return resolved.absoluteString
+    }
+}
+
+/// The preview session's delegate: a redirect of a request with no delegate of its own (the
+/// Nextcloud-shaped share probes) is followed only to an allowed https page.
+private final class LinkPreviewRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(LinkPreviewService.pageRedirectPolicy(request, task.originalRequest))
     }
 }
 

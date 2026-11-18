@@ -449,9 +449,12 @@ final class WalletManager: ObservableObject {
     /// Nothing syncs until the dock is up (`KaPostsTabView` releases the hold).
     func commitNewAccount(seedPhrase: SeedPhrase, passphrase: String) async throws {
         ChatService.shared.holdSyncForOnboarding()
+        // Arms the Welcome Guide (`KaPostsTabView`), before the import can mount the dock.
+        justCreatedNewWallet = true
         do {
             _ = try await commitCreatedWallet(seedPhrase: seedPhrase, passphrase: passphrase, alias: nextDefaultAccountName())
         } catch {
+            justCreatedNewWallet = false
             ChatService.shared.releaseSyncForOnboarding()
             throw error
         }

@@ -815,7 +815,7 @@ struct WithdrawKaspaView: View {
     @State private var activeRequest: PaymentRequest?
     /// Where the Kaspa leaves from (the From section): the chatting address by default.
     @State private var source: SendSource = .chatting
-    /// The From address's balance, loaded by `SendFromSection`.
+    /// The From address's spendable balance, loaded when the source changes; nil while it loads.
     @State private var sourceBalanceSompi: UInt64?
 
     @EnvironmentObject var chatService: ChatService
@@ -1805,7 +1805,6 @@ private enum ProfileQRCodeCache {
 struct KaChatProfileEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var walletManager = WalletManager.shared
-    @State private var showSetupGuide = false
 
     var body: some View {
         if KachatNamesService.isEnabled {
@@ -1818,20 +1817,6 @@ struct KaChatProfileEditorSheet: View {
     private var comingSoonEditor: some View {
         NavigationStack {
             Form {
-                // The setup guide lives here since 5.2 - .kachat is the name KaChat sets up for
-                // you; .kas profiles are edited field by field in Your Domains.
-                if walletManager.showSetupGuides {
-                    Section {
-                        Button {
-                            showSetupGuide = true
-                        } label: {
-                            Text("Setup Guide")
-                        }
-                    } footer: {
-                        Text("Walk through claiming your .kachat name and making it yours.")
-                    }
-                }
-
                 Section {
                     Label {
                         Text(".kachat names are coming. Once you claim one, your avatar, banner, bio and links are set here - and they're what KaChat shows for you everywhere.")
@@ -1874,9 +1859,6 @@ struct KaChatProfileEditorSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
-            .fullScreenCover(isPresented: $showSetupGuide) {
-                KachatSetupGuideView { showSetupGuide = false }
             }
         }
     }

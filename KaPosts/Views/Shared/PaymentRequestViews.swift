@@ -33,6 +33,8 @@ struct CreatePaymentRequestView: View {
     @State private var isWorking = false
     @State private var errorMessage: String?
     @State private var shareItem: ShareURL?
+    /// The request shown as a QR (Show Request As QR).
+    @State private var qrRequest: PaymentRequest?
 
     private struct ShareURL: Identifiable {
         let url: URL
@@ -86,6 +88,9 @@ struct CreatePaymentRequestView: View {
             }
             .sheet(item: $shareItem) { item in
                 PaymentRequestShareSheet(url: item.url)
+            }
+            .sheet(item: $qrRequest) { request in
+                PaymentRequestQRSheet(request: request)
             }
         }
     }
@@ -186,7 +191,10 @@ struct CreatePaymentRequestView: View {
     private var reviewStep: some View {
         SendStepScreen(title: Text("Review"), onBack: { go(to: .amount) }, onCancel: { dismiss() },
                        continueTitle: copied ? "Copied" : "Copy Payment Request",
-                       canContinue: canMake && !isWorking) {
+                       canContinue: canMake && !isWorking,
+                       secondaryTitle: "Show Request As QR",
+                       secondaryIcon: "qrcode",
+                       onSecondary: showQR) {
             copy()
         } content: {
             ScrollView {
@@ -284,7 +292,17 @@ struct CreatePaymentRequestView: View {
             if let freshAddress {
                 address = freshAddress
             } else {
-                guard let reserved = await walletManager.reserveFreshSpendingAddresses(count: 1).first?.address else {
+                // Not one a send in flight is about to put its change on (it probed the slot but
+                // reveals it only after the submit): that one stays reserved, and the next is taken.
+                var picked: String?
+                for _ in 0..<3 {
+                    guard let candidate = await walletManager.reserveFreshSpendingAddresses(count: 1).first?.address else { break }
+                    if !ChatService.shared.isFreshChangeInFlight(candidate) {
+                        picked = candidate
+                        break
+                    }
+                }
+                guard let reserved = picked else {
                     errorMessage = AppLocalization.string("Couldn't make a new address. Please try again.")
                     return nil
                 }
@@ -305,6 +323,8 @@ struct CreatePaymentRequestView: View {
     }
 
     private func copy() {
+        // a second tap while the first still reserves an address would reserve another
+        guard !isWorking else { return }
         isWorking = true
         errorMessage = nil
         Task {
@@ -316,13 +336,98 @@ struct CreatePaymentRequestView: View {
         }
     }
 
+    /// Show Request As QR: the same signed request as Copy and Share (a fresh address is the same
+    /// one), as a code to scan with a phone's camera.
+    private func showQR() {
+        guard !isWorking else { return }
+        isWorking = true
+        errorMessage = nil
+        Task {
+            defer { isWorking = false }
+            guard let request = await makeRequest() else { return }
+            qrRequest = request
+        }
+    }
+
     private func share() {
+        guard !isWorking else { return }
         isWorking = true
         errorMessage = nil
         Task {
             defer { isWorking = false }
             guard let request = await makeRequest(), let url = URL(string: request.shareURLString) else { return }
             shareItem = ShareURL(url: url)
+        }
+    }
+}
+
+/// A payment request as a QR, the same as KaChat's. Scanned with an iPhone's camera it opens KaPay
+/// on Send, filled in (`kapay://pay/...`, the link `KaPayHandoff` uses). A request to your chatting
+/// address is paid as a chat payment, which KaPay can't make, so that one holds the kachat.app
+/// link instead, which the camera opens in KaChat.
+private struct PaymentRequestQRSheet: View {
+    let request: PaymentRequest
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+
+    private var payload: String {
+        request.toChattingAddress ? request.shareURLString : "\(KaPayHandoff.scheme)://pay/\(request.linkTail)"
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 4) {
+                        Text(verbatim: "\(KaspaUnit.plain(request.amountSompi)) \(KaspaUnit.symbol)")
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                        let memo = request.memo.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !memo.isEmpty {
+                            Text(verbatim: memo)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .padding(.top, 8)
+
+                    Group {
+                        if let image {
+                            Image(uiImage: image)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                        } else {
+                            ProgressView()
+                        }
+                    }
+                    .frame(width: 260, height: 260)
+                    .padding(16)
+                    // white, with a quiet zone, so every camera reads it in dark mode too
+                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white))
+
+                    Text(request.toChattingAddress
+                         ? "Scan it with an iPhone's camera to pay in KaChat, with everything filled in."
+                         : "Scan it with an iPhone's camera to pay in KaPay, with everything filled in.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationTitle("Payment Request")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task { image = ZeroBalanceFundingCardView.makeChattingAddressQRCode(from: payload) }
         }
     }
 }

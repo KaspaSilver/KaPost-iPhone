@@ -16,16 +16,26 @@ struct KaPostsSettingsView: View {
     @ObservedObject private var tipSourceStore = KaPostsTipSourceStore.shared
     @State private var defaultTipText = ""
     @State private var instantTipEnabled = false
+    /// The tip amount is being typed: a checkmark beside it locks it in, then it's read-only
+    /// with a pencil to change it.
+    @State private var editingTip = false
+    @FocusState private var tipFieldFocused: Bool
     /// The default tip is typed in `tipCurrency` rather than KAS.
     @State private var tipInFiat = false
     @State private var tipCurrency: AppCurrency = .usDollar
-    @State private var cooldownEnabled = true
+    @State private var cooldownEnabled = false
 
-    private static let fallbackTipKas = 1.0
+    /// What the amount starts at when the switch goes on: the smallest tip the network takes.
+    private static var fallbackTipKas: Double { Double(instantTipMinimumSompi) / 100_000_000.0 }
 
     /// Instant tips go on one tap, with no swipe, so the most one may send: a bigger default tip opens
     /// the tip sheet, whose swipe is the confirmation.
     static let instantTipLimitSompi: UInt64 = 10 * 100_000_000
+    /// The smallest default tip: Kaspa's storage mass (KIP-9) refuses a payment output much under
+    /// 0.1 KAS whatever coins pay for it, so 0.0021 KAS could never go out. 0.2 KAS, the wallet's
+    /// dust threshold, leaves room for the change output too.
+    static let instantTipMinimumSompi: UInt64 = KasiaTransactionBuilder.dustThreshold
+    static var instantTipMinimumText: String { "\(KaspaUnit.plain(instantTipMinimumSompi)) \(KaspaUnit.symbol)" }
     static let instantTipLimitNotice = "Instant tips are limited to 10 KAS. Swipe up to send this one."
 
     var body: some View {
@@ -69,9 +79,14 @@ struct KaPostsSettingsView: View {
                                 // No Face ID: sends don't ask (owner's call, 2026-11-13).
                                 guard settingsViewModel.settings.kaPostsDefaultTipSompi == nil,
                                       settingsViewModel.settings.kaPostsDefaultTipFiat == nil else { return }
-                                if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                // starts at 0.2 KAS (anything left from before that the network
+                                // wouldn't take is replaced too)
+                                if defaultTipText.trimmingCharacters(in: .whitespaces).isEmpty
+                                    || (typedAmount ?? 0) <= 0 || tipBelowMinimum {
+                                    tipInFiat = false
                                     defaultTipText = Self.trimmed(Self.fallbackTipKas)
                                 }
+                                editingTip = false
                                 commitDefaultTip()
                             } else {
                                 settingsViewModel.settings.kaPostsDefaultTipSompi = nil
@@ -95,9 +110,39 @@ struct KaPostsSettingsView: View {
                             }
                             TextField("1", text: $defaultTipText)
                                 .keyboardType(.decimalPad)
-                                .numericKeyboardDoneButton()
-                                .onSubmit { commitDefaultTip() }
-                                .onChange(of: defaultTipText) { _ in commitDefaultTip() }
+                                .focused($tipFieldFocused)
+                                .disabled(!editingTip)
+                                .foregroundColor(editingTip ? .primary : .secondary)
+                                .onSubmit { lockTip() }
+                                // Nothing is saved while typing: the checkmark saves, and so does
+                                // the keyboard closing some other way, with an amount that can go out.
+                                .onChange(of: tipFieldFocused) { focused in
+                                    guard !focused else { return }
+                                    editingTip = false
+                                    // left empty, zero or too small: show the saved tip again
+                                    if tipAmountIsValid { commitDefaultTip() } else { showSavedTip() }
+                                }
+                            // Beside the value: a checkmark locks the amount in (or, with an amount
+                            // that can't go out, puts the saved one back) and closes the keyboard,
+                            // then a pencil opens it again.
+                            Button {
+                                if editingTip {
+                                    lockTip()
+                                } else {
+                                    Haptics.selection()
+                                    editingTip = true
+                                    // a turn later, once the field is enabled and can take focus
+                                    DispatchQueue.main.async { tipFieldFocused = true }
+                                }
+                            } label: {
+                                Image(systemName: editingTip ? "checkmark" : "pencil")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundColor(editingTip ? .black : .accentColor)
+                                    .frame(width: 32, height: 32)
+                                    .background(Circle().fill(editingTip ? Color.accentColor : Color.accentColor.opacity(0.12)))
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(Text(editingTip ? "Done" : "Edit"))
                             // Tap to set the tip in the other unit.
                             Button(action: switchTipUnit) {
                                 HStack(spacing: 4) {
@@ -113,6 +158,8 @@ struct KaPostsSettingsView: View {
                             .buttonStyle(.borderless)
                             .accessibilityLabel(Text(tipInFiat ? "Tip in \(tipCurrency.code), switch to KAS" : "Tip in KAS, switch to \(settingsViewModel.settings.currency.code)"))
                         }
+                        // a full-width line under the amount, not one starting at the unit button
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                     }
                     NavigationLink {
                         TipSourcePage()
@@ -129,7 +176,14 @@ struct KaPostsSettingsView: View {
                     Text("Tipping")
                 } footer: {
                     if instantTipEnabled {
-                        Text(verbatim: tipFooter)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if tipBelowMinimum {
+                                Text(verbatim: String(format: AppLocalization.string("The smallest tip the network takes is %@."),
+                                                      Self.instantTipMinimumText))
+                                    .foregroundColor(.red)
+                            }
+                            Text(verbatim: tipFooter)
+                        }
                     }
                 }
             }
@@ -139,14 +193,9 @@ struct KaPostsSettingsView: View {
                 cooldownEnabled = settingsViewModel.settings.kaPostsCooldownEnabled
                 let settings = settingsViewModel.settings
                 tipCurrency = settings.currency
-                if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
+                if settings.kaPostsDefaultTipFiat ?? 0 > 0 || settings.kaPostsDefaultTipSompi ?? 0 > 0 {
                     instantTipEnabled = true
-                    tipInFiat = true
-                    tipCurrency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
-                    defaultTipText = Self.fiatText(fiat)
-                } else if let sompi = settings.kaPostsDefaultTipSompi, sompi > 0 {
-                    instantTipEnabled = true
-                    defaultTipText = Self.trimmed(Double(sompi) / 100_000_000.0)
+                    showSavedTip()
                 }
             }
     }
@@ -155,6 +204,32 @@ struct KaPostsSettingsView: View {
     private var typedAmount: Double? {
         // The KAS parser reads any decimal number (the locale's comma included, up to 8 places).
         KaspaUnit.sompi(fromUserText: defaultTipText).map { Double($0) / 100_000_000.0 }
+    }
+
+    /// The typed tip in sompi: as typed in KAS, or worked out at today's price for a currency
+    /// (nil without a price).
+    private var typedSompi: UInt64? {
+        guard let amount = typedAmount, amount > 0 else { return nil }
+        guard tipInFiat else { return KaspaUnit.sompi(fromUserText: defaultTipText) }
+        guard let price = tipPrice(in: tipCurrency), price > 0 else { return nil }
+        return UInt64((amount / price * 100_000_000).rounded())
+    }
+
+    /// The KAS price a currency tip is measured at here: the fresh one tips are sent at
+    /// (`KaspaPriceService.freshPrice`) when there is one, else the last known.
+    private func tipPrice(in currency: AppCurrency) -> Double? {
+        priceService.freshPrice(in: currency) ?? priceService.price(in: currency)
+    }
+
+    /// An amount that can be saved: above zero and not under the network's minimum.
+    private var tipAmountIsValid: Bool {
+        (typedAmount ?? 0) > 0 && !tipBelowMinimum
+    }
+
+    /// Under the smallest tip the network takes (`instantTipMinimumSompi`): not saved.
+    private var tipBelowMinimum: Bool {
+        guard let sompi = typedSompi else { return false }
+        return sompi < Self.instantTipMinimumSompi
     }
 
     /// What a tip sends: in KAS, or the currency amount with what it comes to in KAS today.
@@ -166,7 +241,7 @@ struct KaPostsSettingsView: View {
         guard tipInFiat else {
             return AppLocalization.string("Tap the unit to set the tip in your currency instead.")
         }
-        let price = priceService.price(in: tipCurrency)
+        let price = tipPrice(in: tipCurrency)
         if let amount = typedAmount, amount > 0, let price, price > 0 {
             return String(format: AppLocalization.string("Each tip sends %@ worth of KAS at the price of the moment - about %@ KAS now."),
                           formatFiatAmount(amount, currency: tipCurrency), formatKasAmountPlain(amount / price))
@@ -175,12 +250,14 @@ struct KaPostsSettingsView: View {
     }
 
     /// Flips the tip between KAS and the app's currency, carrying the amount over at today's
-    /// price (the number stays as typed when there is no price yet).
+    /// price (the number stays as typed when there is no price yet). Saved at once unless the
+    /// amount is being typed (then the checkmark saves it). An amount that comes out under the
+    /// network's minimum (a currency amount rounds to the cent) puts the saved tip back instead.
     private func switchTipUnit() {
         Haptics.selection()
         let toFiat = !tipInFiat
         let currency = toFiat ? settingsViewModel.settings.currency : tipCurrency
-        let price = priceService.price(in: currency)
+        let price = tipPrice(in: currency)
         var newText = defaultTipText
         if let amount = typedAmount, amount > 0, let price, price > 0 {
             newText = toFiat ? Self.fiatText(amount * price) : Self.trimmed(amount / price)
@@ -188,11 +265,42 @@ struct KaPostsSettingsView: View {
         tipCurrency = currency
         tipInFiat = toFiat
         defaultTipText = newText
-        commitDefaultTip()
+        if tipBelowMinimum {
+            showSavedTip()
+            return
+        }
+        if !editingTip { commitDefaultTip() }
+    }
+
+    /// The saved default tip, in the unit it was saved in.
+    private func showSavedTip() {
+        let settings = settingsViewModel.settings
+        if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
+            tipInFiat = true
+            tipCurrency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
+            defaultTipText = Self.fiatText(fiat)
+        } else if let sompi = settings.kaPostsDefaultTipSompi, sompi > 0 {
+            tipInFiat = false
+            defaultTipText = Self.trimmed(Double(sompi) / 100_000_000.0)
+        }
+    }
+
+    /// The checkmark (or the keyboard's return): saves the amount and closes the keyboard. One
+    /// that can't go out (empty, zero, under the minimum) isn't saved: the saved tip comes back,
+    /// so the keyboard can always be closed.
+    private func lockTip() {
+        Haptics.selection()
+        if tipAmountIsValid {
+            commitDefaultTip()
+        } else {
+            showSavedTip()
+        }
+        tipFieldFocused = false
+        editingTip = false
     }
 
     private func commitDefaultTip() {
-        guard instantTipEnabled else { return }
+        guard instantTipEnabled, !tipBelowMinimum else { return }
         if tipInFiat {
             guard let amount = typedAmount, amount > 0 else { return }
             let settings = settingsViewModel.settings

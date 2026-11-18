@@ -2248,290 +2248,6 @@ enum AppCurrency: String, Codable, CaseIterable {
     var displayName: String { "\(name) (\(code))" }
 }
 
-/// Every bottom-tab destination this app can show - drives both MainTabView's actual TabView and
-/// the reorderable preview strip on Settings > Customization > Menu. `tag` is a fixed identifier
-/// per case (not tied to display position) so the app's existing tag-based navigation (e.g.
-/// jumping to Chats on a notification tap) keeps working no matter what order the user picks.
-/// ChangeNOW Swap, off for now. App Review (Guideline 3.1.5(iii), October 2026) treats an in-app
-/// crypto exchange - a third-party one like ChangeNOW included - as needing exchange licensing in
-/// every country the app ships to, so Swap is hidden everywhere through `AppTab.isEnabled` (dock,
-/// Kaspa Hub, Customize Dock). The code stays, so turning it back on is this one line.
-enum SwapFeature {
-    static let enabled = false
-}
-
-enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
-    case portfolio
-    case coldStorage
-    case chats
-    case swap
-    case profile
-    case kaposts
-    /// Displayed as "Public Chats"; the raw value stays `broadcasts` because it is PERSISTED
-    /// in `tabOrder` (see `ecosystem` below).
-    case publicChats = "broadcasts"
-    case apps
-    /// Chess tournaments (5.1) - Kaspa Hub > Chess Online. See ONLINE_CHESS.md.
-    case chess
-    /// .kachat names (5.2) - Kaspa Hub > .kachat: the marketplace for KaChat's own names
-    /// (claim, buy and sell, trustless). UI only until the name service is built.
-    case kachatNames
-    /// KaChat Stats (5.2) - Kaspa Hub > KaChat Stats: how many transactions KaChat has put on
-    /// Kaspa, by kind, as the indexers count them (STATS_INDEXER.md).
-    case kachatStats
-    /// Address Book (2026-10-08) - Kaspa Hub > Address Book: saved Kaspa addresses with names,
-    /// per wallet, kept in KaChat (it replaced syncing with the phone's Contacts).
-    case addressBook
-    /// KaChat Bots (5.2.1) - Kaspa Hub > KaChat Bots: Block Reward Tracker, Wallet Tracker,
-    /// Price Bot and Kaspa Answers; tapping one opens a chat with it (`KaChatBotsView`).
-    case kachatBots
-    /// The container the other feature tabs live in when they are not in the dock themselves -
-    /// see `ecosystemSections(from:)`. Displayed as "Kaspa Hub"; the case name and its raw
-    /// value stay `ecosystem` because the raw value is PERSISTED in `tabOrder`, so renaming it
-    /// would invalidate every saved dock arrangement for the sake of an internal label.
-    case ecosystem
-    /// RETIRED (4.0): the "+ More" dock item was removed - Customize Dock is reached via
-    /// Settings > Customization instead. The case survives only so saved `tabOrder` /
-    /// per-account `DockOverlay` blobs that contain "more" still decode; `isEnabled` hard-codes
-    /// it hidden so it can never render in the dock again.
-    case more
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .portfolio: return "Portfolio"
-        case .coldStorage: return "Storage"
-        case .chats: return "Chats"
-        case .swap: return "Swap"
-        case .profile: return "Profile"
-        case .kaposts: return "KaPost"
-        case .publicChats: return "Public Chats"
-        // Short enough for a dock label. `ecosystemTitle` carries the full name, which is what
-        // the Ecosystem grid and the screen itself show.
-        case .apps: return "Websites"
-        case .chess: return "Chess"
-        case .kachatNames: return ".kachat"
-        case .kachatStats: return "Stats"
-        case .addressBook: return "Address Book"
-        case .kachatBots: return "Bots"
-        case .ecosystem: return "Kaspa Hub"
-        case .more: return "More"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .portfolio: return "chart.pie"
-        case .coldStorage: return "lock.shield"
-        case .chats: return "bubble.left.and.bubble.right"
-        case .swap: return "arrow.left.arrow.right"
-        case .profile: return "person.crop.circle"
-        case .kaposts: return "square.and.pencil"
-        case .publicChats: return "dot.radiowaves.left.and.right"
-        case .apps: return "globe"
-        case .chess: return "checkerboard.rectangle"
-        // Drawn as the ".kachat" wordmark (KachatTabIcon) wherever tabs are drawn; this symbol
-        // is only the fallback for anything that has not been taught about it.
-        case .kachatNames: return "at"
-        case .kachatStats: return "chart.bar.xaxis"
-        case .addressBook: return "book.closed"
-        case .kachatBots: return "cpu"
-        // Kaspa Hub wears the Kaspa mark itself, not an SF Symbol - see `usesKaspaLogo`.
-        case .ecosystem: return "circle.hexagongrid"
-        case .more: return "plus.circle"
-        }
-    }
-
-    /// True for tabs drawn with the bundled Kaspa mark instead of an SF Symbol. `icon` stays the
-    /// SF Symbol name so anything that has not been taught about the asset still renders
-    /// something sensible rather than a blank square.
-    var usesKaspaLogo: Bool { self == .ecosystem }
-
-    /// The name shown inside the Ecosystem grid, at the top of the section it opens, and in
-    /// Customize Dock. Differs from `label` only where a dock label has to stay short - the tab
-    /// bar truncates hard, so these full names live here rather than in `label`.
-    var ecosystemTitle: String {
-        switch self {
-        case .apps: return "Kaspa Websites"
-        case .chess: return "Chess Online"
-        case .kachatNames: return ".kachat Domains"
-        case .kachatStats: return "KaChat Stats"
-        case .kachatBots: return "KaChat Bots"
-        // ChangeNOW's own capitalization, matching how the app already names it everywhere else
-        // (swap transaction rows, the settings section).
-        case .swap: return "ChangeNOW Swap"
-        default: return label
-        }
-    }
-
-    var tag: Int {
-        switch self {
-        case .chats: return 1
-        case .profile: return 2
-        case .portfolio: return 3
-        case .coldStorage: return 4
-        case .swap: return 5
-        case .kaposts: return 6
-        case .more: return 7
-        case .publicChats: return 8
-        case .apps: return 9
-        case .chess: return 11
-        case .kachatNames: return 12
-        case .kachatStats: return 13
-        case .addressBook: return 14
-        case .kachatBots: return 15
-        case .ecosystem: return 10
-        }
-    }
-
-    /// Tabs that always hold a dock slot and cannot be moved into Kaspa Hub.
-    ///
-    /// Chats, because it is what KaChat is. Kaspa Hub, because it is what HOLDS whatever is not in
-    /// the dock - move it inside itself and everything it holds becomes unreachable. Profile,
-    /// because it is the way to Settings, the account list and the wallet's own addresses, so it
-    /// is the one screen that must never be a level deeper than the dock.
-    var isPinnedToDock: Bool { self == .chats || self == .ecosystem || self == .profile }
-
-    /// In the order a fresh dock places them, so `visible` can reinsert a missing one sensibly.
-    /// Where they sit among the five is the person's (Customize Dock); that they are there is not.
-    static let pinnedToDock: [AppTab] = [.ecosystem, .chats, .profile]
-
-    /// Tabs the user can place. Excludes the Hub (pinned) and the retired "+ More".
-    static let assignable: [AppTab] = [.chats, .portfolio, .coldStorage, .swap, .kaposts, .apps, .chess, .kachatNames, .kachatStats, .addressBook, .kachatBots]
-
-    /// A default install shows exactly the five the dock can fit - Kaspa Hub, Portfolio, Chats,
-    /// KaPosts, Profile - with Cold Storage, Swap and the websites list still ENABLED but living
-    /// inside Kaspa Hub rather than competing for a dock slot.
-    static let defaultOrder: [AppTab] = [.ecosystem, .portfolio, .chats, .kaposts, .profile, .coldStorage, .addressBook, .kachatNames, .kachatStats, .kachatBots, .swap, .publicChats, .apps, .chess]
-
-    /// What a fresh install starts with (owner's order, 2026-10-20). Everything else starts in
-    /// Kaspa Hub. A saved arrangement is the person's and is never reset to this.
-    static let defaultDock: [AppTab] = [.ecosystem, .portfolio, .chats, .kaposts, .profile]
-
-    /// The rest, in the order the Hub grid shows them until the user rearranges it.
-    static let defaultHub: [AppTab] = [.coldStorage, .addressBook, .kachatNames, .kachatStats, .kachatBots, .swap, .apps]
-
-    /// Slots the user can actually fill: the cap minus the pinned tabs.
-    static var assignableDockSlots: Int { maxDockItems - pinnedToDock.count }
-
-    /// The dock renders at most this many items (the iPhone tab bar's hard limit); anything past
-    /// it falls off rather than letting the system TabView spawn its own "More" list. KaPosts and
-    /// Public Chats drop out first (in that order) when over the cap - they stay reachable by
-    /// Ecosystem (see `ecosystemSections(from:)`). Anything enabled that doesn't fit simply
-    /// tail-drops out of the dock and is reached through Ecosystem instead.
-    static let maxDockItems = 5
-
-    /// `settings.tabOrder`, resolved into real cases with any missing/unknown entries (a fresh
-    /// install, or a tab added after some users already saved a custom order) appended at the
-    /// end in default order, so nothing silently disappears from Menu Visibility or the tab bar.
-    static func resolvedOrder(from settings: AppSettings) -> [AppTab] {
-        var order = settings.tabOrder.compactMap { AppTab(rawValue: $0) }
-        for tab in defaultOrder where !order.contains(tab) {
-            order.append(tab)
-        }
-        return order
-    }
-
-    /// True when this tab is enabled (not hidden) in settings, independent of dock capacity.
-    ///
-    /// Simple Mode (Settings > Security) hard-hides Swaps, KaPosts and Public Chats here - this is
-    /// the single choke point every dock consumer flows through (`visible`, `ecosystemSections`),
-    /// so while it's on those tabs can't render in the dock NOR appear inside Ecosystem,
-    /// regardless of dock settings.
-    func isEnabled(in settings: AppSettings) -> Bool {
-        if settings.childModeEnabled {
-            switch self {
-            case .swap, .kaposts, .publicChats: return false
-            default: break
-            }
-        }
-        switch self {
-        case .portfolio: return !settings.hidePortfolioTab
-        case .coldStorage: return !settings.hideColdStorageTab
-        // Off app-wide for now (`SwapFeature`) - this is the choke point, so the dock, Kaspa
-        // Hub and Customize Dock all drop it.
-        case .swap: return SwapFeature.enabled && !settings.hideSwapTab
-        case .kaposts: return !settings.hideKaPostsTab
-        // Public Chats (the public chat rooms) moved INTO the Chats screen as its third tab in
-        // 5.0. The case stays so saved dock/hub blobs still decode; it never renders on its own.
-        case .publicChats: return false
-        case .apps: return !settings.hideAppsTab
-        case .chess: return !settings.hideChessTab && !settings.childModeEnabled
-        // A marketplace - buying and selling with real KAS - so Simple Mode hides it, like Swap.
-        case .kachatNames: return !settings.childModeEnabled
-        // Read-only numbers; nothing in it to keep from Simple Mode.
-        case .kachatStats: return true
-        // Your own saved addresses; nothing in it to keep from Simple Mode.
-        case .addressBook: return true
-        // Ordinary chats with the bots; nothing in it to keep from Simple Mode.
-        case .kachatBots: return true
-        case .ecosystem: return !settings.hideEcosystemTab
-        // "+ More" is retired from the dock entirely (Customize Dock lives in Settings now) -
-        // hard-hidden regardless of what an old saved blob says.
-        case .more: return false
-        case .chats, .profile: return true
-        }
-    }
-
-    /// The resolved order, filtered down to only the tabs the user hasn't hidden and clamped to
-    /// the dock capacity - what MainTabView actually renders and what the Menu Visibility preview
-    /// strip shows. When over capacity, KaPosts drops out first (it stays reachable via re-tapping
-    /// Chats); after that the tail of the order falls off.
-    /// What the dock actually renders, in order.
-    ///
-    /// Read from `settings.dockTabs` - the user's placement - rather than derived by taking the
-    /// first few of an order and letting the rest fall off the end. That derivation is what let
-    /// Profile silently disappear: nothing HID it, it was simply pushed past the cap by the tabs
-    /// ahead of it, with nowhere in the UI saying so. A tab is now either placed in the dock or
-    /// placed in the Hub, and it is always in exactly one of them.
-    ///
-    /// Kaspa Hub is inserted whatever the stored list says, so no saved arrangement - or a
-    /// hand-edited one - can leave the app with no way to reach what isn't in the dock.
-    static func visible(from settings: AppSettings) -> [AppTab] {
-        // The stored order, deduplicated defensively (a repeated raw value would render the same
-        // tab twice), with at most `assignableDockSlots` picks besides the pinned tabs.
-        var seen = Set<AppTab>()
-        var picks = 0
-        var tabs: [AppTab] = []
-        for tab in settings.dockTabs.compactMap({ AppTab(rawValue: $0) })
-        where tab.isEnabled(in: settings) && (tab.isPinnedToDock || assignable.contains(tab)) && seen.insert(tab).inserted {
-            if !tab.isPinnedToDock {
-                guard picks < assignableDockSlots else { continue }
-                picks += 1
-            }
-            tabs.append(tab)
-        }
-        // Reinserted whatever the stored list says, so no saved arrangement - or a hand-edited one
-        // - can leave the app without Chats, the Hub that holds everything else, or Profile.
-        for pinned in pinnedToDock where pinned.isEnabled(in: settings) && !tabs.contains(pinned) {
-            let position = defaultDock.firstIndex(of: pinned) ?? tabs.count
-            tabs.insert(pinned, at: min(position, tabs.count))
-        }
-        return tabs
-    }
-
-    /// What the Kaspa Hub grid shows: everything assignable that is not in the dock, in the
-    /// user's own order.
-    ///
-    /// Anything not named in `hubTabs` - a tab added by an update, or one demoted from the dock
-    /// before this list knew about it - is appended in `defaultOrder`, so a tab can never be lost
-    /// by being absent from a stored list.
-    static func ecosystemSections(from settings: AppSettings) -> [AppTab] {
-        let inDock = Set(visible(from: settings))
-        func eligible(_ tab: AppTab) -> Bool {
-            assignable.contains(tab) && !tab.isPinnedToDock
-                && tab.isEnabled(in: settings) && !inDock.contains(tab)
-        }
-        var ordered = settings.hubTabs.compactMap { AppTab(rawValue: $0) }.filter(eligible)
-        var seen = Set(ordered)
-        for tab in defaultOrder where eligible(tab) && seen.insert(tab).inserted {
-            ordered.append(tab)
-        }
-        return ordered
-    }
-}
-
 /// Block explorer used for "view transaction" links, matching Android's KaspaExplorer enum.
 enum KaspaExplorer: String, Codable, CaseIterable {
     case kaspaStream
@@ -2680,7 +2396,8 @@ struct AppSettings: Codable {
     var kaPostsDefaultTipSourceIndex: Int?
     /// KaPosts > Settings > Cool down before post: every KaPosts action (post, comment, like,
     /// repost, vote, edit, delete) waits 5 seconds with an Undo before it goes on chain. Off,
-    /// they go at once. On by default.
+    /// they go at once. Off by default, so actions go at once unless someone turns it on (owner's
+    /// call, 2026-11-18).
     var kaPostsCooldownEnabled: Bool
     /// Optional (unlike most fields here) - this struct has no custom `init(from:)`, so a newly
     /// added *required* field would fail this whole struct's decode for anyone with a
@@ -2693,32 +2410,6 @@ struct AppSettings: Codable {
     var appearance: AppAppearance
     var language: AppLanguage
     var currency: AppCurrency
-    var hidePortfolioTab: Bool
-    var hideSwapTab: Bool
-    var hideColdStorageTab: Bool
-    var hideKaPostsTab: Bool
-    /// RETIRED (4.0): the "+ More" dock item is gone (`AppTab.isEnabled` hard-hides `.more`).
-    /// Kept only so existing saved blobs that contain the key keep decoding/encoding cleanly.
-    var hideMoreItem: Bool
-    /// Public Chats isn't a tab (it's an entry row inside the Chats list, see `ChatListView`'s
-    /// `chatsTabContent`) but is still user-hideable from Settings > Customization > Menu, so it
-    /// gets its own flag here rather than a case in `AppTab`.
-    var hidePublicChats: Bool
-    /// Apps (ecosystem link bubbles) as a dock tab. Hidden (default) = the Apps row lives on
-    /// the Profile screen instead; toggled on = dock tab, Profile row disappears.
-    var hideAppsTab: Bool
-    var hideChessTab: Bool
-    var hideEcosystemTab: Bool
-    /// Raw values of `AppTab`, in display order - user-customizable via Settings > Customization
-    /// > Menu's drag-to-reorder preview strip.
-    var tabOrder: [String]
-    /// Routes currently IN the dock, in order. Everything assignable that is not listed here
-    /// lives in Kaspa Hub instead - there is no longer an off state, only a placement.
-    var dockTabs: [String]
-    /// Routes in Kaspa Hub, in the order the grid shows them. Ordered for the same reason the
-    /// dock is: a tab moved out of the dock should land where the user wants it, not wherever a
-    /// fixed default happens to put it.
-    var hubTabs: [String]
 
     // Security
     /// Simple Mode (Settings > Security): while on, the app is strictly Chats, Group Chats,
@@ -2936,25 +2627,6 @@ struct AppSettings: Codable {
             appearance: .system,
             language: .system,
             currency: .usDollar,
-            // Fresh-install dock: EVERYTHING on. The dock renders as many as fit
-            // (maxDockItems) - Portfolio, Storage, Chats, Ecosystem, Profile - and Swap,
-            // KaPosts, Public Chats and the websites list are reached through Ecosystem rather
-            // than competing for a slot. Existing users are
-            // unaffected: their saved settings decode with their own explicit values (or the ??
-            // fallbacks in init(from:) for keys that predate them). "+ More" no longer exists
-            // as a dock item.
-            hidePortfolioTab: false,
-            hideSwapTab: false,
-            hideColdStorageTab: false,
-            hideKaPostsTab: false,
-            hideMoreItem: true,
-            hidePublicChats: false,
-            hideAppsTab: false,
-            hideChessTab: false,
-            hideEcosystemTab: false,
-            tabOrder: AppTab.defaultOrder.map { $0.rawValue },
-            dockTabs: AppTab.defaultDock.map { $0.rawValue },
-            hubTabs: AppTab.defaultHub.map { $0.rawValue },
             childModeEnabled: false,
             biometricSeedPhraseEnabled: true,
             // Asked when signing back in to a saved account: off by default, the same as KaChat.
@@ -3001,23 +2673,14 @@ struct AppSettings: Codable {
         case kaPostsDefaultTipFiat
         case kaPostsDefaultTipFiatCurrency
         case kaPostsDefaultTipSourceIndex
-        case kaPostsCooldownEnabled
+        /// Saved under a new name since 2026-11-18: the cooldown went off by default, and the owner
+        /// turned it off once for existing installs too, so a value saved under the old name
+        /// ("kaPostsCooldownEnabled", always written, mostly the old default of on) is ignored.
+        case kaPostsCooldownEnabled = "kaPostsCooldownOn"
         case quickReactionEmojis
         case appearance
         case language
         case currency
-        case hidePortfolioTab
-        case hideSwapTab
-        case hideColdStorageTab
-        case hideKaPostsTab
-        case hideMoreItem
-        case hidePublicChats = "hideBroadcasts"
-        case hideAppsTab
-        case hideChessTab
-        case hideEcosystemTab
-        case tabOrder
-        case dockTabs
-        case hubTabs
         case childModeEnabled
         case biometricSeedPhraseEnabled
         case biometricAccountLoginEnabled
@@ -3073,23 +2736,11 @@ struct AppSettings: Codable {
         kaPostsDefaultTipFiat: Double? = nil,
         kaPostsDefaultTipFiatCurrency: AppCurrency? = nil,
         kaPostsDefaultTipSourceIndex: Int? = nil,
-        kaPostsCooldownEnabled: Bool = true,
+        kaPostsCooldownEnabled: Bool = false,
         quickReactionEmojis: [String]? = nil,
         appearance: AppAppearance = .system,
         language: AppLanguage = .system,
         currency: AppCurrency = .usDollar,
-        hidePortfolioTab: Bool = false,
-        hideSwapTab: Bool = false,
-        hideColdStorageTab: Bool = false,
-        hideKaPostsTab: Bool = false,
-        hideMoreItem: Bool = true,
-        hidePublicChats: Bool = false,
-        hideAppsTab: Bool = false,
-        hideChessTab: Bool = false,
-        hideEcosystemTab: Bool = false,
-        tabOrder: [String] = AppTab.defaultOrder.map { $0.rawValue },
-        dockTabs: [String] = AppTab.defaultDock.map { $0.rawValue },
-        hubTabs: [String] = AppTab.defaultHub.map { $0.rawValue },
         childModeEnabled: Bool = false,
         biometricSeedPhraseEnabled: Bool = true,
         biometricAccountLoginEnabled: Bool = false,
@@ -3139,18 +2790,6 @@ struct AppSettings: Codable {
         self.appearance = appearance
         self.language = language
         self.currency = currency
-        self.hidePortfolioTab = hidePortfolioTab
-        self.hideSwapTab = hideSwapTab
-        self.hideColdStorageTab = hideColdStorageTab
-        self.hideKaPostsTab = hideKaPostsTab
-        self.hideMoreItem = hideMoreItem
-        self.hidePublicChats = hidePublicChats
-        self.hideAppsTab = hideAppsTab
-        self.hideChessTab = hideChessTab
-        self.hideEcosystemTab = hideEcosystemTab
-        self.tabOrder = tabOrder
-        self.dockTabs = dockTabs
-        self.hubTabs = hubTabs
         self.childModeEnabled = childModeEnabled
         self.biometricSeedPhraseEnabled = biometricSeedPhraseEnabled
         self.biometricAccountLoginEnabled = biometricAccountLoginEnabled
@@ -3223,33 +2862,13 @@ struct AppSettings: Codable {
         kaPostsDefaultTipFiat = try container.decodeIfPresent(Double.self, forKey: .kaPostsDefaultTipFiat)
         kaPostsDefaultTipFiatCurrency = try? container.decodeIfPresent(AppCurrency.self, forKey: .kaPostsDefaultTipFiatCurrency)
         kaPostsDefaultTipSourceIndex = try? container.decodeIfPresent(Int.self, forKey: .kaPostsDefaultTipSourceIndex)
-        kaPostsCooldownEnabled = try container.decodeIfPresent(Bool.self, forKey: .kaPostsCooldownEnabled) ?? true
+        kaPostsCooldownEnabled = try container.decodeIfPresent(Bool.self, forKey: .kaPostsCooldownEnabled) ?? false
         quickReactionEmojis = try container.decodeIfPresent([String].self, forKey: .quickReactionEmojis)
         appearance = try container.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system
         language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
         currency = try container.decodeIfPresent(AppCurrency.self, forKey: .currency) ?? .usDollar
-        hidePortfolioTab = try container.decodeIfPresent(Bool.self, forKey: .hidePortfolioTab) ?? false
-        hideSwapTab = try container.decodeIfPresent(Bool.self, forKey: .hideSwapTab) ?? false
-        hideColdStorageTab = try container.decodeIfPresent(Bool.self, forKey: .hideColdStorageTab) ?? false
-        // Seeding for EXISTING users (blobs saved before these keys existed): KaPosts and
-        // Public Chats land ENABLED. With a full dock they don't get a slot, and are reached
-        // through Ecosystem instead - see AppTab.ecosystemSections.
-        hideKaPostsTab = try container.decodeIfPresent(Bool.self, forKey: .hideKaPostsTab) ?? false
-        hideMoreItem = try container.decodeIfPresent(Bool.self, forKey: .hideMoreItem) ?? false
-        hidePublicChats = try container.decodeIfPresent(Bool.self, forKey: .hidePublicChats) ?? false
-        // Defaults to SHOWN. It used to default to hidden because it competed for a dock slot;
-        // it now lives in Ecosystem, where it costs nothing, so an install that predates this key
-        // should have it rather than not.
-        hideAppsTab = try container.decodeIfPresent(Bool.self, forKey: .hideAppsTab) ?? false
-        hideChessTab = try container.decodeIfPresent(Bool.self, forKey: .hideChessTab) ?? false
-        // Defaults to SHOWN for everyone, new and existing: Ecosystem is where Swap, KaPosts,
-        // Public Chats and the websites list live now, so hiding it by default would strand them.
-        hideEcosystemTab = try container.decodeIfPresent(Bool.self, forKey: .hideEcosystemTab) ?? false
-        tabOrder = try container.decodeIfPresent([String].self, forKey: .tabOrder) ?? AppTab.defaultOrder.map { $0.rawValue }
-        // Absent on every blob saved before placement existed; the one-time migration below
-        // derives a real arrangement from what those users already had.
-        dockTabs = try container.decodeIfPresent([String].self, forKey: .dockTabs) ?? AppTab.defaultDock.map { $0.rawValue }
-        hubTabs = try container.decodeIfPresent([String].self, forKey: .hubTabs) ?? AppTab.defaultHub.map { $0.rawValue }
+        // KaChat's dock fields (hide*Tab, tabOrder, dockTabs, hubTabs) may still be in a saved
+        // blob; they are not read, and are dropped on the next save.
         childModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .childModeEnabled) ?? false
         biometricSeedPhraseEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricSeedPhraseEnabled) ?? true
         biometricAccountLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricAccountLoginEnabled) ?? false
@@ -3388,18 +3007,6 @@ struct AppSettings: Codable {
         try container.encode(appearance, forKey: .appearance)
         try container.encode(language, forKey: .language)
         try container.encode(currency, forKey: .currency)
-        try container.encode(hidePortfolioTab, forKey: .hidePortfolioTab)
-        try container.encode(hideSwapTab, forKey: .hideSwapTab)
-        try container.encode(hideColdStorageTab, forKey: .hideColdStorageTab)
-        try container.encode(hideKaPostsTab, forKey: .hideKaPostsTab)
-        try container.encode(hideMoreItem, forKey: .hideMoreItem)
-        try container.encode(hidePublicChats, forKey: .hidePublicChats)
-        try container.encode(hideAppsTab, forKey: .hideAppsTab)
-        try container.encode(hideChessTab, forKey: .hideChessTab)
-        try container.encode(hideEcosystemTab, forKey: .hideEcosystemTab)
-        try container.encode(tabOrder, forKey: .tabOrder)
-        try container.encode(dockTabs, forKey: .dockTabs)
-        try container.encode(hubTabs, forKey: .hubTabs)
         try container.encode(childModeEnabled, forKey: .childModeEnabled)
         try container.encode(biometricSeedPhraseEnabled, forKey: .biometricSeedPhraseEnabled)
         try container.encode(biometricAccountLoginEnabled, forKey: .biometricAccountLoginEnabled)

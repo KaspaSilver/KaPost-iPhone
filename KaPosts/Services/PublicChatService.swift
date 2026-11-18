@@ -221,8 +221,22 @@ final class PublicChatService: ObservableObject {
             // Each wallet has its own store: what one applied says nothing about the other's.
             appliedIndexerRows = [:]
             indexerNewestSeen = [:]
+            // A fetch, backfill or read still out for the account being left drops its answer
+            // (`isCurrentWallet`) instead of writing it into this one's store and state.
+            walletGeneration &+= 1
+            // The other account's sends: what they leave behind is settled in its own store
+            // (`markSendFailed`, `abortedSendsByWallet`), not kept "Sending" in this one's.
+            pendingSendsThisRun = []
         }
-        if tearingDownOtherWallet { liveViewRefCounts = [:] }
+        if tearingDownOtherWallet {
+            liveViewRefCounts = [:]
+            // The rooms' screens are going, and their release() finds no refcount to stop the
+            // polling with: every room's 8 s poll (and the deep backfill it runs) stops here,
+            // and the sweep with it. The new account's store restarts the sweep once it opens.
+            for task in indexerPollTasks.values { task.cancel() }
+            indexerPollTasks = [:]
+            stopForegroundSweep()
+        }
         loadReadState()
         // The store opens off the main thread now; the rooms are read once it says so.
         let targetWallet = normalized
@@ -232,6 +246,9 @@ final class PublicChatService: ObservableObject {
             // service's own actor, so no hop is needed.
             MainActor.assumeIsolated {
                 guard self.walletAddress == targetWallet else { return }
+                // Sends of this account that an account switch cut short: Failed, now that its
+                // store is open again, so their Retry is offered.
+                self.applyAbortedSends(walletAddress: targetWallet)
                 // Joins the default rooms (and refreshes the list) as soon as the wallet's
                 // store is open, so #kaspa and #kachat-bugs notify without Public Chats having
                 // been opened first.
@@ -244,10 +261,19 @@ final class PublicChatService: ObservableObject {
                     self.markChannelRead(channel)
                 }
                 self.updateScanningStateIfNeeded()
-                if UIApplication.shared.applicationState == .active { self.startForegroundSweep() }
+                // Signed out: no rooms to sweep.
+                if targetWallet != nil, UIApplication.shared.applicationState == .active { self.startForegroundSweep() }
                 self.refreshIndexerTrackedRooms()
             }
         }
+    }
+
+    /// Bumped on every account change: work begun for one account checks it after each await
+    /// and drops its result when the account is no longer the open one.
+    private var walletGeneration = 0
+
+    private func isCurrentWallet(_ generation: Int) -> Bool {
+        generation == walletGeneration
     }
 
     // MARK: - Foreground sweep of closed rooms
@@ -271,7 +297,7 @@ final class PublicChatService: ObservableObject {
     /// indexer for its newest rows (one small request per room, sequential). The open room
     /// keeps its own 8 s poll; the block scan stays as the fast path.
     func startForegroundSweep() {
-        guard foregroundSweepTask == nil else { return }
+        guard foregroundSweepTask == nil, walletAddress != nil else { return }
         foregroundSweepTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -318,9 +344,12 @@ final class PublicChatService: ObservableObject {
     private func fetchNewestAndMerge(channel: String) async -> Bool {
         let base = Self.indexerBaseURL(forChannel: channel)
         guard !base.isEmpty else { return false }
+        let generation = walletGeneration
         do {
             let page = try await PublicChatIndexerClient.fetchHistoryPage(baseURL: base, channel: channel, limit: 40)
             noteIndexerResult(base: base, failed: nil)
+            // Asked for the account that has since logged out or switched: not this store's.
+            guard isCurrentWallet(generation) else { return false }
             // Guarded: inserting an element that is already there still publishes, which
             // re-rendered an open room on every sweep for nothing.
             if !indexerFetchedChannels.contains(channel) { indexerFetchedChannels.insert(channel) }
@@ -337,6 +366,7 @@ final class PublicChatService: ObservableObject {
                 .filter { !hidden.contains($0.senderAddress) && MessageReactionCodec.parse($0.content) == nil && MessageEditCodec.parse($0.content) == nil }
                 .map { (id: $0.txId, channel: channel, senderAddress: $0.senderAddress, content: $0.content, blockTime: $0.blockTime) }
             let known = await store.messageIds(forChannel: channel)
+            guard isCurrentWallet(generation) else { return false }
             let fresh = rows.filter { !known.contains($0.id) }
             let firstPass = !sweptChannels.contains(channel)
             sweptChannels.insert(channel)
@@ -348,8 +378,9 @@ final class PublicChatService: ObservableObject {
             }
             guard !fresh.isEmpty else { return true }
             let inserted = await store.insertMessages(fresh)
-            guard !inserted.isEmpty else { return true }
+            guard isCurrentWallet(generation), !inserted.isEmpty else { return true }
             await store.pruneExpiredMessages()
+            guard isCurrentWallet(generation) else { return true }
             loadMessages(for: channel)
             guard !firstPass else { return true }
             let cutoff = Int64(Date().timeIntervalSince1970 * 1000) - Self.sweepBannerWindowMs
@@ -607,6 +638,12 @@ final class PublicChatService: ObservableObject {
         // permanent fixtures of the list screen, so no UI offers it; guard against stray paths.
         guard !Self.curatedChannels.contains(PublicChatChannelName.normalize(name)) else { return }
         let normalized = PublicChatChannelName.normalize(name)
+        // Whether the push service sends this room's pushes now (the list `updateWatchedAddresses`
+        // sends is the joined, indexed rooms with their bell on): leaving takes it off.
+        let wasWatched = Self.isIndexerTracked(normalized)
+            && channels.contains { $0.channelName == normalized && $0.notifyEnabled }
+        // An open room's poll (and deep backfill) would go on writing into a room that is gone.
+        stopIndexerPolling(channel: normalized)
         store.leaveChannel(normalized)
         voiceNotesByChannel.removeValue(forKey: normalized)
         messagesByChannel.removeValue(forKey: normalized)
@@ -623,7 +660,24 @@ final class PublicChatService: ObservableObject {
         liveViewRefCounts.removeValue(forKey: normalized)
         refreshChannels()
         updateScanningStateIfNeeded()
+        if wasWatched {
+            Task { await PushNotificationManager.shared.updateWatchedAddresses() }
+        }
     }
+
+    /// Whether a room push (`broadcast:<room>`) arriving in the foreground is one this account
+    /// still wants: a room it has joined, with its bell on, not switched off in Public Chats
+    /// settings, and not a service room. Until the store is open nothing is known, and it shows.
+    func wantsRoomPush(channel rawChannel: String) -> Bool {
+        let name = PublicChatChannelName.normalize(rawChannel)
+        guard store.isReady else { return true }
+        guard !Self.serviceChannels.contains(name), isCuratedChannelShown(name),
+              let room = channels.first(where: { $0.channelName == name }) else { return false }
+        return room.notifyEnabled
+    }
+
+    /// Whether this account's room store is open, so `channels` is its real list.
+    var isStoreReady: Bool { store.isReady }
 
     func setNotifyEnabled(_ enabled: Bool, forChannel name: String) {
         // Indexed channels' bells also gate remote push - sync the registration so the push
@@ -820,6 +874,11 @@ final class PublicChatService: ObservableObject {
     }
 
     private func fetchFromIndexerAndMerge(baseURL: String, channel: String) async {
+        // Every answer below is for the account this started under: after a log out or switch
+        // (or the room being left, which cancels its poll) it is dropped, not merged into the
+        // next account's store or its backfill state.
+        let generation = walletGeneration
+        func stillWanted() -> Bool { isCurrentWallet(generation) && !Task.isCancelled }
         do {
             // Steady-state polls only need the newest few rows (everything older is already in
             // the store, txid-deduped); re-fetching 200 rows every 8s was pure re-download. The
@@ -831,13 +890,15 @@ final class PublicChatService: ObservableObject {
                 baseURL: baseURL, channel: channel, limit: steadyStateLimit
             )
             noteIndexerResult(base: baseURL, failed: nil)
+            guard stillWanted() else { return }
             // Guarded: a no-op insert still publishes, re-rendering the open room every poll.
             if !indexerFetchedChannels.contains(channel) { indexerFetchedChannels.insert(channel) }
             // The newest page goes in FIRST, before any history is paged. It used to wait for
             // the whole 30-day backfill below - up to 50 sequential requests on a busy room - so
             // the message a notification had just announced showed up seconds after the room
             // opened, not with it.
-            await mergeIndexerRows(messages.messages, channel: channel, prune: true)
+            await mergeIndexerRows(messages.messages, channel: channel, prune: true, generation: generation)
+            guard stillWanted() else { return }
             // More arrived since the last poll than the page holds (a busy room, or the app
             // away for a while): page back to the rows already seen, through the backfill below
             // and its limit, resume and floor. It used to stay missing until the next launch.
@@ -881,6 +942,7 @@ final class PublicChatService: ObservableObject {
                             baseURL: baseURL, channel: channel, before: before
                         )
                     } catch {
+                        guard stillWanted() else { return }
                         // Keep what this attempt did get: the pages already merged stay, and
                         // the cursor recorded after each of them is where the next 8s tick
                         // resumes - not page 1.
@@ -888,9 +950,11 @@ final class PublicChatService: ObservableObject {
                         interrupted = true
                         break
                     }
+                    guard stillWanted() else { return }
                     guard !page.messages.isEmpty else { break }
                     // Each page merged as it arrives, oldest last.
-                    await mergeIndexerRows(page.messages, channel: channel, prune: false)
+                    await mergeIndexerRows(page.messages, channel: channel, prune: false, generation: generation)
+                    guard stillWanted() else { return }
                     hasMore = page.hasMore
                     // The indexer's `before` is exclusive (`block_time < before`), and rows of one
                     // block share a millisecond: those cut off at a page's edge were skipped. So the
@@ -920,7 +984,7 @@ final class PublicChatService: ObservableObject {
             // Best-effort on top of live scanning - the loop just tries again next tick.
             noteIndexerResult(base: baseURL, failed: error)
             AppLog.log("%@", "[PublicChat] Indexer fetch failed for #\(channel): \(error.localizedDescription)")
-            if unreachableIndexers[baseURL] != nil {
+            if stillWanted(), unreachableIndexers[baseURL] != nil {
                 settlePendingSendsFromBeforeThisRun(channel: channel, indexerDown: true)
             }
         }
@@ -928,7 +992,8 @@ final class PublicChatService: ObservableObject {
 
     /// One page of indexer rows into the room: edits and reactions to their indexes, the
     /// rest into the store, the room reloaded when anything was new.
-    private func mergeIndexerRows(_ page: [PublicChatIndexerClient.IndexedPublicChat], channel: String, prune: Bool) async {
+    private func mergeIndexerRows(_ page: [PublicChatIndexerClient.IndexedPublicChat], channel: String, prune: Bool, generation: Int) async {
+        guard isCurrentWallet(generation) else { return }
         let hidden = store.hiddenSenderAddresses(forChannel: channel)
         let visible = page.filter { !hidden.contains($0.senderAddress) }
 
@@ -960,6 +1025,7 @@ final class PublicChatService: ObservableObject {
         if !incomingReactions.isEmpty || !incomingEdits.isEmpty {
             let storeReady = store.isReady
             let result = await store.applyIncoming(reactions: incomingReactions, edits: incomingEdits, channel: channel)
+            guard isCurrentWallet(generation) else { return }
             // A reaction row is keyed by target and reactor, not by the target's presence, so
             // once the store has seen its tx (applied, or superseded) it never needs it again.
             if storeReady {
@@ -976,6 +1042,7 @@ final class PublicChatService: ObservableObject {
             .filter { MessageReactionCodec.parse($0.content) == nil && MessageEditCodec.parse($0.content) == nil }
             .map { (id: $0.txId, channel: channel, senderAddress: $0.senderAddress, content: $0.content, blockTime: $0.blockTime) }
         var insertedCount = await store.insertMessages(rows).count
+        guard isCurrentWallet(generation) else { return }
         if Self.serviceChannels.contains(channel) {
             // Rows this phone sent carry its own clock until the chain's time reaches us -
             // see processPublicChatHits.
@@ -993,6 +1060,7 @@ final class PublicChatService: ObservableObject {
         }
         if insertedCount > 0 {
             if prune { await store.pruneExpiredMessages() }
+            guard isCurrentWallet(generation) else { return }
             loadMessages(for: channel)
         }
     }
@@ -1253,8 +1321,10 @@ final class PublicChatService: ObservableObject {
         let generation = (messageLoadGeneration[channel] ?? 0) + 1
         messageLoadGeneration[channel] = generation
         let limit = windowSize(for: channel)
+        let walletAtStart = walletGeneration
         let rows = await store.messages(forChannel: channel, newestLimit: limit)
-        guard messageLoadGeneration[channel] == generation else { return }
+        // A read of the store the account had before a switch is not this account's room.
+        guard messageLoadGeneration[channel] == generation, isCurrentWallet(walletAtStart) else { return }
         if let limit {
             if rows.count < limit { windowExhausted.insert(channel) } else { windowExhausted.remove(channel) }
         }
@@ -1272,7 +1342,7 @@ final class PublicChatService: ObservableObject {
             }
             return (fresh, PublicChatVoiceParts.group(fresh))
         }.value
-        guard messageLoadGeneration[channel] == generation else { return }
+        guard messageLoadGeneration[channel] == generation, isCurrentWallet(walletAtStart) else { return }
         // Only actually publish when the content changed: `@Published` fires on every
         // assignment regardless of equality, and an unconditional assignment re-rendered the
         // whole message list - including an open avatar menu - even when nothing had changed.
@@ -1338,12 +1408,34 @@ final class PublicChatService: ObservableObject {
         loadMessages(for: first.channelName)
 
         Task {
+            let chatService = ChatService.shared
             for (offset, part) in parts.enumerated() {
-                guard self.isStillSignedIn(as: wallet.publicAddress) else { return }
+                guard self.isStillSignedIn(as: wallet.publicAddress) else {
+                    // Cut short by a log out or switch: these never went, so Failed (in their
+                    // own account's store), not "Sending" for the rest of the run.
+                    self.failRemainingParts(Array(parts[offset...]), walletAddress: wallet.publicAddress)
+                    return
+                }
                 do {
-                    try await self.resendPending(part, walletAddress: wallet.publicAddress, privateKey: privateKey)
+                    let went = try await self.resendPending(part, walletAddress: wallet.publicAddress, privateKey: privateKey)
+                    if !went {
+                        // This part waits for a confirmed coin and retries itself: the rest
+                        // follow it the same way, in order through the send queue, as in
+                        // `sendPublicChatVoiceParts` - not straight away, ahead of it.
+                        for later in parts[(offset + 1)...] {
+                            self.schedulePublicChatRetry(
+                                channel: later.channelName,
+                                content: later.content,
+                                walletAddress: wallet.publicAddress,
+                                privateKey: privateKey,
+                                pendingId: later.id,
+                                delaySeconds: chatService.nextNoInputRetryDelay(for: later.id)
+                            )
+                        }
+                        return
+                    }
                 } catch {
-                    self.failRemainingParts(Array(parts[(offset + 1)...]))
+                    self.failRemainingParts(Array(parts[(offset + 1)...]), walletAddress: wallet.publicAddress)
                     return
                 }
             }
@@ -1351,9 +1443,10 @@ final class PublicChatService: ObservableObject {
     }
 
     /// Sends a row that is already marked pending again, under its own id. Throws when it
-    /// failed (the row is then Failed or Not confirmed); returns when it went or was held for a
-    /// deferred retry.
-    private func resendPending(_ message: PublicChatMessage, walletAddress: String, privateKey: Data) async throws {
+    /// failed (the row is then Failed or Not confirmed); returns true when it went, false when it
+    /// was held for a deferred retry (no confirmed inputs yet).
+    @discardableResult
+    private func resendPending(_ message: PublicChatMessage, walletAddress: String, privateKey: Data) async throws -> Bool {
         do {
             _ = try await ChatService.shared.enqueueOutgoingTxOperation {
                 try await self.sendPublicChatInternal(
@@ -1364,7 +1457,9 @@ final class PublicChatService: ObservableObject {
                     pendingId: message.id
                 )
             }
+            return true
         } catch {
+            let deferred = ChatService.shared.isNoConfirmedInputsError(error)
             try await handleSendFailure(
                 error,
                 channel: message.channelName,
@@ -1373,6 +1468,7 @@ final class PublicChatService: ObservableObject {
                 privateKey: privateKey,
                 pendingId: message.id
             )
+            return !deferred
         }
     }
 
@@ -1384,13 +1480,41 @@ final class PublicChatService: ObservableObject {
     }
 
     /// The parts after one that failed never went: Failed too, so one Retry sends them in order.
-    private func failRemainingParts(_ parts: [PublicChatMessage]) {
-        guard let channel = parts.first?.channelName else { return }
+    private func failRemainingParts(_ parts: [PublicChatMessage], walletAddress: String) {
         for part in parts {
-            pendingSendsThisRun.remove(part.id)
-            store.markMessageFailed(pendingId: part.id)
+            ChatService.shared.clearNoInputRetryState(for: part.id)
+            markSendFailed(part.id, walletAddress: walletAddress, channel: part.channelName)
         }
-        loadMessages(for: channel)
+    }
+
+    /// Pending ids, per account (lowercased address), of sends that ended without going out
+    /// while another account's store was open: marked Failed when that account's store opens
+    /// again (`applyAbortedSends`). Not persisted: after a relaunch `settlePendingMessages`
+    /// settles them as rows from a run that ended.
+    private var abortedSendsByWallet: [String: Set<String>] = [:]
+
+    /// A send that ended without going out: no longer "in this run", and Failed so Retry is
+    /// offered - in the store of the account it was sent as. When that store isn't the open one
+    /// (the account logged out or switched meanwhile), it is recorded for when it is.
+    private func markSendFailed(_ pendingId: String, walletAddress: String, channel: String) {
+        pendingSendsThisRun.remove(pendingId)
+        let owner = walletAddress.lowercased()
+        if store.isReady, self.walletAddress == owner, store.currentWalletAddress?.lowercased() == owner {
+            store.markMessageFailed(pendingId: pendingId)
+            loadMessages(for: channel)
+        } else {
+            abortedSendsByWallet[owner, default: []].insert(pendingId)
+        }
+    }
+
+    /// The sends `markSendFailed` recorded for `walletAddress`, now that its store is open. Only
+    /// rows still pending: anything else was settled since.
+    private func applyAbortedSends(walletAddress: String?) {
+        guard let owner = walletAddress?.lowercased(), store.isReady,
+              let ids = abortedSendsByWallet.removeValue(forKey: owner) else { return }
+        for id in ids where store.deliveryStatus(ofMessage: id) == .pending {
+            store.markMessageFailed(pendingId: id)
+        }
     }
 
     // MARK: - Reactions
@@ -1658,7 +1782,12 @@ final class PublicChatService: ObservableObject {
 
         let chatService = ChatService.shared
         for (offset, part) in pending.enumerated() {
-            guard isStillSignedIn(as: wallet.publicAddress) else { return }
+            guard isStillSignedIn(as: wallet.publicAddress) else {
+                // Cut short by a log out or switch: the parts left never went - Failed, in
+                // this account's own store, so its Retry finishes the note.
+                failRemainingParts(Array(pending[offset...]), walletAddress: wallet.publicAddress)
+                return
+            }
             do {
                 _ = try await chatService.enqueueOutgoingTxOperation {
                     try await self.sendPublicChatInternal(
@@ -1694,7 +1823,7 @@ final class PublicChatService: ObservableObject {
                     }
                     return
                 }
-                failRemainingParts(rest)
+                failRemainingParts(rest, walletAddress: wallet.publicAddress)
                 try await handleSendFailure(
                     error,
                     channel: channel,
@@ -1846,10 +1975,9 @@ final class PublicChatService: ObservableObject {
             return
         }
         ChatService.shared.clearNoInputRetryState(for: pendingId)
-        // No send is working on it any more, so its Retry may start one.
-        pendingSendsThisRun.remove(pendingId)
-        store.markMessageFailed(pendingId: pendingId)
-        loadMessages(for: channel)
+        // No send is working on it any more, so its Retry may start one - in the store of the
+        // account it was sent as, even if another account is open by now.
+        markSendFailed(pendingId, walletAddress: walletAddress, channel: channel)
         // Surface a humanized message (never kaspad's raw "orphan is disallowed" text) - this is
         // what the composer's "Failed to send" toast renders, possibly while the user is already
         // typing their next message.
@@ -1872,7 +2000,13 @@ final class PublicChatService: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
             guard let self else { return }
             self.scheduledSendRetries.remove(pendingId)
-            guard self.isStillSignedIn(as: walletAddress) else { return }
+            guard self.isStillSignedIn(as: walletAddress) else {
+                // The account it was sent as is gone: it never went, so Failed in that
+                // account's store rather than "Sending" with nothing working on it.
+                ChatService.shared.clearNoInputRetryState(for: pendingId)
+                self.markSendFailed(pendingId, walletAddress: walletAddress, channel: channel)
+                return
+            }
             let currentStatus = self.store.deliveryStatus(ofMessage: pendingId)
             guard currentStatus == .pending else {
                 ChatService.shared.clearNoInputRetryState(for: pendingId)
@@ -2066,8 +2200,9 @@ final class PublicChatService: ObservableObject {
     private var deepBackfillFloor: [String: Int64] = [:]
 
     private func noteIndexerResult(base: String, failed: Error?) {
-        // A 4xx is the indexer answering, whatever it thinks of this request.
-        guard let failed, !Self.isClientRejection(failed) else {
+        // A 4xx is the indexer answering, whatever it thinks of this request; so is a body that
+        // won't decode (the rule in CLAUDE.md, "With the indexer down").
+        guard let failed, !Self.isClientRejection(failed), !(failed is DecodingError) else {
             indexerFailureRuns[base] = nil
             guard let since = unreachableIndexers.removeValue(forKey: base) else { return }
             AppLog.log("[PublicChat] Room indexer is answering again")
@@ -2472,10 +2607,24 @@ enum PublicChatIndexerClient {
         }
         let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
         // An indexer only stores the rooms it tracks: rows back mean it keeps this room's history.
-        if !decoded.messages.isEmpty {
+        // Only the app-wide indexer's rows count: "tracked" also means the app-wide push service
+        // sends the room's pushes (and its local banners and cellular stream are skipped), which
+        // a room's own indexer says nothing about.
+        if !decoded.messages.isEmpty, isAppWideIndexer(trimmed) {
             IndexerTrackedRooms.markServed(channel)
         }
         return (decoded.messages, decoded.hasMore ?? false)
+    }
+
+    /// Whether `base` is the app-wide public chat indexer (trailing slash and case aside).
+    private static func isAppWideIndexer(_ base: String) -> Bool {
+        func canonical(_ url: String) -> String {
+            var value = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            while value.hasSuffix("/") { value.removeLast() }
+            return value
+        }
+        let appWide = canonical(AppSettings.load().publicChatIndexerURL)
+        return !appWide.isEmpty && canonical(base) == appWide
     }
 
     private struct TrackedChannelsResponse: Decodable {
@@ -2501,9 +2650,10 @@ enum PublicChatIndexerClient {
 /// indexer gets everything a default room gets - its 30 days of history kept on the phone,
 /// remote push, the cellular savings - with no app update. Learned two ways:
 /// - **Reported**: the app-wide indexer's `GET /broadcast-channels` (replaced on every answer).
-/// - **Served**: a room whose `/get-broadcasts` returned rows - an indexer stores only rooms it
-///   tracks. Counts for 30 days after the last rows came back (the indexer's own window), so
-///   this also works with an indexer that predates the endpoint, and with a room's own indexer.
+/// - **Served**: a room whose `/get-broadcasts` on the app-wide indexer returned rows - an indexer
+///   stores only rooms it tracks. Counts for 30 days after the last rows came back (the indexer's
+///   own window), so this also works with an indexer that predates the endpoint. A room's own
+///   indexer doesn't count: the app-wide push service knows nothing of what it serves.
 /// Per network, persisted. Thread-safe: the store's background prune reads it.
 enum IndexerTrackedRooms {
     /// Posted (main queue) when the set changes, so push registration and scanning follow.

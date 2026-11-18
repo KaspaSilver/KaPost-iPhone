@@ -151,21 +151,6 @@ final class ReadStatusSyncManager: ObservableObject {
         recordRead(contactAddress: contactAddress, lastReadTxId: lastReadTxId, lastReadBlockTime: lastReadBlockTime)
     }
 
-    /// Awaitable version of `markAsRead` - see `MessageStore.updateReadStatusAndWait`'s doc
-    /// comment. `recordRead`'s own per-device marker write stays fire-and-forget (debounced by
-    /// design; the local read cursor above is this device's single source of truth for its
-    /// badge, and that is the write a force-quit must not lose).
-    func markAsReadAndWait(contactAddress: String, lastReadTxId: String?, lastReadBlockTime: UInt64) async {
-        let blockTime = Int64(lastReadBlockTime)
-        await MessageStore.shared.updateReadStatusAndWait(
-            contactAddress: contactAddress,
-            lastReadTxId: lastReadTxId,
-            lastReadBlockTime: blockTime,
-            lastReadAt: Date()
-        )
-        recordRead(contactAddress: contactAddress, lastReadTxId: lastReadTxId, lastReadBlockTime: lastReadBlockTime)
-    }
-
     /// Legacy method name - kept for backwards compatibility
     func flushPendingUpdates() {
         flushAllPending()

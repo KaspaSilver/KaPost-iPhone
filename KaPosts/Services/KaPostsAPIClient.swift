@@ -53,6 +53,14 @@ final class KaPostsAPIClient: ObservableObject {
         /// The payload can't fit one transaction (`payloadFitsOneTransaction`).
         case tooLong
 
+        /// The indexer's own "nothing like that here" answer (`NOT_FOUND`): for a cancel, it
+        /// holds no still-scheduled post with that id. Every other answer (rate limit, bad
+        /// signature, storage error) says nothing about whether it will still send it.
+        var isNotFound: Bool {
+            if case .api(let code, _) = self { return code == "NOT_FOUND" }
+            return false
+        }
+
         var errorDescription: String? {
             switch self {
             case .noIndexer: return "KaPost isn't available on Testnet yet"
@@ -1462,7 +1470,7 @@ extension KaPostsAPIClient {
             // submit is a free check that the computation still agrees with the node.
             let computed = KasiaTransactionBuilder.computeTransactionId(signedTx)
             if computed != submitted {
-                AppLog.log("[KaPosts] computeTransactionId MISMATCH: computed %@, node %@", computed, submitted)
+                AppLog.log("[KaPosts] computeTransactionId MISMATCH: computed %@, node %@", String(computed.prefix(12)), String(submitted.prefix(12)))
             }
             return submitted
         }

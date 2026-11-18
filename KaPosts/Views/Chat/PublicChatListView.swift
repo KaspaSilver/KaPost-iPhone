@@ -130,6 +130,8 @@ struct PublicChatListView: View {
     ///   never joined, and on a cold start the router's own join runs before the store has
     ///   finished loading (a no-op), so the room would otherwise open while being absent from
     ///   the list behind it. Same join-then-open shape as `openCuratedChannel`.
+    /// A tapped push never arrives here for a room that isn't joined (`AppDelegate.openRoomFromPush`
+    /// waits for the store and opens only a joined room), so a deleted room isn't joined back by a tap.
     private func openChannelFromHandoff(_ rawName: String) {
         guard let normalized = KaChatInternalLink.normalizeAndValidateChannel(rawName) else { return }
         if !publicChatService.channels.contains(where: { $0.channelName == normalized }) {
@@ -943,27 +945,28 @@ struct PublicChatRow: View {
     /// nil for a curated room not opened yet (no store row): shows its language name instead.
     let channel: PublicChatChannel?
     @EnvironmentObject var publicChatService: PublicChatService
-    @ObservedObject private var knsService = KNSService.shared
 
     private var lastMessage: PublicChatMessage? {
         publicChatService.messages(forChannel: channelName).last
     }
 
     private func senderName(_ address: String) -> String {
-        if address == WalletManager.shared.currentWallet?.publicAddress { return "You" }
+        if address == WalletManager.shared.currentWallet?.publicAddress { return AppLocalization.string("You") }
         return ContactsManager.shared.displayName(for: address)
     }
 
     private func timeText(_ date: Date) -> String {
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return SharedFormatting.chatTime.string(from: date) }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        if calendar.isDateInYesterday(date) { return AppLocalization.string("Yesterday") }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
     private var emptyText: String {
-        guard channel == nil else { return "No messages yet" }
-        return PublicChatService.languageDisplayName(for: channelName).map { "\($0) - tap to open" } ?? "Tap to open"
+        guard channel == nil else { return AppLocalization.string("No messages yet") }
+        return PublicChatService.languageDisplayName(for: channelName)
+            .map { String(format: AppLocalization.string("%@ - tap to open"), $0) }
+            ?? AppLocalization.string("Tap to open")
     }
 
     var body: some View {
@@ -997,7 +1000,7 @@ struct PublicChatRow: View {
                 }
                 HStack {
                     if let lastMessage {
-                        Text("\(senderName(lastMessage.senderAddress)): \(LinkSafePreview.apply(to: MessageReplyCodec.previewText(for: lastMessage.content)))")
+                        Text(verbatim: "\(senderName(lastMessage.senderAddress)): \(LinkSafePreview.apply(to: MessageReplyCodec.previewText(for: lastMessage.content)))")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .lineLimit(1)

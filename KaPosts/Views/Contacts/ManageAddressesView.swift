@@ -23,6 +23,8 @@ struct ManageAddressesView: View {
     @State private var consolidateSentTxIds: [String] = []
     /// An address swept held more coins than one transaction can spend: only its largest moved.
     @State private var consolidateCapped = false
+    /// Sources whose sweep got no answer ("Not confirmed"): they may have landed.
+    @State private var consolidateNotConfirmed = 0
     @State private var errorMessage: String?
     @State private var qrTarget: SpendingAddressEntry?
     @State private var renameTarget: SpendingAddressEntry?
@@ -182,12 +184,14 @@ struct ManageAddressesView: View {
             ConsolidateSuccessCard(
                 txIds: consolidateSentTxIds,
                 explorer: settingsViewModel.settings.kaspaExplorer,
-                capped: consolidateCapped
+                capped: consolidateCapped,
+                notConfirmed: consolidateNotConfirmed
             ) {
                 showConsolidateSuccess = false
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .presentationDetents([.height(min(480, 220 + CGFloat(consolidateSentTxIds.count) * 44 + (consolidateCapped ? 60 : 0)))])
+            .presentationDetents([.height(min(540, 220 + CGFloat(consolidateSentTxIds.count) * 44 + (consolidateCapped ? 60 : 0)
+                                              + (consolidateNotConfirmed > 0 ? 60 : 0)))])
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $qrTarget) { entry in
@@ -874,7 +878,8 @@ struct ManageAddressesView: View {
             // showToast auto-dismisses on the standard timer and replaces (never stacks or
             // extends) any toast a rapid earlier press put up. The old direct assignment
             // here never scheduled a dismissal, so the success toast lingered indefinitely.
-            showToast("Address #\(WalletManager.addressNumber(forIndex: index)) is ready.")
+            showToast(String(format: AppLocalization.string("Address #%@ is ready."),
+                             "\(WalletManager.addressNumber(forIndex: index))"))
             Task { await loadEntries() }
         }
     }
@@ -953,6 +958,9 @@ struct ManageAddressesView: View {
             // One address failing must not hide the others' success - but if nothing went out
             // and something threw, that error is the answer, not a sheet that just closes.
             var lastError: Error?
+            // A sweep with no answer may have landed, so the success card says so, even
+            // beside the ones that went out.
+            var notConfirmed = 0
             for entry in entries where entry.index != activeIndex && entry.balanceSompi > 0 {
                 do {
                     let maxSendable = try await chatService.estimateMaxSpendingAddressAmount(index: entry.index, toAddress: primaryAddress, extraFeeSompi: extraFeeSompi)
@@ -962,6 +970,7 @@ struct ManageAddressesView: View {
                     if maxSendable.cappedAtInputLimit { capped = true }
                 } catch {
                     lastError = error
+                    if error is SendOutcomeUnknownError { notConfirmed += 1 }
                 }
             }
             await loadEntries()
@@ -969,6 +978,7 @@ struct ManageAddressesView: View {
             if !sentTxIds.isEmpty {
                 consolidateSentTxIds = sentTxIds
                 consolidateCapped = capped
+                consolidateNotConfirmed = notConfirmed
                 showConsolidateSuccess = true
             } else if let lastError {
                 errorMessage = lastError.localizedDescription
@@ -1244,6 +1254,8 @@ private struct ConsolidateSuccessCard: View {
     let explorer: KaspaExplorer
     /// An address held more coins than one transaction can spend, so some stayed behind.
     let capped: Bool
+    /// Sources whose sweep got no answer: they may have landed, so they aren't to be sent again blind.
+    let notConfirmed: Int
     let onDismiss: () -> Void
 
     var body: some View {
@@ -1261,6 +1273,16 @@ private struct ConsolidateSuccessCard: View {
                             locale: AppLocalization.locale, KasiaTransactionBuilder.maxInputsPerTransaction))
                     .font(.footnote)
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            if notConfirmed > 0 {
+                Text(notConfirmed == 1
+                     ? AppLocalization.string("One send wasn't confirmed. Check that address before trying again.")
+                     : String(format: AppLocalization.string("%@ sends weren't confirmed. Check those addresses before trying again."),
+                              "\(notConfirmed)"))
+                    .font(.footnote)
+                    .foregroundColor(.orange)
                     .multilineTextAlignment(.center)
             }
 

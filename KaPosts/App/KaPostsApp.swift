@@ -118,8 +118,11 @@ struct KaPostsApp: App {
             // KaPosts activity (likes, replies, quotes on your posts) - the in-app poller, which
             // runs only while the app is active.
             KaPostsNotificationService.shared.start()
-            // .kachat registrations in flight resume after a relaunch.
-            KachatNamesActions.shared.resume()
+            // Every network: a .kachat profile saved on another device (Android, Desktop) shows
+            // here too. (Claims are KaPay's: no registration is driven here.)
+            if let address = KachatNamesActions.shared.myAddress {
+                Task { @MainActor in await KachatNamesRegistry.shared.syncOwnProfile(address: address) }
+            }
             Task { @MainActor in await KachatNamesRegistry.shared.refreshIfStale() }
 
             let isFirstActiveTransition = !hasCompletedFirstActiveTransition
@@ -329,6 +332,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                     completionHandler([])
                     return
                 }
+                // Nothing for a room that was deleted, muted or switched off: the push service
+                // can still send for it until the registration update lands.
+                guard let room = KaChatInternalLink.normalizeAndValidateChannel(channel),
+                      PublicChatService.shared.wantsRoomPush(channel: room) else {
+                    completionHandler([])
+                    return
+                }
                 // A long voice note's later parts: listed, no banner or sound.
                 if RoomVoicePushBursts.isLaterPart(
                     threadId: threadId,
@@ -382,8 +392,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             if Self.kaPostsPushOpensAction(userInfo: userInfo, body: body), Self.isTxId(actionId) {
                 // A reply or a quote: open it, not the post it was made on.
                 KaPostsDeepLink.pendingPostTxId = actionId.lowercased()
-            } else if let postId = userInfo["postId"] as? String, !postId.isEmpty {
-                KaPostsDeepLink.pendingPostTxId = postId
+            } else if let postId = userInfo["postId"] as? String, Self.isTxId(postId) {
+                // Only a transaction id: the payload is the push service's word, not ours.
+                KaPostsDeepLink.pendingPostTxId = postId.lowercased()
             } else {
                 KaPostsDeepLink.pendingOpenNotifications = true
             }
@@ -393,18 +404,41 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         }
 
         if threadIdentifier.hasPrefix("broadcast:") {
-            let channel = String(threadIdentifier.dropFirst("broadcast:".count))
-            if !channel.isEmpty {
-                // Pending for a cold start, and the room's newest rows asked for right away: the
-                // announced message is not in the store yet.
-                Task { @MainActor in
-                    PublicChatService.shared.pendingPublicChatNavigation = channel
-                    await PublicChatService.shared.refreshFromIndexerNow(channel: channel)
-                }
-                NotificationCenter.default.post(name: .openPublicChat, object: nil, userInfo: ["channel": channel])
+            // Through the same gate as a room link's name, before it can open anything.
+            if let channel = KaChatInternalLink.normalizeAndValidateChannel(
+                String(threadIdentifier.dropFirst("broadcast:".count))
+            ) {
+                Task { @MainActor in Self.openRoomFromPush(channel) }
             }
         }
         completionHandler()
+    }
+
+    /// A tapped room push opens the room only while it is in the list: a room deleted since (or
+    /// never joined here) is not joined back by a tap. On a cold start the account's rooms are
+    /// still loading, so this waits for them (up to 10 s) before deciding.
+    @MainActor
+    private static func openRoomFromPush(_ channel: String, attemptsLeft: Int = 20) {
+        let service = PublicChatService.shared
+        guard service.isStoreReady else {
+            guard attemptsLeft > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                openRoomFromPush(channel, attemptsLeft: attemptsLeft - 1)
+            }
+            return
+        }
+        guard service.channels.contains(where: { $0.channelName == channel }) else {
+            AppLog.log("%@", "[Push] Ignored a tap on a push for a room that isn't joined")
+            return
+        }
+        // Pending for a cold start, and the room's newest rows asked for right away: the
+        // announced message is not in the store yet.
+        service.pendingPublicChatNavigation = channel
+        NotificationCenter.default.post(name: .openPublicChat, object: nil, userInfo: ["channel": channel])
+        Task { @MainActor in
+            await service.refreshFromIndexerNow(channel: channel)
+        }
     }
 }
 
@@ -566,8 +600,6 @@ extension Notification.Name {
     static let openKNSProfileEditor = Notification.Name("openKNSProfileEditor")
     static let openKaPost = Notification.Name("openKaPost")
     static let openKaPostsProfile = Notification.Name("openKaPostsProfile")
-    /// A `.kachat` name notification was tapped: the name is in `KachatDeepLink.pendingName`.
-    static let openKachatName = Notification.Name("openKachatName")
     static let openPublicChat = Notification.Name("openBroadcast")
 }
 

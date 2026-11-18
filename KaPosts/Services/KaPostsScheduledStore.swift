@@ -193,8 +193,10 @@ final class KaPostsScheduledStore: ObservableObject {
         if current.status == .scheduled {
             do {
                 try await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: entry.id)
-            } catch KaPostsAPIClient.KaPostsAPIError.api {
-                // The indexer answered and doesn't hold it: nothing there to cancel.
+            } catch let apiError as KaPostsAPIClient.KaPostsAPIError where apiError.isNotFound {
+                // The indexer said it holds no such scheduled post: nothing there to cancel.
+                // Any other answer (rate limit, bad signature, a 5xx with a body) leaves it
+                // able to send the post, so it falls to the branch below.
             } catch {
                 AppLog.log("[KaPosts] Cancelling a scheduled post failed: %@", error.localizedDescription)
                 if current.onServer {
@@ -224,7 +226,7 @@ final class KaPostsScheduledStore: ObservableObject {
     }
 
     /// Tells the indexer about cancels it missed. An id leaves the list once the indexer has
-    /// answered, either way.
+    /// cancelled it or said it doesn't hold it; any other answer keeps it for next time.
     private func flushPendingCancels() async {
         guard let key = pendingCancelsKey,
               let ids = UserDefaults.standard.stringArray(forKey: key), !ids.isEmpty else { return }
@@ -232,7 +234,7 @@ final class KaPostsScheduledStore: ObservableObject {
         for id in ids {
             do {
                 try await KaPostsAPIClient.shared.cancelScheduledOnServer(txId: id)
-            } catch KaPostsAPIClient.KaPostsAPIError.api {
+            } catch let apiError as KaPostsAPIClient.KaPostsAPIError where apiError.isNotFound {
                 // Answered: it doesn't hold it.
             } catch {
                 left.append(id)

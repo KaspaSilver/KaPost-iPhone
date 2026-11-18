@@ -3,11 +3,12 @@ import UIKit
 import AVKit
 import PDFKit
 
-/// Rich link-preview card shown below a chat bubble's text when the message contains a link -
-/// mirrors iMessage. Renders nothing while the fetch is in flight and nothing if no preview data
+/// Rich link-preview card for a link in a post (`KaPostCellView`) or a Public Chats message
+/// (`PublicChatChannelView`) - mirrors iMessage. Made only for a poster or sender with a `.kachat`
+/// name and a link to KaChat's site or an allowed site (`KaPostLinkPreviewPolicy`). Renders nothing
+/// while the fetch is in flight (or `loadingHeight` of empty card) and nothing if no preview data
 /// was found and no [fallbackText] was given, rather than a placeholder that could flash or look
-/// broken. Used by 1:1 (`MessageBubbleView`), group (KaChat's `GroupChatDetailView`), and public chat
-/// (`PublicChatChannelView`) bubbles.
+/// broken.
 struct LinkPreviewCardView: View {
     let url: URL
     /// The owning message's transaction id, for the "View in Explorer" long-press action -
@@ -30,28 +31,18 @@ struct LinkPreviewCardView: View {
     /// Whether the owning message is ours - only the inline voice-note bubble cares (it takes
     /// the sent/received bubble colours like an on-chain voice note); the cards are neutral.
     var isOutgoing: Bool = false
-    /// Whether the preview fetch may start on render. True (the default) for accepted 1:1
-    /// contacts and for group chats (members chose each other); false for non-accepted senders
-    /// and for public chat rooms (anyone can post there), where the card renders as a
-    /// "Tap to load preview" placeholder and only fetches - and therefore only touches the
-    /// link's server - when the user explicitly taps it. A URL that already resolved this
-    /// session shows its cached result either way, since no new fetch is involved.
-    var autoFetch: Bool = true
     /// Space held while the preview loads, so the card doesn't push the content below it down
     /// when it lands. Nil draws nothing until then.
     var loadingHeight: CGFloat? = nil
 
     @State private var preview: LinkPreviewData?
     @State private var hasFinishedLoading: Bool
-    /// Set when the user taps the tap-to-load placeholder of a non-`autoFetch` card - flips the
-    /// `.task(id:)` below so the gated fetch runs exactly once, on demand.
-    @State private var loadRequested = false
     /// Non-nil while the full-screen Nextcloud media viewer is up (tap on a Nextcloud card).
     @State private var nextcloudViewerTarget: NextcloudViewerTarget?
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
 
-    init(url: URL, txId: String, fallbackText: String? = nil, onSelect: (() -> Void)? = nil, onDoubleTap: (() -> Void)? = nil, isOutgoing: Bool = false, autoFetch: Bool = true, loadingHeight: CGFloat? = nil) {
+    init(url: URL, txId: String, fallbackText: String? = nil, onSelect: (() -> Void)? = nil, onDoubleTap: (() -> Void)? = nil, isOutgoing: Bool = false, loadingHeight: CGFloat? = nil) {
         self.loadingHeight = loadingHeight
         self.url = url
         self.txId = txId
@@ -59,7 +50,6 @@ struct LinkPreviewCardView: View {
         self.onSelect = onSelect
         self.onDoubleTap = onDoubleTap
         self.isOutgoing = isOutgoing
-        self.autoFetch = autoFetch
         // If this exact URL was already resolved earlier (e.g. scrolled past once already, or
         // another row with the same link), seed state with the final result immediately instead
         // of starting in the "loading" state and waiting for `.task` to come back - avoids a
@@ -94,8 +84,6 @@ struct LinkPreviewCardView: View {
                 cardBody(preview)
             } else if hasFinishedLoading, let fallbackText {
                 fallbackBubble(fallbackText)
-            } else if !autoFetch && !loadRequested {
-                tapToLoadCard
             } else if let loadingHeight {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.primary.opacity(0.06))
@@ -106,17 +94,26 @@ struct LinkPreviewCardView: View {
                     .frame(width: 0, height: 0)
             }
         }
-        // `loadRequested` is part of the id so tapping the gated placeholder re-runs this task
-        // and performs the on-demand fetch (a `.task(id:)` body only re-executes when its id
-        // changes).
-        .task(id: "\(url.absoluteString)|\(loadRequested)") {
+        // The fetch starts on render: posts and rooms only make a card for an allowed link from a
+        // poster or sender with a `.kachat` name; every other link stays plain text with no card
+        // at all (owner's call, 2026-11-18).
+        .task(id: url.absoluteString) {
             // Already seeded synchronously from the cache in `init` - skip re-running the fetch
             // (which would flip `hasFinishedLoading` false then true again, causing exactly the
-            // late height-change flicker this seeding exists to avoid). Non-`autoFetch` cards
-            // additionally wait for an explicit tap before fetching anything.
-            guard !hasFinishedLoading, autoFetch || loadRequested else { return }
-            preview = await LinkPreviewService.shared.preview(for: url)
-            hasFinishedLoading = true
+            // late height-change flicker this seeding exists to avoid).
+            guard !hasFinishedLoading else { return }
+            let result = await LinkPreviewService.shared.preview(for: url)
+            // With space held while loading (posts), the swap to the card or the plain link eases
+            // instead of jumping from the placeholder's height.
+            if loadingHeight != nil {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    preview = result
+                    hasFinishedLoading = true
+                }
+            } else {
+                preview = result
+                hasFinishedLoading = true
+            }
         }
         .fullScreenCover(item: $nextcloudViewerTarget) { target in
             NextcloudMediaViewerView(target: target)
@@ -139,22 +136,23 @@ struct LinkPreviewCardView: View {
     @ViewBuilder
     private func cardBody(_ data: LinkPreviewData) -> some View {
         // A plain tappable view rather than a Button, so a double-tap can open the quick-reaction
-        // menu while a single tap opens the link. `onTapGesture(count: 2)` is listed first so a
-        // double-tap is claimed by that handler instead of also firing the single-tap open. Matches
-        // a normal message bubble's double-tap.
+        // menu while a single tap opens the link. The double-tap (`onDoubleTapIfSet`) is listed
+        // first so it is claimed by that handler instead of also firing the single-tap open, and
+        // only exists when there is one: otherwise every single tap would wait out the double-tap
+        // window. Matches a normal message bubble's double-tap.
         if data.nextcloudShareRevoked {
             // The server says this share is gone. Showing the dead URL would leave the sender's
             // server address in the transcript for a link nobody can open, which is the opposite
             // of why they shared through their own cloud - so the row says only that it is gone.
             revokedShareTile
-                .onTapGesture(count: 2) { onDoubleTap?() }
+                .onDoubleTapIfSet(onDoubleTap)
                 .messageActions(title: "Shared File") { menuActions(hideLink: true) }
         } else if let kind = data.nextcloudMedia, kind == .image || kind == .video {
             // Nextcloud media renders as a bare photo/video bubble (like a sent photo), not a
             // titled link card — the media IS the message. Tap opens the in-app viewer, which is
             // the only way this app renders the share: it never hands the link to a browser.
             nextcloudMediaBubble(data, kind: kind)
-                .onTapGesture(count: 2) { onDoubleTap?() }
+                .onDoubleTapIfSet(onDoubleTap)
                 .onTapGesture { handleTap(data) }
                 .messageActions(title: "Link", preview: url.absoluteString) { menuActions() }
         } else if data.nextcloudMedia == .audio,
@@ -172,20 +170,20 @@ struct LinkPreviewCardView: View {
                 onReply: nil,
                 onSelect: onSelect
             )
-            .onTapGesture(count: 2) { onDoubleTap?() }
+            .onDoubleTapIfSet(onDoubleTap)
             .messageActions(title: "Link", preview: url.absoluteString) { menuActions() }
         } else if let kind = data.nextcloudMedia {
             // PDF/other files: an attachment card (icon, filename, type · size). PDF opens the
             // in-app viewer; everything else opens Nextcloud's own web viewer, the only thing
             // that can actually render an Office doc.
             nextcloudAttachmentCard(data, kind: kind)
-                .onTapGesture(count: 2) { onDoubleTap?() }
+                .onDoubleTapIfSet(onDoubleTap)
                 .onTapGesture { handleTap(data) }
                 .messageActions(title: "Link", preview: url.absoluteString) { menuActions() }
         } else {
             cardContent(data)
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .onTapGesture(count: 2) { onDoubleTap?() }
+                .onDoubleTapIfSet(onDoubleTap)
                 .onTapGesture { handleTap(data) }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .frame(maxWidth: 260)
@@ -287,7 +285,25 @@ struct LinkPreviewCardView: View {
     @ViewBuilder
     private func cardContent(_ data: LinkPreviewData) -> some View {
             VStack(alignment: .leading, spacing: 0) {
-                if let imageURLString = data.imageURLString, let imageURL = URL(string: imageURLString) {
+                // A social network's link always shows the network's logo, not the post's image
+                // (owner's call, 2026-11-18).
+                if let social = SocialLinkLogo.logo(for: url) {
+                    ZStack {
+                        social.color
+                        Image(social.asset)
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                    }
+                    .frame(height: 140)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityHidden(true)
+                } else if let imageURLString = data.imageURLString, let imageURL = URL(string: imageURLString),
+                          KaPostLinkPreviewPolicy.allowsImage(imageURL, forPage: url) {
+                    // Only from the site or one of its image servers; any other host draws the
+                    // card without the image rather than contacting it.
                     ZStack {
                         LinkPreviewImage(imageURL: imageURL, referer: url)
                             .frame(height: 140)
@@ -347,48 +363,9 @@ struct LinkPreviewCardView: View {
             .background(Color(.systemGray5))
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .contentShape(RoundedRectangle(cornerRadius: 16))
-            .onTapGesture(count: 2) { onDoubleTap?() }
+            .onDoubleTapIfSet(onDoubleTap)
             .onTapGesture { openURL(url) }
             .messageActions(title: "Link", preview: url.absoluteString) { menuActions() }
-    }
-
-    /// Shown instead of an automatic fetch when `autoFetch` is false (non-accepted 1:1 senders
-    /// and public chat rooms): a neutral card naming the link's host, fetched only on tap. The
-    /// long-press menu still offers Copy Link / View in Explorer / Select, so the message stays
-    /// fully usable without ever loading the preview.
-    @ViewBuilder
-    private var tapToLoadCard: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "link")
-                .font(.scaled(size: 20))
-                .foregroundColor(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Tap to load preview")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.primary)
-                if let host = url.host {
-                    Text(host)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: 260, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
-                )
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onTapGesture(count: 2) { onDoubleTap?() }
-        .onTapGesture { loadRequested = true }
-        .messageActions(title: "Link", preview: url.absoluteString) { menuActions() }
     }
 
     /// `hideLink` drops Copy Link, for a share the server says is revoked - the whole point of
@@ -454,13 +431,15 @@ private struct NextcloudPosterImage: View {
             guard !finished, uiImage == nil else { return }
             defer { finished = true }
 
-            if let previewURL,
+            // Nextcloud-shaped paths shouldn't occur in KaPost (`fetchPreview` only probes
+            // allowed hosts); each is still loaded only from a host `allowsImage` takes.
+            if let previewURL, KaPostLinkPreviewPolicy.allowsImage(previewURL, forPage: referer),
                let data = await LinkPreviewService.shared.imageData(previewURL, referer: referer),
                let image = await ImageThumbnail.decode(data, maxPixelSize: 640) {
                 uiImage = image
                 return
             }
-            guard let downloadURL else { return }
+            guard let downloadURL, KaPostLinkPreviewPolicy.allowsImage(downloadURL, forPage: referer) else { return }
             switch kind {
             case .image:
                 // The default cap: this runs by itself for any link shaped like a share.
@@ -632,12 +611,15 @@ private struct PDFKitView: UIViewRepresentable {
     }
 }
 
-/// Loads a link-preview image through `LinkPreviewService.imageData` (browser User-Agent + Referer)
-/// instead of a bare `AsyncImage`, so CDNs like cdninstagram/fbcdn that 403 header-less requests
-/// serve the image. Shows a neutral placeholder until loaded or on failure.
+/// Loads a link-preview image through `LinkPreviewService.imageData` (browser User-Agent, and the
+/// page as Referer only when the image is on the page's own host) instead of a bare `AsyncImage`,
+/// so CDNs like cdninstagram/fbcdn that 403 header-less requests serve the image. Only drawn for an
+/// image `KaPostLinkPreviewPolicy.allowsImage` takes. Shows a neutral placeholder until loaded or
+/// on failure.
 private struct LinkPreviewImage: View {
     let imageURL: URL
-    /// The page the image belongs to, sent as the `Referer` header.
+    /// The page the image belongs to: decides which image hosts are allowed, and is sent as the
+    /// `Referer` only to the page's own host.
     let referer: URL
     @State private var uiImage: UIImage?
     @State private var finished = false
@@ -660,5 +642,46 @@ private struct LinkPreviewImage: View {
             }
             finished = true
         }
+    }
+}
+
+private extension View {
+    /// A double-tap only when there is something to do: an `onTapGesture(count: 2)` that does
+    /// nothing still makes every single tap wait to see whether a second one follows.
+    @ViewBuilder
+    func onDoubleTapIfSet(_ action: (() -> Void)?) -> some View {
+        if let action {
+            onTapGesture(count: 2, perform: action)
+        } else {
+            self
+        }
+    }
+}
+
+/// The logo a social network's link preview shows in place of the post's image: the network's
+/// mark in white on its brand colour. YouTube isn't here: its preview keeps the video's
+/// thumbnail (owner's call, 2026-11-18). The marks are Simple Icons' (CC0), in the asset catalog as
+/// template vectors (`Social*`).
+enum SocialLinkLogo {
+    struct Logo {
+        let asset: String
+        let color: Color
+    }
+
+    private static let byDomain: [(domain: String, logo: Logo)] = [
+        ("x.com", Logo(asset: "SocialX", color: .black)),
+        ("twitter.com", Logo(asset: "SocialX", color: .black)),
+        ("instagram.com", Logo(asset: "SocialInstagram", color: Color(red: 0.894, green: 0.251, blue: 0.373))),
+        ("facebook.com", Logo(asset: "SocialFacebook", color: Color(red: 0.031, green: 0.4, blue: 1))),
+        ("linkedin.com", Logo(asset: "SocialLinkedIn", color: Color(red: 0.039, green: 0.4, blue: 0.761))),
+        ("tiktok.com", Logo(asset: "SocialTikTok", color: .black)),
+        ("threads.net", Logo(asset: "SocialThreads", color: .black)),
+        ("threads.com", Logo(asset: "SocialThreads", color: .black)),
+    ]
+
+    /// The network's logo for a link to it (any subdomain: www., m., mobile.), or nil.
+    static func logo(for url: URL) -> Logo? {
+        guard let host = url.host?.lowercased() else { return nil }
+        return byDomain.first(where: { host == $0.domain || host.hasSuffix("." + $0.domain) })?.logo
     }
 }

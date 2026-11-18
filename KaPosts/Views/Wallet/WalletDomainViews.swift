@@ -17,10 +17,8 @@ struct KNSDomainsListView: View {
     /// Success needs no message: the star moves to the new primary as soon as the write lands.
     @Binding var setPrimaryError: KNSSetPrimaryMessage?
     let onSetPrimary: (KNSDomain) -> Void
-    let onInscribeComplete: (KNSDomainInscribeResult) -> Void
     let onTransferComplete: (KNSDomainTransferResult) -> Void
     let onRefresh: () async -> Void
-    var onCustomizeProfile: ((KNSDomain) -> Void)? = nil
 
     @ObservedObject private var nameServices = NameServicesClient.shared
     @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
@@ -49,8 +47,8 @@ struct KNSDomainsListView: View {
         .task(id: walletAddress) {
             await nameServices.refresh(for: walletAddress)
         }
-        // Counts again whenever the registry moves (a name inscribed, bought, transferred or
-        // lapsed behind a card shows on this screen the moment you come back to it).
+        // Counts again whenever the registry moves (a name that changed hands or lapsed behind a
+        // card shows on this screen the moment you come back to it).
         .task(id: kachatRegistry.revision) {
             await refreshKachatCount()
         }
@@ -155,9 +153,9 @@ struct KNSDomainsListView: View {
     }
 
     /// "Get a .kas domain at knsdomains.org" - the pinned button under each outside service's
-    /// tab, opening that service's own site. KaChat creates only its own `.kachat` names; the
-    /// other services' names are registered with them. Same glass capsule with a teal outline
-    /// the in-app Inscribe button had (not the accent fill: the cards above are accent-filled).
+    /// tab, opening that service's own site: KaPost registers no names, the other services'
+    /// names are registered with them. A glass capsule with a teal outline (not the accent fill:
+    /// the cards above are accent-filled).
     @ViewBuilder
     private func getNameButton(_ tld: NameServiceTLD) -> some View {
         if let url = tld.websiteURL, let site = tld.websiteName {
@@ -197,8 +195,7 @@ struct KNSDomainsListView: View {
                                 settingPrimaryDomainId: settingPrimaryDomainId,
                                 setPrimaryError: setPrimaryError?.isError == true ? setPrimaryError?.text : nil,
                                 onSetPrimary: onSetPrimary,
-                                onTransferComplete: onTransferComplete,
-                                onCustomizeProfile: onCustomizeProfile
+                                onTransferComplete: onTransferComplete
                             )
                         } label: {
                             KNSDomainCard(domain: domain, isPrimary: isPrimary)
@@ -310,10 +307,6 @@ struct KNSDomainDetailView: View {
     var setPrimaryError: String? = nil
     let onSetPrimary: (KNSDomain) -> Void
     let onTransferComplete: (KNSDomainTransferResult) -> Void
-    /// Opens the full profile editor for this domain (avatar, banner, bio, links). KaChat does
-    /// not SHOW .kas profiles anymore - .kachat profiles take priority - but a .kas domain's own
-    /// profile can still be customized here. Nil where the host offers no editor.
-    var onCustomizeProfile: ((KNSDomain) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var showSendSheet = false
@@ -340,24 +333,6 @@ struct KNSDomainDetailView: View {
                             .truncationMode(.middle)
                     }
                     .padding(16)
-
-                    if let onCustomizeProfile {
-                        Divider().padding(.leading, 16)
-                        Button {
-                            onCustomizeProfile(domain)
-                        } label: {
-                            HStack {
-                                Text("Customize Profile")
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                Image(systemName: "person.crop.circle")
-                                    .foregroundColor(.accentColor)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(16)
-                    }
 
                     if isPrimary {
                         Divider().padding(.leading, 16)
@@ -472,7 +447,6 @@ struct KNSDomainSendView: View {
     var spendingAddressIndex: Int? = nil
     let onComplete: (KNSDomainTransferResult) -> Void
 
-    @EnvironmentObject var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
 
     @State private var addressInput = ""
@@ -905,28 +879,19 @@ struct KNSDomainSendView: View {
     }
 }
 
-/// Transaction history for the chatting (identity) address, reached from its dropdown in
-/// Profile. Same pattern as ManageAddressesView's SpendingAddressTransactionHistoryView: tapping
-/// a transaction opens it directly on whichever block explorer is selected in Settings >
-/// Connection > Kaspa Explorer, rather than showing an in-app detail screen.
-/// Full-featured detail screen for the wallet's own chatting (identity) address — field-for-field
-/// the same screen as ManageAddressesView's SpendingAddressTransactionHistoryView (balance,
-/// Transaction History/UTXOs tabs, Compound UTXOs, Export private key, Explorer, Receive/Send),
-/// just address-based instead of index-based. Reached from the Profile screen's Chatting Address
-/// section's "Manage Address" row.
+/// Profile > Help (the question mark at the Profile's top left): replays the Welcome Guide.
 struct ProfileHelpView: View {
-    let onKNSSetupGuide: () -> Void
-
+    let onWelcomeGuide: () -> Void
 
     var body: some View {
         List {
             Section {
                 helpRow(
-                    icon: "person.text.rectangle",
-                    title: ".kachat Names Guide",
-                    subtitle: "Claim a .kachat name, make it your name, and keep it."
+                    icon: "sparkles",
+                    title: "Welcome Guide",
+                    subtitle: "The first-run tour: your feed, rooms, tips and your address."
                 ) {
-                    onKNSSetupGuide()
+                    onWelcomeGuide()
                 }
             }
         }
@@ -996,15 +961,11 @@ struct WalletAccountSections: View {
     @State private var kachatOwnedCount = 0
     @State private var settingPrimaryDomainId: String?
     @State private var setPrimaryMessage: KNSSetPrimaryMessage?
-    @State private var showKachatSetupGuide = false
 
     var body: some View {
         VStack(spacing: 16) {
             addressSquares
             yourDomainsRow
-            linkRow(title: "Help", icon: "questionmark.circle") {
-                ProfileHelpView(onKNSSetupGuide: { showKachatSetupGuide = true })
-            }
         }
         .task(id: wallet.publicAddress) {
             let kns = KNSService.shared
@@ -1017,9 +978,6 @@ struct WalletAccountSections: View {
                 knsDomains = info.allDomains
                 knsPrimaryDomain = info.primaryDomain
             }
-        }
-        .sheet(isPresented: $showKachatSetupGuide) {
-            KachatSetupGuideView { showKachatSetupGuide = false }
         }
     }
 
@@ -1093,11 +1051,6 @@ struct WalletAccountSections: View {
                     DeviceAuth.authenticate(reason: AppLocalization.string("Confirm setting your primary domain")) {
                         Task { await setPrimaryDomain(domain) }
                     }
-                },
-                onInscribeComplete: { result in
-                    Haptics.success()
-                    onMessage(localizedFormat("Inscribe submitted for %@.", result.domain))
-                    Task { await refreshKNSDomains(for: walletAddress, force: true) }
                 },
                 onTransferComplete: { result in
                     Haptics.success()
@@ -1181,7 +1134,7 @@ struct WalletAccountSections: View {
         await kachatRegistry.dropLapsed(from: names) { kachatOwnedCount = $0.count }
     }
 
-    /// `force` after a write (inscribe, transfer, set primary): the indexer has to be asked again.
+    /// `force` after a write (transfer, set primary): the indexer has to be asked again.
     private func refreshKNSDomains(for address: String, force: Bool) async {
         guard let info = await KNSService.shared.fetchInfo(for: address, force: force) else { return }
         knsDomains = info.allDomains

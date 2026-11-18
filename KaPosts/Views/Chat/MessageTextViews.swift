@@ -48,7 +48,7 @@ struct KaChatInternalLinkCardView: View {
     private var iconName: String {
         switch match.link {
         case .kaPost: return "text.bubble"                // as KaChat's KaPost card
-        case .publicChatRoom: return "dot.radiowaves.left.and.right" // AppTab.publicChats.icon
+        case .publicChatRoom: return "dot.radiowaves.left.and.right"
         case .profile: return "person.crop.circle"
         case .paymentRequest: return "arrow.up.circle"
         }
@@ -521,41 +521,6 @@ struct FullMessageTextView: View {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Bounds how many thumbnail decodes run at once. Without this, opening a chat with many
-/// photos - especially jumping straight to the bottom of a long history, as happens when a
-/// lock-screen notification tap cold-launches straight into a photo-heavy chat - fired one
-/// `Task.detached(priority: .userInitiated)` base64-decode-and-downsample per bubble that
-/// appeared, all at once. That can saturate every core while the main thread is also trying to
-/// lay out/scroll the message list and, on a cold launch, while wallet unlock/node pool init are
-/// already competing for the same CPU time - reading as a multi-second freeze rather than a
-/// smooth scroll-in. Capping concurrency keeps CPU headroom free for that other work; each
-/// decode is still cheap individually (ImageIO's downsampled thumbnail path), so a small cap
-/// doesn't meaningfully slow down how soon photos appear.
-private actor ImageDecodeLimiter {
-    static let shared = ImageDecodeLimiter()
-
-    private var availablePermits = 3
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        if availablePermits > 0 {
-            availablePermits -= 1
-            return
-        }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
-    }
-
-    func signal() {
-        if waiters.isEmpty {
-            availablePermits += 1
-        } else {
-            waiters.removeFirst().resume()
         }
     }
 }

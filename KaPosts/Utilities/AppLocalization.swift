@@ -3,7 +3,7 @@ import Foundation
 /// Resolves strings/locale against the in-app selected `AppSettings.language` (Settings >
 /// Customization > Language) rather than the device's system language. `Text(LocalizedStringKey)`
 /// already gets this for free via `.environment(\.locale, AppLocalization.locale)`, set once at
-/// the root in `KaChatApp.swift` - SwiftUI re-resolves every `Text` against that environment
+/// the root in `KaPostsApp.swift` - SwiftUI re-resolves every `Text` against that environment
 /// value's matching `.lproj` bundle live, no relaunch needed (mirrors how Kaspium's Flutter
 /// `MaterialApp(locale: ...)` re-resolves its whole widget tree the instant its language
 /// `StateNotifier` changes - Flutter's `intl`-backed localization is just reactive widget-tree

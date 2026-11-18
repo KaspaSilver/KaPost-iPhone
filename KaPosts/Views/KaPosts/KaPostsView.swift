@@ -123,13 +123,13 @@ func kaPostsPrefetchTriggerId<T: Identifiable>(_ items: [T]) -> T.ID? {
 }
 
 /// KaPosts main screen: three feeds along the top (Following | Feed | Popular, ranked by likes,
-/// reposts, dislikes and comments), and a floating create-post button mirroring the chat list's
-/// create-chat button.
+/// reposts, dislikes and comments), and a floating create-post button.
 ///
-/// Deliberately has NO NavigationStack of its own - same reason as the old coming-soon page:
-/// when shown in the Chats slot (full-dock re-tap mode) it overlays ChatListView, which already
-/// hosts one; nesting two wrapped navigation controllers in a tab slot is a UIKit crash. The
-/// standalone dock-tab case wraps it at the call site (MainTabView.tabContent).
+/// Deliberately has NO NavigationStack around the whole view: the Feed tab wraps it in one at
+/// the call site (`KaPostsPageView`), and the Profile tab's `KaPostsView(rootMode: .myProfile)`
+/// gets its stack from `myProfileSheet`. Nesting two wrapped navigation controllers in a dock
+/// tab is a UIKit crash.
+
 /// KaPosts on a network with no KaPost indexer (testnet, for now).
 private struct KaPostsUnavailableView: View {
     var body: some View {
@@ -320,14 +320,25 @@ struct KaPostsView: View {
     @State private var isCheckingForNewPosts = false
     /// Set when the pill is tapped; the feed's ScrollViewReader consumes it to jump to the top.
     @State private var pendingScrollToFeedTop = false
-    @State private var showComposer = false
-    /// Text handed back by Undo, for the composer that is about to open. Cleared as soon as it
-    /// has been consumed, so a later ordinary Compose tap opens empty.
+    /// The new-post composer on screen, carrying what it opens with. An item rather than a flag,
+    /// so the text travels with the presentation itself: a flag's cover read the text from
+    /// whichever body pass built it, and a link's post could open empty.
+    struct NewPostComposerItem: Identifiable {
+        let id = UUID()
+        /// A link's post, or what Undo handed back.
+        var text = ""
+        /// Thread segments handed back by Undo, stacked above the text.
+        var segments: [String] = []
+        /// An undone poll's options.
+        var pollOptions: [String] = []
+    }
+    @State private var newPostComposer: NewPostComposerItem?
+    private var showComposer: Bool { newPostComposer != nil }
+    /// Text handed back by Undo, for the quote or reply composer about to open. Cleared as soon
+    /// as it has been consumed, so a later ordinary Reply or Quote opens empty.
     @State private var restoredComposerText: String?
-    /// Thread segments handed back by Undo, stacked above the restored text.
-    @State private var restoredComposerSegments: [String] = []
-    /// An undone poll's options, handed to the reopened composer.
-    @State private var restoredPollOptions: [String] = []
+    /// Profile > Help > Welcome Guide (a replay, with Skip).
+    @State private var showWelcomeGuideReplay = false
     /// Poster being tipped via the quick-tip sheet (amount + direct send).
     @State private var tipTarget: TipTarget?
     /// Zero-balance interception for the new-post entry point: with a CONFIRMED 0 KAS chatting
@@ -718,7 +729,7 @@ struct KaPostsView: View {
         // status bar with rounded top corners, which clipped the connection dot in its own
         // header into a crescent and left the composer looking like a panel over the feed
         // rather than the screen it is.
-        .fullScreenCover(isPresented: $showComposer, onDismiss: { composerClosed() }) {
+        .fullScreenCover(item: $newPostComposer, onDismiss: { composerClosed() }) { item in
             KaPostComposerView(
                 onPost: { text in
                     schedulePost(text: text)
@@ -732,9 +743,9 @@ struct KaPostsView: View {
                 onSchedulePost: { text, date in
                     scheduleDelayedPost(text: text, at: date)
                 },
-                initialText: restoredComposerText ?? "",
-                initialThreadSegments: restoredComposerSegments,
-                initialPollOptions: restoredPollOptions
+                initialText: item.text,
+                initialThreadSegments: item.segments,
+                initialPollOptions: item.pollOptions
             )
         }
         .sheet(item: $tipTarget) { target in
@@ -840,6 +851,9 @@ struct KaPostsView: View {
             } else {
                 await checkForNewPosts()
             }
+            // Popular ranked in the background (on Wi-Fi, or with Popular open), so switching to
+            // it shows the finished order.
+            Task { await deepenPopularRanking() }
             scheduledStore.reloadForCurrentWallet()
             await scheduledStore.sendDueLocally()
             await scheduledStore.refreshFromServer()
@@ -888,13 +902,20 @@ struct KaPostsView: View {
             guard feedSource(for: tab) != loadedFeedSource || remotePosts.isEmpty else {
                 // Already have the feed; Popular still needs its window deepened before its
                 // order is meaningful.
-                if tab == .popular { Task { await deepenPopularRanking() } }
+                Task { await deepenPopularRanking() }
                 return
             }
             Task {
                 await loadFeed()
-                if tab == .popular { await deepenPopularRanking() }
+                await deepenPopularRanking()
             }
+        }
+        // Popular's sweep pages only while the feed is on screen in the Feed tab
+        // (`popularSweepAllowed`, checked between passes).
+        .onAppear { popularSweep.feedOnScreen = true }
+        .onDisappear { popularSweep.feedOnScreen = false }
+        .onReceive(KaPostsDockRouter.shared.$selectedTab) { tab in
+            popularSweep.dockOnFeed = tab == .feed
         }
         .onReceive(KaPostsLiveChainFeed.shared.$posts) { mergeLivePosts($0) }
         .onReceive(KaPostsLiveChainFeed.shared.$amendments) { applyLiveAmendments($0) }
@@ -913,6 +934,8 @@ struct KaPostsView: View {
             // are decorated per requesterPubkey), so drop the lot and start over. The epoch
             // bumps make any in-flight page drop its result instead of appending.
             PostTranslationService.shared.reset()
+            // Popular's frozen order (and every memoised feed) belonged to the old account.
+            feedMemos.reset()
             // Held 5-second actions were the old account's: dropped, with their Undo toast.
             scheduler.cancelAll()
             undoToasts = []
@@ -1118,9 +1141,11 @@ struct KaPostsView: View {
                         .frame(height: 0)
                         .id(Self.feedTopAnchor)
                     ForEach(visiblePosts) { post in
+                        let identity = posterIdentity(post.posterAddress)
                         KaPostCellView(
                             post: post,
-                            displayName: posterDisplayName(post.posterAddress),
+                            displayName: identity.name,
+                            posterHasKachatName: identity.hasKachatName,
                             avatarURLString: knsService.profileCache[post.posterAddress]?.avatarURL,
                             isFollowing: followStore.isFollowing(post.posterAddress),
                             commentCount: commentCount(of: post),
@@ -1385,35 +1410,83 @@ struct KaPostsView: View {
 
     /// Pulls the global feed until Popular has `popularRankingDepth` posts to rank, so its top
     /// row is the most popular post in a real window of history rather than the most popular of
-    /// whatever page one happened to contain. Runs only while Popular is on screen: switching
-    /// tabs or accounts bumps the page epoch, which this checks between passes.
+    /// whatever page one happened to contain. Runs with Popular open, and in the background on
+    /// Feed (both show the global feed) only on an unmetered network (`popularSweepAllowed`), so
+    /// on Wi-Fi Popular is usually ranked before it is opened. Following, leaving the Feed tab or
+    /// this screen, a refresh or an account change stops it (checked between passes); a refresh
+    /// starts it again. Feed is newest first, so the older pages this adds land below the reader.
     ///
     /// At most once per `FeedLoadGates.staleAfter` unless the feed was refreshed from page one
     /// in between: a heavily-filtered stretch of history never reaches the ranking depth, and
     /// without this every return to the tab re-spent the full request budget chasing it.
     private func deepenPopularRanking() async {
-        guard selectedFeed == .popular, !isDeepeningPopular else { return }
+        guard popularSweepAllowed else { return }
+        // One sweep at a time. A call that lands while one runs (a refresh mid-sweep) is kept
+        // and run once that sweep stops, since the refresh threw away the window it was ranking.
+        guard !isDeepeningPopular else {
+            popularSweep.rearmed = true
+            return
+        }
         guard !FeedLoadGates.isFresh(loadGates.popularSweptAt) else { return }
         loadGates.popularSweptAt = Date()
         isDeepeningPopular = true
-        defer { isDeepeningPopular = false }
+        let cutShort = await runPopularSweep()
+        isDeepeningPopular = false
+        // Stopped because the reader left (or Feed went onto cellular): the window isn't done,
+        // so the next visit carries on from the pages already in, without waiting out the gate.
+        if cutShort { loadGates.popularSweptAt = nil }
+        if popularSweep.rearmed {
+            popularSweep.rearmed = false
+            await deepenPopularRanking()
+        }
+    }
+
+    /// The sweep's passes. True when it stopped because it may no longer page
+    /// (`popularSweepAllowed`) rather than because it finished.
+    private func runPopularSweep() async -> Bool {
         var passes = 0
         while remotePosts.count < Self.popularRankingDepth, passes < Self.popularSweepMaxPasses {
             passes += 1
             let epoch = feedPage.epoch
-            guard selectedFeed == .popular,
-                  feedPage.hasMore,
+            // Following, the Feed tab or this screen left, or Feed on cellular: stop paging.
+            guard popularSweepAllowed else { return true }
+            guard feedPage.hasMore,
                   !feedPage.stalled,
-                  feedPage.errorMessage == nil else { return }
+                  feedPage.errorMessage == nil else { return false }
             let before = remotePosts.count
             await loadFeedPage(reset: false, maxRequests: Self.popularSweepRequestsPerPass)
             // Tab switch, refresh or account change landed mid-pass - that load's result was
             // already discarded, and continuing would page a feed the user has left.
-            guard feedPage.epoch == epoch else { return }
+            guard feedPage.epoch == epoch else { return false }
             // A pass that added nothing (all filtered out, or an error) would loop forever.
-            guard remotePosts.count > before else { return }
+            guard remotePosts.count > before else { return false }
         }
+        return false
     }
+
+    /// Whether Popular's sweep may page now: only while this feed is on screen in the Feed tab
+    /// and showing the global feed. With Popular open it always may; on Feed (the same posts,
+    /// ranked in the background) only on Wi-Fi or another unmetered path, so opening Feed on
+    /// cellular or in Low Data Mode never spends a sweep.
+    private var popularSweepAllowed: Bool {
+        guard rootMode == .feed,
+              popularSweep.feedOnScreen,
+              popularSweep.dockOnFeed,
+              feedSource(for: selectedFeed) == .global else { return false }
+        return selectedFeed == .popular || !NetworkEpochMonitor.shared.isExpensivePath
+    }
+
+    /// Where the Popular sweep stands. A reference box like `FeedLoadGates`: written from the
+    /// appear/disappear and dock callbacks and read by the sweep between passes, never by body.
+    private final class PopularSweepState {
+        /// The feed view is on screen (between its onAppear and onDisappear).
+        var feedOnScreen = false
+        /// The dock has the Feed tab selected.
+        var dockOnFeed = true
+        /// A sweep was asked for while one ran; it runs once that one stops.
+        var rearmed = false
+    }
+    @State private var popularSweep = PopularSweepState()
 
     /// The last `posts(for:)` answer with the inputs it was computed from.
     ///
@@ -1434,6 +1507,12 @@ struct KaPostsView: View {
         var blocked: Set<String> = []
         var following: Set<String> = []
         var result: [DraftPost] = []
+        /// Popular's row order while its sweep runs (post ids, as on screen when it started).
+        /// Only the ORDER is frozen: each pass maps these ids through the current posts, so a
+        /// like or delete acts on the live post and a muted or blocked author still leaves.
+        var frozenOrder: [UUID]?
+        /// Whether `result` was laid out in `frozenOrder`.
+        var resultFrozen = false
     }
     private final class FeedMemos {
         private var byTab: [FeedTab: FeedMemo] = [:]
@@ -1442,6 +1521,10 @@ struct KaPostsView: View {
             let memo = FeedMemo()
             byTab[tab] = memo
             return memo
+        }
+        /// Account switch: the old account's rows and Popular's frozen order go.
+        func reset() {
+            byTab = [:]
         }
     }
     @State private var feedMemos = FeedMemos()
@@ -1453,7 +1536,19 @@ struct KaPostsView: View {
     /// re-filtered and - on Popular - re-sorted the whole window each time.
     private func posts(for tab: FeedTab) -> [DraftPost] {
         let memo = feedMemos.memo(for: tab)
+        // While the sweep pulls older pages, Popular keeps the order it has: re-ranking after each
+        // page reshuffled the list under the reader, which looked like the tab reloading. It
+        // re-ranks once when the sweep ends (`isDeepeningPopular` going false redraws it). Only
+        // the order is kept, never the posts themselves (see `FeedMemo.frozenOrder`).
+        if tab == .popular, isDeepeningPopular {
+            if memo.frozenOrder == nil, memo.filled, !memo.result.isEmpty {
+                memo.frozenOrder = memo.result.map(\.id)
+            }
+        } else {
+            memo.frozenOrder = nil
+        }
         if memo.filled,
+           memo.resultFrozen == (memo.frozenOrder != nil),
            memo.posts == posts,
            memo.remotePosts == remotePosts,
            memo.muted == moderationStore.muted,
@@ -1461,7 +1556,11 @@ struct KaPostsView: View {
            tab != .following || memo.following == followStore.following {
             return memo.result
         }
-        let result = computePosts(for: tab)
+        var result = computePosts(for: tab)
+        if let order = memo.frozenOrder {
+            result = Self.inFrozenOrder(order, result)
+        }
+        memo.resultFrozen = memo.frozenOrder != nil
         memo.filled = true
         memo.posts = posts
         memo.remotePosts = remotePosts
@@ -1519,6 +1618,23 @@ struct KaPostsView: View {
     private struct ScoredPost {
         let score: Int
         let post: DraftPost
+    }
+
+    /// `current` (the live, filtered posts) laid out in `order`: posts that have gone (deleted,
+    /// muted, blocked) drop out, and any not in `order` follow at the end in their own order.
+    private static func inFrozenOrder(_ order: [UUID], _ current: [DraftPost]) -> [DraftPost] {
+        let byId = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var placed = Set<UUID>()
+        var result: [DraftPost] = []
+        result.reserveCapacity(current.count)
+        for id in order {
+            guard let post = byId[id], placed.insert(id).inserted else { continue }
+            result.append(post)
+        }
+        for post in current where !placed.contains(post.id) {
+            result.append(post)
+        }
+        return result
     }
 
     /// Interleaves session posts into the remote feed, newest first. The remote list keeps the
@@ -1608,7 +1724,7 @@ struct KaPostsView: View {
             if walletManager.hasConfirmedZeroChattingBalance {
                 showComposeFundingSheet = true
             } else {
-                showComposer = true
+                newPostComposer = NewPostComposerItem()
             }
         } label: {
             Image(systemName: "square.and.pencil")
@@ -1704,6 +1820,11 @@ struct KaPostsView: View {
             }
             feedPage.apply(batch)
             resolveIdentities(for: batch.items)
+            // A pull-to-refresh or the pill's gap refresh on the global feed: Popular's sweep
+            // starts again (after the one running, if any - see `deepenPopularRanking`).
+            if reset, source == .global {
+                Task { await deepenPopularRanking() }
+            }
         } catch {
             guard feedPage.epoch == epoch else { return }
             feedPage.isLoading = false
@@ -2075,7 +2196,9 @@ struct KaPostsView: View {
 
     /// Poster name resolution, in priority order: the alias YOU set for a saved contact wins,
     /// else the poster's KNS primary domain, else a shortened Kaspa address.
-    private func posterDisplayName(_ address: String) -> String {
+    /// `kachatName`: the poster's `.kachat` name when the caller already looked it up
+    /// (`posterIdentity`); left out, it is looked up here.
+    private func posterDisplayName(_ address: String, kachatName: String?? = nil) -> String {
         guard !address.isEmpty else { return "Unknown" }
         // A domain shows with its .kas from every source - the KNS lookup and an alias that was
         // auto-set to the KNS primary ("name.kas") alike.
@@ -2083,12 +2206,20 @@ struct KaPostsView: View {
             return Self.displayKasName(assigned)
         }
         // Who they are: their .kachat name (a .kas domain isn't identity since 5.2).
-        if let name = KachatLive.identityName(address) { return name }
+        let kachat: String? = kachatName ?? KachatLive.identityName(address)
+        if let name = kachat { return name }
         if !KachatNamesService.isEnabled, let domain = knsService.profileCache[address]?.domainName,
            !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return Self.displayKasName(domain)
         }
         return Contact.generateDefaultAlias(from: address)
+    }
+
+    /// A row's poster, looked up once: the name shown and whether they have a `.kachat` name
+    /// (which decides whether their links preview).
+    private func posterIdentity(_ address: String) -> (name: String, hasKachatName: Bool) {
+        let kachatName = address.isEmpty ? nil : KachatLive.identityName(address)
+        return (posterDisplayName(address, kachatName: .some(kachatName)), kachatName != nil)
     }
 
     /// A name as it is SHOWN: a KNS domain keeps its ".kas" everywhere in the app (the suffix
@@ -2219,14 +2350,19 @@ struct KaPostsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(toastCapsule)
+                .padding(.horizontal, 16)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let toast = actionToast {
                 HStack(spacing: 8) {
                     Image(systemName: toast.isFailure ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                         .foregroundColor(toast.isFailure ? .red : .green)
-                    Text(toast.message)
+                    // Localized where it is made (`showActionToast`'s callers).
+                    Text(verbatim: toast.message)
                         .font(.footnote.weight(.semibold))
+                        // a long message wraps inside the screen instead of running off it
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     if !toast.txId.isEmpty {
                         Button {
                             if let url = settingsViewModel.settings.kaspaExplorer.txURL(for: toast.txId) {
@@ -2244,16 +2380,20 @@ struct KaPostsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(toastCapsule)
+                .padding(.horizontal, 16)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .padding(.bottom, 84)
     }
 
+    /// A capsule on one line; a rounded card when the message wraps, so a two-line toast's
+    /// ends aren't cut off by a capsule's half circles.
     private var toastCapsule: some View {
-        Capsule()
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        return shape
             .fill(.regularMaterial)
-            .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+            .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 0.8))
             .shadow(color: Color.black.opacity(0.15), radius: 10, x: 0, y: 4)
     }
 
@@ -2301,7 +2441,7 @@ struct KaPostsView: View {
             threadReplyComposerTarget = nil
             profileReplyComposerTarget = nil
             menuReplyComposerTarget = nil
-            showComposer = false
+            newPostComposer = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + (hadSheetUp ? 0.4 : 0)) {
                 kaPostsPresent { profileTarget = PosterProfileTarget(address: address, pubkey: nil) }
             }
@@ -2883,12 +3023,18 @@ struct KaPostsView: View {
     private func deletePost(_ post: DraftPost) {
         guard let remoteId = post.remoteId, post.deliveryStatus == .sent, !post.pendingDeletion,
               post.posterAddress == WalletManager.shared.currentWallet?.publicAddress else { return }
+        // A second Delete while this post's delete is going out would send a second one.
+        let holds = KaPostsActionHolds.shared
+        guard !holds.isDeleting(remoteId) else { return }
         mutatePost(id: post.id) { $0.pendingDeletion = true }
         let key = "delete:\(post.id)"
         showUndoToast(key: key, postId: post.id, label: "Deleting post")
         scheduler.schedule(key: key) {
             clearUndoToast(key: key)
+            guard !holds.isDeleting(remoteId) else { return }
+            holds.beginDelete(remoteId)
             Task {
+                defer { holds.endDelete(remoteId) }
                 do {
                     _ = try await KaPostsAPIClient.shared.submitDelete(postId: remoteId)
                     withAnimation(.easeInOut(duration: 0.25)) {
@@ -3076,8 +3222,6 @@ struct KaPostsView: View {
 
     private func clearRestoredComposerDraft() {
         restoredComposerText = nil
-        restoredComposerSegments = []
-        restoredPollOptions = []
     }
 
     private func composerClosed() {
@@ -3089,20 +3233,26 @@ struct KaPostsView: View {
     /// after the tab switch has landed: a cover presented from a tab still coming on screen is
     /// dropped. A composer already open keeps what is being written, and the link's post opens
     /// when it closes. A confirmed 0 KAS gets the funding card, as the compose button does.
+    ///
+    /// The link stays pending until its composer is actually presented: the checks run again
+    /// after the delay, since a composer opened meanwhile would otherwise swallow it, and a
+    /// second call in that time finds it taken.
     private func presentPendingComposeLink() {
-        guard let text = KaPostsDeepLink.pendingComposeText,
-              !showComposer, quoteComposerTarget == nil, replyComposerTarget == nil else { return }
-        KaPostsDeepLink.pendingComposeText = nil
+        guard composerFreeForLink, KaPostsDeepLink.pendingComposeText != nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard composerFreeForLink, let text = KaPostsDeepLink.pendingComposeText else { return }
+            KaPostsDeepLink.pendingComposeText = nil
             if walletManager.hasConfirmedZeroChattingBalance {
                 showComposeFundingSheet = true
             } else {
-                restoredComposerText = text
-                restoredComposerSegments = []
-                restoredPollOptions = []
-                showComposer = true
+                newPostComposer = NewPostComposerItem(text: text)
             }
         }
+    }
+
+    /// No composer of this view's is up: a link's post can open (or waits for `composerClosed`).
+    private var composerFreeForLink: Bool {
+        newPostComposer == nil && quoteComposerTarget == nil && replyComposerTarget == nil
     }
 
     /// Puts an undone draft back where it was written, so the five seconds are a chance to fix
@@ -3119,8 +3269,6 @@ struct KaPostsView: View {
             guard let parent = toast.replyParent else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 restoredComposerText = text
-                restoredComposerSegments = []
-                restoredPollOptions = []
                 switch composerLevelOnScreen {
                 case .feed: replyComposerTarget = parent
                 case .profile: profileReplyComposerTarget = parent
@@ -3133,10 +3281,7 @@ struct KaPostsView: View {
         if toast.key.hasPrefix("poll:") {
             // an undone poll reopens the composer as the poll: question and options
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                restoredComposerText = text
-                restoredComposerSegments = []
-                restoredPollOptions = toast.pollOptions ?? []
-                showComposer = true
+                newPostComposer = NewPostComposerItem(text: text, pollOptions: toast.pollOptions ?? [])
             }
             return
         }
@@ -3146,9 +3291,8 @@ struct KaPostsView: View {
         let segments = toast.draftSegments ?? []
         let stacked = segments.count > 1 ? Array(segments.dropLast()) : []
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            restoredComposerText = text
-            restoredComposerSegments = stacked
             if let target = toast.quoteTarget {
+                restoredComposerText = text
                 switch composerLevelOnScreen {
                 case .feed: quoteComposerTarget = target
                 case .profile: profileQuoteComposerTarget = target
@@ -3156,7 +3300,7 @@ struct KaPostsView: View {
                 case .menu: menuQuoteComposerTarget = target
                 }
             } else {
-                showComposer = true
+                newPostComposer = NewPostComposerItem(text: text, segments: stacked)
             }
         }
     }
@@ -3177,11 +3321,12 @@ struct KaPostsView: View {
     }
 
     /// Shows the on-chain confirmation toast for ~4s with a tappable explorer link, or what
-    /// didn't go through.
+    /// didn't go through for ~6s (a reason takes longer to read). `message` is shown as given,
+    /// so callers pass it already localized.
     private func showActionToast(_ message: String, txId: String, isFailure: Bool = false) {
         let toast = ActionToast(message: message, txId: txId, isFailure: isFailure)
         withAnimation(.easeOut(duration: 0.25)) { actionToast = toast }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (isFailure ? 6 : 4)) {
             if actionToast?.id == toast.id {
                 withAnimation(.easeIn(duration: 0.25)) { actionToast = nil }
             }
@@ -3191,6 +3336,8 @@ struct KaPostsView: View {
     /// Both directions are held for 5s behind the in-icon countdown (tap it to cancel):
     /// liking submits an upvote, un-liking submits the fork's `unvote` counter-action.
     private func toggleLike(_ post: DraftPost) {
+        // A vote on this post is still going out: a second one now could land before it.
+        guard !KaPostsActionHolds.shared.isVoting(post.remoteId) else { return }
         if post.likedByMe, post.remoteId == nil {
             performLike(post)   // local-only unlike, instant
             return
@@ -3206,18 +3353,25 @@ struct KaPostsView: View {
     }
 
     private func performLike(_ post: DraftPost) {
+        let holds = KaPostsActionHolds.shared
+        // Held through a cool-down, and another vote went out meanwhile: this one would race it.
+        if post.remoteId != nil, post.posterPubkey != nil, holds.isVoting(post.remoteId) { return }
         if !post.likedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
+            holds.beginVote(remoteId)
             Task {
+                defer { holds.endVote(remoteId) }
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: true, authorPubkey: author)
-                    showActionToast("Like posted to the network", txId: txId)
+                    showActionToast(AppLocalization.string("Like posted to the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your like")) }
             }
         } else if post.likedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
+            holds.beginVote(remoteId)
             Task {
+                defer { holds.endVote(remoteId) }
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
-                    showActionToast("Like removed on the network", txId: txId)
+                    showActionToast(AppLocalization.string("Like removed on the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your like")) }
             }
         }
@@ -3251,11 +3405,18 @@ struct KaPostsView: View {
                 target.dislikedByMe = before.dislikedByMe
             }
         }
-        showActionToast("\(message): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+        showActionToast(Self.failureText(message, error), txId: "", isFailure: true)
+    }
+
+    /// "<what failed>: <why>", for a failure toast. `action` is already localized; the colon and
+    /// its spacing come from the translation (`%@: %@`).
+    private static func failureText(_ action: String, _ error: Error) -> String {
+        String(format: AppLocalization.string("%@: %@"), action, UserFacingError.message(for: error))
     }
 
     /// Same 5s countdown-then-submit as toggleLike, un-dislike included.
     private func toggleDislike(_ post: DraftPost) {
+        guard !KaPostsActionHolds.shared.isVoting(post.remoteId) else { return }
         if post.dislikedByMe, post.remoteId == nil {
             performDislike(post)
             return
@@ -3269,18 +3430,24 @@ struct KaPostsView: View {
     }
 
     private func performDislike(_ post: DraftPost) {
+        let holds = KaPostsActionHolds.shared
+        if post.remoteId != nil, post.posterPubkey != nil, holds.isVoting(post.remoteId) { return }
         if !post.dislikedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
+            holds.beginVote(remoteId)
             Task {
+                defer { holds.endVote(remoteId) }
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: false, authorPubkey: author)
-                    showActionToast("Dislike posted to the network", txId: txId)
+                    showActionToast(AppLocalization.string("Dislike posted to the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your dislike")) }
             }
         } else if post.dislikedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
+            holds.beginVote(remoteId)
             Task {
+                defer { holds.endVote(remoteId) }
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
-                    showActionToast("Dislike removed on the network", txId: txId)
+                    showActionToast(AppLocalization.string("Dislike removed on the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your dislike")) }
             }
         }
@@ -3438,7 +3605,7 @@ struct KaPostsView: View {
         Task {
             do {
                 let txId = try await KaPostsAPIClient.shared.submitQuote(text: text, contentId: contentId, quotedAuthorPubkey: author)
-                showActionToast(text?.isEmpty == false ? "Quote posted to the network" : "Repost posted to the network", txId: txId)
+                showActionToast(AppLocalization.string(text?.isEmpty == false ? "Quote posted to the network" : "Repost posted to the network"), txId: txId)
                 if let localQuoteId {
                     heldPosts.release(localQuoteId)
                     mutatePost(id: localQuoteId) {
@@ -3461,7 +3628,7 @@ struct KaPostsView: View {
                 }
                 // A failed quote says so on its own card, with Retry.
                 if localQuoteId == nil {
-                    showActionToast("\(AppLocalization.string("Couldn't repost")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+                    showActionToast(Self.failureText(AppLocalization.string("Couldn't repost"), error), txId: "", isFailure: true)
                 }
             }
         }
@@ -3479,7 +3646,7 @@ struct KaPostsView: View {
         Task {
             do {
                 let txId = try await KaPostsAPIClient.shared.submitUnquote(contentId: contentId)
-                showActionToast("Repost removed on the network", txId: txId)
+                showActionToast(AppLocalization.string("Repost removed on the network"), txId: txId)
             } catch {
                 AppLog.log("[KaPosts] Unquote submit failed: %@", error.localizedDescription)
                 guard !(error is SendOutcomeUnknownError) else { return }
@@ -3490,7 +3657,7 @@ struct KaPostsView: View {
                         post.reposts += 1
                     }
                 }
-                showActionToast("\(AppLocalization.string("Couldn't remove your repost")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+                showActionToast(Self.failureText(AppLocalization.string("Couldn't remove your repost"), error), txId: "", isFailure: true)
             }
         }
     }
@@ -3604,13 +3771,13 @@ struct KaPostsView: View {
             followStore.setAwaitingKey(address, following: false)
             do {
                 let txId = try await KaPostsAPIClient.shared.submitFollow(willFollow, followedPubkey: pubkey)
-                showActionToast(willFollow ? "Follow posted to the network" : "Unfollow posted to the network", txId: txId)
+                showActionToast(AppLocalization.string(willFollow ? "Follow posted to the network" : "Unfollow posted to the network"), txId: txId)
             } catch {
                 AppLog.log("[KaPosts] Follow submit failed: %@", error.localizedDescription)
                 guard !(error is SendOutcomeUnknownError) else { return }
                 if followStore.isFollowing(address) == willFollow { followStore.toggle(address) }
                 let action = AppLocalization.string(willFollow ? "Couldn't follow" : "Couldn't unfollow")
-                showActionToast("\(action): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+                showActionToast(Self.failureText(action, error), txId: "", isFailure: true)
             }
         }
     }
@@ -3690,7 +3857,7 @@ struct KaPostsView: View {
             await openResolvedPost(post)
             return
         }
-        showActionToast("Post not found - it may be older than the current feed", txId: txId)
+        showActionToast(AppLocalization.string("Post not found - it may be older than the current feed"), txId: txId)
     }
 
     /// Your profile's pages are recent, and from after your last post, delete or edit.
@@ -3884,9 +4051,11 @@ struct KaPostsView: View {
         truncates: Bool = false,
         onOpen: (() -> Void)? = nil
     ) -> some View {
-        KaPostCellView(
+        let identity = posterIdentity(item.posterAddress)
+        return KaPostCellView(
             post: item,
-            displayName: posterDisplayName(item.posterAddress),
+            displayName: identity.name,
+            posterHasKachatName: identity.hasKachatName,
             avatarURLString: knsService.profileCache[item.posterAddress]?.avatarURL,
             isFollowing: followStore.isFollowing(item.posterAddress),
             commentCount: commentCount(of: item),
@@ -4447,6 +4616,20 @@ struct KaPostsView: View {
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
+            // Help at the top left (the dot is top right): replays the Welcome Guide.
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    NavigationLink {
+                        ProfileHelpView(onWelcomeGuide: { showWelcomeGuideReplay = true })
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                    }
+                    .accessibilityLabel(Text("Help"))
+                }
+            }
+            .fullScreenCover(isPresented: $showWelcomeGuideReplay) {
+                WelcomeGuideView(onFinished: { showWelcomeGuideReplay = false })
+            }
             .sheet(isPresented: $showLogoutConfirmation) {
                 ConfirmActionSheet(
                     title: "Log Out",
@@ -4795,11 +4978,14 @@ struct KaPostsView: View {
             let currency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
             let fiatText = formatFiatAmount(fiat, currency: currency)
             guard let price = KaspaPriceService.shared.freshPrice(in: currency), price > 0 else {
-                tipTarget = TipTarget(address: address, tip: target,
-                                      failure: "Tip didn't send: there is no recent KAS price to turn \(fiatText) into KAS.")
+                instantTipFailed(String(format: AppLocalization.string("Tip didn't send: there is no recent KAS price to turn %@ into KAS."), fiatText))
                 return
             }
             let sompi = UInt64((fiat / price * 100_000_000).rounded())
+            guard sompi >= KaPostsSettingsView.instantTipMinimumSompi else {
+                instantTipTooSmall()
+                return
+            }
             guard sompi <= KaPostsSettingsView.instantTipLimitSompi else {
                 tipTarget = TipTarget(address: address, tip: target, failure: KaPostsSettingsView.instantTipLimitNotice)
                 return
@@ -4809,6 +4995,10 @@ struct KaPostsView: View {
         }
         if let amount = settings.kaPostsDefaultTipSompi, amount > 0 {
             // Instant tips skip Face ID, so they stay small: a bigger one goes through the swipe.
+            guard amount >= KaPostsSettingsView.instantTipMinimumSompi else {
+                instantTipTooSmall()
+                return
+            }
             guard amount <= KaPostsSettingsView.instantTipLimitSompi else {
                 tipTarget = TipTarget(address: address, tip: target, failure: KaPostsSettingsView.instantTipLimitNotice)
                 return
@@ -4822,15 +5012,14 @@ struct KaPostsView: View {
     /// KaPosts > Settings > "Send a default tip instantly": the configured amount goes out at
     /// once, through exactly the path the tip sheet's Send uses - same contact creation, same
     /// funding source and destination rules as a payment in that person's chat. A failure
-    /// falls back to the amount screen so the tip can still be sent by hand. `fiatText` is the
+    /// shows in a toast (`instantTipFailed`), never the tip screen. `fiatText` is the
     /// currency amount the KAS was worked out from, for a tip set in a currency.
     private func sendDefaultTip(_ amountSompi: UInt64, to address: String, tip: KaPostTip?, postId: UUID, fiatText: String? = nil) {
         // Tips From (KaPosts > Settings): another address than the chatting one tips privately,
         // so the payment names no post and nothing is counted. One that can't be read must not
         // quietly become a public tip from the chatting address: the person picks instead.
         guard let source = SendSource.defaultTip() else {
-            tipTarget = TipTarget(address: address, tip: tip,
-                                  failure: AppLocalization.string("Your Tips From address can't be read right now, so nothing was sent. Choose where this tip comes from."))
+            instantTipFailed(AppLocalization.string("Tip didn't send: your Tips From address can't be read right now."))
             return
         }
         let recipient: Contact
@@ -4839,7 +5028,7 @@ struct KaPostsView: View {
         } else if let created = try? ContactsManager.shared.addContact(address: address, alias: "", isAutoAdded: true) {
             recipient = created
         } else {
-            tipTarget = TipTarget(address: address, tip: tip)
+            instantTipFailed(AppLocalization.string("Tip didn't send. Try again in a moment."))
             return
         }
         _ = ChatService.shared.getOrCreateConversation(for: recipient)
@@ -4853,6 +5042,7 @@ struct KaPostsView: View {
         let countsOnPost = sourceIndex == nil
         let holds = KaPostsTipHolds.shared
         holds.beginSending(postId)
+        let startedAt = Date()
         Task {
             do {
                 let txId = try await ChatService.shared.sendPayment(
@@ -4861,8 +5051,10 @@ struct KaPostsView: View {
                 )
                 guard let txId else {
                     // Put off until the coins confirm: the retry timer sends it. Not sent yet, so
-                    // not counted, and no amount screen, which would invite a second tip.
-                    holds.hold(postId, message: SendDeferredError.message)
+                    // not counted, and no amount screen, which would invite a second tip. Held
+                    // until that payment goes out or fails, since its retries have no limit.
+                    holds.holdDeferred(postId, contactAddress: recipient.address, since: startedAt,
+                                       message: SendDeferredError.message)
                     showActionToast(SendDeferredError.message, txId: "")
                     return
                 }
@@ -4870,7 +5062,8 @@ struct KaPostsView: View {
                 Haptics.success()
                 if countsOnPost { countTip(tip) }
                 let amountText = fiatText.map { "\(kasText) \(KaspaUnit.symbol) (\($0))" } ?? "\(kasText) \(KaspaUnit.symbol)"
-                showActionToast(countsOnPost ? "Tipped \(amountText) to \(name)" : "Tipped \(amountText) to \(name) privately", txId: txId)
+                showActionToast(String(format: AppLocalization.string(countsOnPost ? "Tipped %@ to %@" : "Tipped %@ to %@ privately"),
+                                       amountText, name), txId: txId)
             } catch is SendOutcomeUnknownError {
                 // It may have gone through: no amount screen, which would invite a second tip.
                 AppLog.log("[KaPosts] Instant tip outcome unknown")
@@ -4879,11 +5072,24 @@ struct KaPostsView: View {
             } catch {
                 holds.finish(postId)
                 AppLog.log("[KaPosts] Instant tip failed: %@", error.localizedDescription)
-                // the amount screen opens with the reason, so the tip can be sent by hand
-                tipTarget = TipTarget(address: address, tip: tip,
-                                      failure: "Tip didn't send: \(UserFacingError.message(for: error))")
+                instantTipFailed(String(format: AppLocalization.string("Tip didn't send: %@"),
+                                        UserFacingError.message(for: error)))
             }
         }
+    }
+
+    /// An instant (default) tip that didn't go out says why in a toast, on the post: the tip
+    /// screen, whose From and amount steps the default already settled, stays shut.
+    private func instantTipFailed(_ message: String) {
+        Haptics.error()
+        showActionToast(message, txId: "", isFailure: true)
+    }
+
+    /// The default tip is under what the network takes (`instantTipMinimumSompi`), say from an
+    /// older build that saved any amount.
+    private func instantTipTooSmall() {
+        instantTipFailed(String(format: AppLocalization.string("Tip didn't send: the smallest tip the network takes is %@. Change your default tip in Settings > KaPost."),
+                                KaPostsSettingsView.instantTipMinimumText))
     }
 
     /// A tip just sent counts on its post at once; the indexer's own count takes over on the
@@ -4988,9 +5194,11 @@ struct KaPostsView: View {
 
     /// Cell wiring shared by both of MY profile's pager pages.
     private func myProfileCell(_ post: DraftPost) -> some View {
-        KaPostCellView(
+        let identity = posterIdentity(post.posterAddress)
+        return KaPostCellView(
             post: post,
-            displayName: posterDisplayName(post.posterAddress),
+            displayName: identity.name,
+            posterHasKachatName: identity.hasKachatName,
             avatarURLString: knsService.profileCache[post.posterAddress]?.avatarURL,
             isFollowing: followStore.isFollowing(post.posterAddress),
             commentCount: commentCount(of: post),
@@ -5025,9 +5233,11 @@ struct KaPostsView: View {
 
     /// Cell wiring shared by both of a tapped POSTER profile's pager pages.
     private func posterProfileCell(_ post: DraftPost) -> some View {
-        KaPostCellView(
+        let identity = posterIdentity(post.posterAddress)
+        return KaPostCellView(
             post: post,
-            displayName: posterDisplayName(post.posterAddress),
+            displayName: identity.name,
+            posterHasKachatName: identity.hasKachatName,
             avatarURLString: knsService.profileCache[post.posterAddress]?.avatarURL,
             isFollowing: followStore.isFollowing(post.posterAddress),
             commentCount: commentCount(of: post),
@@ -5158,12 +5368,12 @@ struct KaPostsView: View {
                         current.myVote = option
                         target.poll = current
                     }
-                    showActionToast("Vote posted to the network", txId: txId)
+                    showActionToast(AppLocalization.string("Vote posted to the network"), txId: txId)
                 } catch {
                     // The card only moves once the vote has gone out, so there's nothing to undo.
                     AppLog.log("[KaPosts] Poll vote failed: %@", error.localizedDescription)
                     guard !(error is SendOutcomeUnknownError) else { return }
-                    showActionToast("\(AppLocalization.string("Couldn't post your vote")): \(UserFacingError.message(for: error))", txId: "", isFailure: true)
+                    showActionToast(Self.failureText(AppLocalization.string("Couldn't post your vote"), error), txId: "", isFailure: true)
                 }
             }
         }
@@ -5216,10 +5426,10 @@ struct KaPostsView: View {
                 let entry = await scheduledStore.add(built, text: text, notBefore: date)
                 let when = DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
                 // No explorer link: the transaction is not on chain until its time comes.
-                showActionToast(entry.onServer ? "Scheduled for \(when)" : "Scheduled for \(when) - sends from this phone", txId: "")
+                showActionToast(String(format: AppLocalization.string(entry.onServer ? "Scheduled for %@" : "Scheduled for %@ - sends from this phone"), when), txId: "")
             } catch {
                 AppLog.log("[KaPosts] Scheduling failed: %@", error.localizedDescription)
-                showActionToast("Couldn't schedule: \(error.localizedDescription)", txId: "")
+                showActionToast(Self.failureText(AppLocalization.string("Couldn't schedule"), error), txId: "", isFailure: true)
             }
         }
     }
@@ -5413,9 +5623,11 @@ struct KaPostsView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(bookmarkedPosts) { post in
+                                let identity = posterIdentity(post.posterAddress)
                                 KaPostCellView(
                                     post: post,
-                                    displayName: posterDisplayName(post.posterAddress),
+                                    displayName: identity.name,
+                                    posterHasKachatName: identity.hasKachatName,
                                     avatarURLString: knsService.profileCache[post.posterAddress]?.avatarURL,
                                     isFollowing: followStore.isFollowing(post.posterAddress),
                                     commentCount: commentCount(of: post),
@@ -5850,6 +6062,9 @@ private struct KaPostCellView: View {
     // stop an update from the cell's own observed objects - on every name or picture landing.
     let post: KaPostsView.DraftPost
     let displayName: String
+    /// The poster has a `.kachat` name: only then do the post's links preview
+    /// (`KaPostLinkPreviewPolicy`, owner's call, 2026-11-18). Passed in, like the name.
+    let posterHasKachatName: Bool
     let avatarURLString: String?
     let isFollowing: Bool
     let commentCount: Int
@@ -5880,9 +6095,6 @@ private struct KaPostCellView: View {
     var onRetry: (() -> Void)? = nil
     var onViewEngagement: (() -> Void)? = nil
     let onFollowToggle: () -> Void
-    /// The bell beside Follow: notified when this author posts (`KaPostsWatchStore`). Rarely
-    /// changes, so observing it here costs nothing.
-    @ObservedObject private var watchStore = KaPostsWatchStore.shared
     /// What the bell just did, said for a moment under the name.
     @State private var bellNote: String?
     /// The post whose tippers are listed (the count's sheet).
@@ -5930,66 +6142,81 @@ private struct KaPostCellView: View {
         translation.displayText(for: translationKey, original: post.text)
     }
 
-    /// A payment request link in the post: drawn as a card (`KaPostPaymentRequestCard`) under
-    /// the text, and left out of the text itself.
-    private var paymentRequestLink: (request: PaymentRequest, matchedText: String)? {
-        guard let match = KaChatInternalLink.match(in: displayedText),
-              case .paymentRequest(let request) = match.link else { return nil }
-        return (request, match.matchedText)
+    /// What the post's text turns into on screen: the links drawn as cards, the text left
+    /// around them, and how much of it is laid out. Worked out once per body pass
+    /// (`textParts`): each piece used to be its own computed property, and body read them over a
+    /// dozen times, re-running the link matching on up to 25,000 characters each time.
+    private struct TextParts {
+        /// A payment request link in the post: drawn as a card (`KaPostPaymentRequestCard`)
+        /// under the text, and left out of the text itself.
+        let paymentLink: (request: PaymentRequest, matchedText: String)?
+        /// A KaPlay bot challenge link: drawn as a card (`KaPostBotChallengeCard`) under the
+        /// text, and left out of the text itself.
+        let challengeLink: KaPlayBotChallenge.Match?
+        /// A link to KaChat's own site: drawn as a preview card under the text, and left out of
+        /// the text itself. Only for a poster with a `.kachat` name: anyone else's links never
+        /// preview.
+        let siteLink: KaChatSiteLink.Match?
+        /// The post's first web link, drawn as its preview card in place of the link's text when
+        /// the poster has a `.kachat` name and the site is on the allowed list
+        /// (`KaPostLinkPreviewPolicy`); a preview that can't load shows the link itself. Links
+        /// KaPost draws its own way (posts, rooms, payment requests) and KaChat's site are left
+        /// to their own cards.
+        let webLink: KaPostLinkPreviewPolicy.Match?
+        /// Long enough that the feed folds it behind "Show more" (X-style ~280-char threshold,
+        /// or a wall of newlines). Measured on what is actually rendered, so a translation that
+        /// runs longer than its original still folds.
+        let isLong: Bool
+        /// True while a long post is folded to eight lines.
+        let isFolded: Bool
+        /// What the Text lays out. A folded cell shows eight lines at most, yet it was handed
+        /// the whole post - up to 25 000 characters of attributed text, detected, styled and
+        /// laid out per cell, per body pass. Eight lines never need more than the first few
+        /// hundred characters, so a folded cell renders a prefix and the full text only once
+        /// expanded.
+        let layoutText: String
     }
 
-    /// A KaPlay bot challenge link in the post: drawn as a card (`KaPostBotChallengeCard`) under
-    /// the text, and left out of the text itself.
-    private var botChallengeLink: KaPlayBotChallenge.Match? {
-        KaPlayBotChallenge.match(in: displayedText)
-    }
-
-    /// A link to KaChat's own site in the post: drawn as a preview card under the text, and left
-    /// out of the text itself.
-    private var siteLink: KaChatSiteLink.Match? {
-        KaChatSiteLink.match(in: displayedText)
-    }
-
-    /// The text as drawn: the post without the links drawn as cards.
-    private var bodyText: String {
-        let paymentLink = paymentRequestLink
-        let challengeLink = botChallengeLink
-        let siteLink = siteLink
-        guard paymentLink != nil || challengeLink != nil || siteLink != nil else { return displayedText }
-        var text = displayedText
-        if let paymentLink { text = text.replacingOccurrences(of: paymentLink.matchedText, with: "") }
-        if let challengeLink { text = text.replacingOccurrences(of: challengeLink.matchedText, with: "") }
-        // Only this one: the same text can also be the start of a longer link to another page.
-        if let siteLink, let range = text.range(of: siteLink.matchedText) { text.removeSubrange(range) }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Long enough that the feed should fold it behind "Show more" (X-style ~280-char threshold,
-    /// or a wall of newlines). Measured on what is actually rendered, so a translation that runs
-    /// longer than its original still folds.
-    private var isLongPost: Bool {
-        // The newline count only decides short posts, so it is only counted for them.
-        bodyText.count > 280 || bodyText.prefix(281).filter { $0 == "\n" }.count >= 8
-    }
-
-    /// True while a long post is folded to eight lines.
-    private var isFolded: Bool {
-        truncatesLongText && isLongPost && !isExpandedInline
-    }
-
-    /// What the Text lays out. A folded cell shows eight lines at most, yet it was handed the
-    /// whole post - up to 25 000 characters of attributed text, detected, styled and laid out
-    /// per cell, per body pass. Eight lines never need more than the first few hundred
-    /// characters, so a folded cell renders a prefix and the full text only once expanded.
-    private var layoutText: String {
-        let text = bodyText
-        guard isFolded, text.count > 1_200 else { return text }
-        var cut = String(text.prefix(1_200))
-        // Never cut a markdown span or a link mid-token: fall back to the last whitespace.
-        if let space = cut.lastIndex(where: { $0.isWhitespace }), cut.distance(from: cut.startIndex, to: space) > 600 {
-            cut = String(cut[..<space])
+    private var textParts: TextParts {
+        let displayed = displayedText
+        var paymentLink: (request: PaymentRequest, matchedText: String)?
+        if let match = KaChatInternalLink.match(in: displayed), case .paymentRequest(let request) = match.link {
+            paymentLink = (request, match.matchedText)
         }
-        return cut + "\u{2026}"
+        let challengeLink = KaPlayBotChallenge.match(in: displayed)
+        let siteLink = posterHasKachatName ? KaChatSiteLink.match(in: displayed) : nil
+        var webLink: KaPostLinkPreviewPolicy.Match?
+        if posterHasKachatName, siteLink == nil,
+           let link = KaPostLinkPreviewPolicy.firstLink(in: displayed),
+           KaChatInternalLink.parse(link.url) == nil,
+           KaPostLinkPreviewPolicy.allows(link.url) {
+            webLink = link
+        }
+        // The text as drawn: the post without the links drawn as cards.
+        var text = displayed
+        if paymentLink != nil || challengeLink != nil || siteLink != nil || webLink != nil {
+            if let paymentLink { text = text.replacingOccurrences(of: paymentLink.matchedText, with: "") }
+            if let challengeLink { text = text.replacingOccurrences(of: challengeLink.matchedText, with: "") }
+            // Only this one: the same text can also be the start of a longer link to another page.
+            if let siteLink, let range = text.range(of: siteLink.matchedText) { text.removeSubrange(range) }
+            // the previewed link: its card stands in for it
+            if let webLink, let range = text.range(of: webLink.matchedText) { text.removeSubrange(range) }
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // The newline count only decides short posts, so it is only counted for them.
+        let isLong = text.count > 280 || text.prefix(281).filter { $0 == "\n" }.count >= 8
+        let isFolded = truncatesLongText && isLong && !isExpandedInline
+        var layout = text
+        if isFolded, text.count > 1_200 {
+            var cut = String(text.prefix(1_200))
+            // Never cut a markdown span or a link mid-token: fall back to the last whitespace.
+            if let space = cut.lastIndex(where: { $0.isWhitespace }), cut.distance(from: cut.startIndex, to: space) > 600 {
+                cut = String(cut[..<space])
+            }
+            layout = cut + "\u{2026}"
+        }
+        return TextParts(paymentLink: paymentLink, challengeLink: challengeLink, siteLink: siteLink,
+                         webLink: webLink, isLong: isLong, isFolded: isFolded, layoutText: layout)
     }
 
     /// Post Activity works for EVERYONE's posts (the KaChat indexer fork serves
@@ -6120,28 +6347,28 @@ private struct KaPostCellView: View {
     @State private var showOverflowSheet = false
     /// A report that couldn't go to Mail; non-nil shows `contentReportFallback`.
     @State private var unsentReport: ContentReport?
-    /// Observed for the 5s undo countdown pills. Deadlines only change when the user arms or
-    /// cancels an action - never while scrolling - so this subscription is cheap.
+    /// The 5s undo countdown pills observe the scheduler in their own views
+    /// (`KaPostCountdownSwitch`), so a countdown starting on one post doesn't redraw every
+    /// visible cell; the bell (`KaPostBellButton`) and a hidden quote (`KaPostHiddenAuthorSwitch`)
+    /// do the same for the watch and moderation stores.
     ///
     /// KNSService is deliberately NOT observed here (it used to be): its whole profileCache
     /// dictionary is one @Published property, so every avatar/profile arriving anywhere
     /// re-rendered EVERY visible cell. The parent observes it once and passes the resolved
     /// name/avatar strings in; combined with the Equatable conformance below, a cache update
     /// re-renders only the cells whose own inputs actually changed.
-    @ObservedObject private var scheduler = KaPostsActionScheduler.shared
-    /// Observed for the Translate affordance. Like `scheduler`, this only changes when the user
-    /// acts (taps Translate, or flips back to the original) - never while scrolling.
+    ///
+    /// Observed for the Translate affordance and the translated text itself (which the whole
+    /// body lays out, so it stays here). It only changes when the user acts (taps Translate, or
+    /// flips back to the original) or a translation lands - never while scrolling.
     @ObservedObject private var translation = PostTranslationService.shared
-    /// Observed for quote cards: the feeds drop a hidden person's own posts, but someone else
-    /// quoting them put their text and avatar back in front of you. Changes only on a mute or block.
-    @ObservedObject private var moderation = KaPostsModerationStore.shared
 
     /// Your own post: no follow affordance (you can't follow yourself).
     /// The bell: on says "you'll be notified when they post", off says it won't - for a moment,
     /// right under the name, wherever the post is showing.
     private func toggleBell() {
         Haptics.impact(.light)
-        let on = watchStore.toggle(post.posterAddress)
+        let on = KaPostsWatchStore.shared.toggle(post.posterAddress)
         let note = on
             ? String(format: AppLocalization.string("You'll now be notified when %@ posts."), displayName)
             : String(format: AppLocalization.string("You won't be notified about %@'s posts anymore."), displayName)
@@ -6180,6 +6407,7 @@ private struct KaPostCellView: View {
     @State private var burstOpacity: Double = 0
 
     var body: some View {
+        let parts = textParts
         HStack(alignment: .top, spacing: 12) {
             // KNS avatar (falls back to initials) - tapping it opens the poster's profile.
             Button(action: onOpenProfile) {
@@ -6210,15 +6438,7 @@ private struct KaPostCellView: View {
                         }
                         .buttonStyle(.plain)
                         // Notified when this person posts - its own switch, beside Follow.
-                        Button {
-                            toggleBell()
-                        } label: {
-                            Image(systemName: watchStore.isWatching(post.posterAddress) ? "bell.fill" : "bell")
-                                .font(.caption.weight(.bold))
-                                .foregroundColor(.accentColor)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Text(watchStore.isWatching(post.posterAddress) ? "Stop post notifications" : "Notify me when they post"))
+                        KaPostBellButton(address: post.posterAddress, onTap: toggleBell)
                     }
                     Spacer()
                     // X-style overflow menu, as a half sheet. Mute: their content disappears
@@ -6268,8 +6488,8 @@ private struct KaPostCellView: View {
                 // Text-only posts, but URLs are TAPPABLE: tapping a link opens a Copy/Open
                 // option menu (never auto-opens - OpenURLAction intercepts). No previews, no
                 // photos, no markdown - just detected links styled accent+underline.
-                if !layoutText.isEmpty {
-                    Text(Self.linkified(layoutText))
+                if !parts.layoutText.isEmpty {
+                    Text(Self.linkified(parts.layoutText))
                         .font(isFocused ? .title3 : .body)
                         .foregroundColor(.primary)
                         .tint(.accentColor)
@@ -6289,7 +6509,7 @@ private struct KaPostCellView: View {
                             tappedLinkURL = url
                             return .handled
                         })
-                        .lineLimit(isFolded ? 8 : nil)
+                        .lineLimit(parts.isFolded ? 8 : nil)
                         .fixedSize(horizontal: false, vertical: true)
                         // Selectable ONLY in the post you tapped into. Anywhere else the long press
                         // and the drag belong to opening the post, and a card that both navigates and
@@ -6312,7 +6532,7 @@ private struct KaPostCellView: View {
                             )
                         }
                 }
-                if truncatesLongText && isLongPost {
+                if truncatesLongText && parts.isLong {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { isExpandedInline.toggle() }
                     } label: {
@@ -6323,17 +6543,24 @@ private struct KaPostCellView: View {
                     .buttonStyle(.plain)
                 }
                 // A payment request link: a card with a Pay button, not the link's text.
-                if let link = paymentRequestLink {
+                if let link = parts.paymentLink {
                     KaPostPaymentRequestCard(request: link.request)
                         .padding(.top, 4)
                 }
                 // A KaPlay bot challenge: a card with a Challenge button, not the link's text.
-                if let link = botChallengeLink {
+                if let link = parts.challengeLink {
                     KaPostBotChallengeCard(challenge: link.challenge)
                         .padding(.top, 4)
                 }
                 // A link to KaChat's site: its preview, or the link itself if that can't load.
-                if let link = siteLink {
+                if let link = parts.siteLink {
+                    LinkPreviewCardView(url: link.url, txId: post.remoteId ?? "", fallbackText: link.matchedText,
+                                        loadingHeight: 190)
+                        .padding(.top, 4)
+                }
+                // Another site's link from a poster with a .kachat name: its preview in place of
+                // the link, or the link itself if the preview can't load.
+                if let link = parts.webLink {
                     LinkPreviewCardView(url: link.url, txId: post.remoteId ?? "", fallbackText: link.matchedText,
                                         loadingHeight: 190)
                         .padding(.top, 4)
@@ -6347,28 +6574,18 @@ private struct KaPostCellView: View {
 
                 // X-style quote embed: the quoted post in a bordered mini card under the
                 // text - tappable through to the quoted post's own thread.
-                if let quoted = post.quoted, moderation.isHidden(quoted.posterAddress) {
-                    // Someone you muted or blocked: no text, name or avatar, and no way in.
-                    Text("You muted or blocked this account")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                        )
-                        .padding(.top, 2)
-                } else if let quoted = post.quoted {
-                    if let onOpenQuoted, let quotedId = quoted.remoteId {
-                        Button {
-                            onOpenQuoted(quotedId)
-                        } label: {
+                if let quoted = post.quoted {
+                    KaPostHiddenAuthorSwitch(address: quoted.posterAddress) {
+                        if let onOpenQuoted, let quotedId = quoted.remoteId {
+                            Button {
+                                onOpenQuoted(quotedId)
+                            } label: {
+                                quotedEmbedCard(quoted)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             quotedEmbedCard(quoted)
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        quotedEmbedCard(quoted)
                     }
                 }
 
@@ -6427,20 +6644,22 @@ private struct KaPostCellView: View {
                 .disabled(post.remoteId == nil)
                 .opacity(post.remoteId == nil ? 0.4 : 1)
             }
-            likeButton
-            if scheduler.deadlines["dislike:\(post.id)"] != nil {
-                countdownButton(key: "dislike:\(post.id)")
-            } else {
+            KaPostCountdownSwitch(key: "like:\(post.id)") {
+                likeButton
+            } countdown: {
+                countdownButton(key: "like:\(post.id)")
+            }
+            KaPostCountdownSwitch(key: "dislike:\(post.id)") {
                 engagementButton(
                     icon: post.dislikedByMe ? "hand.thumbsdown.fill" : "hand.thumbsdown",
                     count: post.dislikes,
                     tint: post.dislikedByMe ? .orange : .secondary,
                     action: onDislike
                 )
+            } countdown: {
+                countdownButton(key: "dislike:\(post.id)")
             }
-            if scheduler.deadlines["repost:\(post.id)"] != nil {
-                countdownButton(key: "repost:\(post.id)")
-            } else {
+            KaPostCountdownSwitch(key: "repost:\(post.id)") {
                 engagementButton(
                     icon: "arrow.2.squarepath",
                     count: post.reposts,
@@ -6466,6 +6685,8 @@ private struct KaPostCellView: View {
                         isReposted: post.repostedByMe
                     )
                 }
+            } countdown: {
+                countdownButton(key: "repost:\(post.id)")
             }
             // Bookmark sits with the other actions (no inline count - saved posts live in
             // the side menu's Bookmarks screen).
@@ -6594,11 +6815,9 @@ private struct KaPostCellView: View {
         }
     }
 
+    /// The heart. Its countdown, while a like is held, is `KaPostCountdownSwitch`'s.
     private var likeButton: some View {
-        if scheduler.deadlines["like:\(post.id)"] != nil {
-            return AnyView(countdownButton(key: "like:\(post.id)"))
-        }
-        return AnyView(Button {
+        Button {
             Haptics.impact(.light)
             onLike()
         } label: {
@@ -6628,7 +6847,7 @@ private struct KaPostCellView: View {
             .fixedSize()
             .foregroundColor(post.likedByMe ? .red : .secondary)
         }
-        .buttonStyle(.plain))
+        .buttonStyle(.plain)
     }
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -7065,6 +7284,87 @@ private struct KaPostCellView: View {
     }
 }
 
+/// Shows `countdown` while the action under `key` is held in its cool-down
+/// (`KaPostsActionScheduler`), `idle` otherwise. Its own view so that only it observes the
+/// scheduler: a cell observing it was redrawn, past `.equatable()`, whenever any post's
+/// countdown started or ended.
+private struct KaPostCountdownSwitch<Idle: View, Countdown: View>: View {
+    let key: String
+    let idle: () -> Idle
+    let countdown: () -> Countdown
+    @ObservedObject private var scheduler = KaPostsActionScheduler.shared
+
+    init(key: String, @ViewBuilder idle: @escaping () -> Idle, @ViewBuilder countdown: @escaping () -> Countdown) {
+        self.key = key
+        self.idle = idle
+        self.countdown = countdown
+    }
+
+    var body: some View {
+        if scheduler.deadlines[key] != nil {
+            countdown()
+        } else {
+            idle()
+        }
+    }
+}
+
+/// The bell beside Follow: notified when this author posts (`KaPostsWatchStore`). Observes the
+/// store itself, so a bell tapped on one post doesn't redraw every visible cell.
+private struct KaPostBellButton: View {
+    let address: String
+    let onTap: () -> Void
+    @ObservedObject private var watchStore = KaPostsWatchStore.shared
+
+    init(address: String, onTap: @escaping () -> Void) {
+        self.address = address
+        self.onTap = onTap
+    }
+
+    var body: some View {
+        let watching = watchStore.isWatching(address)
+        Button(action: onTap) {
+            Image(systemName: watching ? "bell.fill" : "bell")
+                .font(.caption.weight(.bold))
+                .foregroundColor(.accentColor)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(watching ? "Stop post notifications" : "Notify me when they post"))
+    }
+}
+
+/// A quote card's author check: the feeds drop a hidden person's own posts, but someone else
+/// quoting them put their text and avatar back in front of you. Observes the moderation store
+/// itself (it changes only on a mute or block), so the cell around it doesn't have to.
+private struct KaPostHiddenAuthorSwitch<Shown: View>: View {
+    let address: String
+    let shown: () -> Shown
+    @ObservedObject private var moderation = KaPostsModerationStore.shared
+
+    init(address: String, @ViewBuilder shown: @escaping () -> Shown) {
+        self.address = address
+        self.shown = shown
+    }
+
+    var body: some View {
+        if moderation.isHidden(address) {
+            // Someone you muted or blocked: no text, name or avatar, and no way in.
+            Text("You muted or blocked this account")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+                .padding(.top, 2)
+        } else {
+            shown()
+        }
+    }
+}
+
 /// Content-based render skipping (used via `.equatable()` at the list call sites): the cell's
 /// ~15 closure parameters defeat SwiftUI's automatic field comparison, so without this every
 /// parent body pass re-ran every visible cell's body. Compare the fields that actually change
@@ -7073,10 +7373,12 @@ extension KaPostCellView: Equatable {
     static func == (lhs: KaPostCellView, rhs: KaPostCellView) -> Bool {
         lhs.post == rhs.post &&
         lhs.displayName == rhs.displayName &&
+        lhs.posterHasKachatName == rhs.posterHasKachatName &&
         lhs.avatarURLString == rhs.avatarURLString &&
         lhs.isFollowing == rhs.isFollowing &&
         lhs.commentCount == rhs.commentCount &&
         lhs.truncatesLongText == rhs.truncatesLongText &&
+        lhs.isFocused == rhs.isFocused &&
         lhs.quotedDisplayName == rhs.quotedDisplayName &&
         lhs.quotedAvatarURLString == rhs.quotedAvatarURLString &&
         (lhs.onComment == nil) == (rhs.onComment == nil) &&
@@ -7100,11 +7402,22 @@ extension KaPostCellView: Equatable {
 final class KaPostsTipHolds {
     static let shared = KaPostsTipHolds()
 
-    /// A tip put off or with no answer can still land for at least this long.
+    /// A tip with no answer can still land for at least this long.
     private static let holdSeconds: TimeInterval = 2 * 60
+    /// A put-off tip whose waiting payment couldn't be found in its chat: held this long instead.
+    private static let deferredFallbackSeconds: TimeInterval = 30 * 60
+
+    private enum Hold {
+        case timed(until: Date, message: String)
+        /// Put off until its coins confirm (`sendPayment` returned nil). ChatService retries it
+        /// with no limit, so the post stays held while that payment is still waiting in the chat:
+        /// it ends once the payment goes out or fails, or the account changes (which drops the
+        /// retry).
+        case deferred(paymentId: UUID, contactAddress: String, owner: String?, message: String)
+    }
 
     private var sending: Set<UUID> = []
-    private var held: [UUID: (until: Date, message: String)] = [:]
+    private var held: [UUID: Hold] = [:]
 
     private init() {}
 
@@ -7113,11 +7426,20 @@ final class KaPostsTipHolds {
     /// What to say while `postId` is still held; nil once it can be tipped again.
     func heldMessage(_ postId: UUID) -> String? {
         guard let entry = held[postId] else { return nil }
-        guard entry.until > Date() else {
-            held[postId] = nil
-            return nil
+        switch entry {
+        case let .timed(until, message):
+            guard until > Date() else {
+                held[postId] = nil
+                return nil
+            }
+            return message
+        case let .deferred(paymentId, contactAddress, owner, message):
+            guard Self.isStillWaiting(paymentId: paymentId, contactAddress: contactAddress, owner: owner) else {
+                held[postId] = nil
+                return nil
+            }
+            return message
         }
-        return entry.message
     }
 
     func beginSending(_ postId: UUID) { sending.insert(postId) }
@@ -7128,8 +7450,68 @@ final class KaPostsTipHolds {
     /// Not settled: the post stays blocked after the send has returned.
     func hold(_ postId: UUID, message: String) {
         sending.remove(postId)
-        held[postId] = (until: Date().addingTimeInterval(Self.holdSeconds), message: message)
+        held[postId] = .timed(until: Date().addingTimeInterval(Self.holdSeconds), message: message)
     }
+
+    /// Put off until its coins confirm: held while the waiting payment (the newest pending
+    /// payment to `contactAddress` made since `since`) may still go out.
+    func holdDeferred(_ postId: UUID, contactAddress: String, since: Date, message: String) {
+        sending.remove(postId)
+        if let paymentId = Self.waitingPaymentId(contactAddress: contactAddress, since: since) {
+            held[postId] = .deferred(paymentId: paymentId, contactAddress: contactAddress,
+                                     owner: WalletManager.shared.currentWallet?.publicAddress, message: message)
+        } else {
+            held[postId] = .timed(until: Date().addingTimeInterval(Self.deferredFallbackSeconds), message: message)
+        }
+    }
+
+    private static func waitingPaymentId(contactAddress: String, since: Date) -> UUID? {
+        let threshold = since.addingTimeInterval(-1)
+        let messages = ChatService.shared.conversations
+            .first { $0.contact.address == contactAddress }?.messages ?? []
+        return messages
+            .filter { $0.isOutgoing && $0.messageType == .payment && $0.deliveryStatus == .pending && $0.timestamp >= threshold }
+            .max { $0.timestamp < $1.timestamp }?
+            .id
+    }
+
+    private static func isStillWaiting(paymentId: UUID, contactAddress: String, owner: String?) -> Bool {
+        // ChatService drops a waiting payment's retry once another account is active.
+        guard WalletManager.shared.currentWallet?.publicAddress == owner else { return false }
+        guard let message = ChatService.shared.conversations
+            .first(where: { $0.contact.address == contactAddress })?
+            .messages.first(where: { $0.id == paymentId }) else { return false }
+        return message.deliveryStatus == .pending
+    }
+}
+
+/// Posts with a like, dislike or delete on its way to the network, by the post's transaction id
+/// (a local card and its feed twin are one post on chain). Shared like `KaPostsTipHolds`: with
+/// no cool-down, a second tap while the first is still submitting would send a second
+/// transaction, and votes landing out of order could leave the opposite of what was tapped
+/// last. While one is out, more taps on that post are ignored.
+@MainActor
+final class KaPostsActionHolds {
+    static let shared = KaPostsActionHolds()
+
+    private var voting: Set<String> = []
+    private var deleting: Set<String> = []
+
+    private init() {}
+
+    func isVoting(_ remoteId: String?) -> Bool {
+        guard let remoteId else { return false }
+        return voting.contains(remoteId)
+    }
+    func beginVote(_ remoteId: String) { voting.insert(remoteId) }
+    func endVote(_ remoteId: String) { voting.remove(remoteId) }
+
+    func isDeleting(_ remoteId: String?) -> Bool {
+        guard let remoteId else { return false }
+        return deleting.contains(remoteId)
+    }
+    func beginDelete(_ remoteId: String) { deleting.insert(remoteId) }
+    func endDelete(_ remoteId: String) { deleting.remove(remoteId) }
 }
 
 /// Quick tip sheet: the same steps as every send (SendKaspaComponents), without To since the
@@ -8800,7 +9182,7 @@ final class KaPostsActionScheduler: ObservableObject {
         tasks[key] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.undoDelay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.deadlines[key] = nil
+            if self?.deadlines[key] != nil { self?.deadlines[key] = nil }
             self?.tasks[key] = nil
             guard WalletManager.shared.currentWallet?.publicAddress == owner else { return }
             action()
@@ -8811,13 +9193,14 @@ final class KaPostsActionScheduler: ObservableObject {
     func cancelAll() {
         tasks.values.forEach { $0.cancel() }
         tasks = [:]
-        deadlines = [:]
+        if !deadlines.isEmpty { deadlines = [:] }
     }
 
+    /// Writes `deadlines` only when the key is there: every write publishes, and each visible
+    /// cell watches this, so a no-op cancel (each `schedule` starts with one) redrew them all.
     func cancel(key: String) {
-        tasks[key]?.cancel()
-        tasks[key] = nil
-        deadlines[key] = nil
+        if let task = tasks.removeValue(forKey: key) { task.cancel() }
+        if deadlines[key] != nil { deadlines[key] = nil }
     }
 }
 
@@ -10083,13 +10466,20 @@ struct KaPostsNotificationsView: View {
     /// Endless-scroll state for the notification stream (cursor-paginated by the indexer).
     @State private var page = KaPostsPageState()
 
+    /// `items` without anyone muted or blocked since they loaded: a load already leaves them
+    /// out, and this takes their rows away at once rather than at the next reload.
+    private var visibleItems: [Item] {
+        items.filter { !moderationStore.isHidden($0.actorAddress) }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading, items.isEmpty {
+                let visible = visibleItems
+                if isLoading, visible.isEmpty {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if items.isEmpty {
+                } else if visible.isEmpty {
                     ScrollView {
                         emptyState
                             .frame(maxWidth: .infinity)
@@ -10097,9 +10487,9 @@ struct KaPostsNotificationsView: View {
                     }
                     .refreshable { await load() }
                 } else {
-                    let triggerId = kaPostsPrefetchTriggerId(items)
+                    let triggerId = kaPostsPrefetchTriggerId(visible)
                     List {
-                        ForEach(items) { item in
+                        ForEach(visible) { item in
                             itemRow(item)
                                 .onAppear {
                                     guard item.id == triggerId else { return }

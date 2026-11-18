@@ -850,11 +850,6 @@ struct AppSettingsView: View {
     }
 }
 
-private struct QuickReactionSlotSelection: Identifiable {
-    let index: Int
-    var id: Int { index }
-}
-
 /// Notification settings, behind the cog on the Notifications tab and in Settings: the push
 /// switch, then a category list (same row style as the main Settings screen) - KaPosts
 /// (per-event-type toggles) and Sound & Vibration.

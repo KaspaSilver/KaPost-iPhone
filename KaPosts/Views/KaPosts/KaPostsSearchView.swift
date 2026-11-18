@@ -41,7 +41,6 @@ struct KaPostsSearchView: View {
     @State private var hasMore = true
     @State private var isLoading = false
     @State private var loadFailed = false
-    @FocusState private var searchFocused: Bool
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

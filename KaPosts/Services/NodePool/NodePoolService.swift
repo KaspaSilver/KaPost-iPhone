@@ -601,26 +601,6 @@ final class NodePoolService: ObservableObject {
         }
     }
 
-    /// The node's own fee estimate (sompi per gram, and how many seconds it expects a transaction
-    /// paying that to wait): the priority bucket, and the first normal bucket. Read from a node, so
-    /// a fee picture never depends on a third-party API.
-    func feeEstimate() async throws -> (priority: (feerate: Double, seconds: Double), normal: (feerate: Double, seconds: Double)) {
-        try await executeHedged(op: .getUtxosByAddress) { conn in
-            var msg = Protowire_KaspadMessage()
-            msg.getFeeEstimateRequest = Protowire_GetFeeEstimateRequestMessage()
-            let response = try await conn.sendRequest(msg, type: .getFeeEstimate, timeout: 10.0)
-            guard case .getFeeEstimateResponse(let r) = response.payload else {
-                throw KasiaError.networkError("Unexpected response")
-            }
-            if r.hasError && !r.error.message.isEmpty {
-                throw KasiaError.networkError(r.error.message)
-            }
-            let priority = r.estimate.priorityBucket
-            let normal = r.estimate.normalBuckets.first ?? priority
-            return ((priority.feerate, priority.estimatedSeconds), (normal.feerate, normal.estimatedSeconds))
-        }
-    }
-
     /// Submit transaction (broadcast to multiple nodes)
     ///
     /// A failed submit is not always a failed send: node A can accept the transaction while its
@@ -711,44 +691,6 @@ final class NodePoolService: ObservableObject {
                 return (txId: txId, endpoint: "already-known")
             }
             if answerLost { return try await confirmAfterLostAnswer(txId: txId) }
-            throw error
-        }
-    }
-
-    /// `submitRpcTransaction` with the same lookup as `submitTransaction`: a failed submit of a
-    /// transaction the network already has (by its locally computed `expectedTxId`) is a send.
-    /// For the version-1 builders (`.kachat`), whose transactions aren't `KaspaRpcTransaction`s.
-    /// Its inputs are held back as in `submitTransaction`.
-    func submitRpcTransaction(_ rpcTransaction: Protowire_RpcTransaction, expectedTxId: String) async throws -> (txId: String, endpoint: String) {
-        let held = ChatService.shared.holdOutpointKeysForSubmit(Self.outpointKeys(of: rpcTransaction))
-        do {
-            let sent = try await submitRpcTransactionUnrecorded(rpcTransaction, expectedTxId: expectedTxId)
-            reserveInputs(of: rpcTransaction)
-            return sent
-        } catch let unknown as SendOutcomeUnknownError {
-            // Not held, so a resend picks these same coins and only one of the two can land.
-            ChatService.shared.releaseOutpointKeys(held)
-            ChatService.shared.invalidateUtxoCache()
-            throw unknown
-        } catch {
-            releaseUnlessSpent(held, after: error)
-            throw error
-        }
-    }
-
-    private func submitRpcTransactionUnrecorded(_ rpcTransaction: Protowire_RpcTransaction, expectedTxId: String) async throws -> (txId: String, endpoint: String) {
-        do {
-            let sent = try await submitRpcTransaction(rpcTransaction)
-            return try await checkedSubmit(sent, rpcTransaction: rpcTransaction, expectedTxId: expectedTxId)
-        } catch let unknown as SendOutcomeUnknownError {
-            throw unknown
-        } catch {
-            if await isTransactionKnown(txId: expectedTxId, afterRejection: !(error is SubmitAnswerLostError)) {
-                AppLog.log("[NodePool] submit of %@ reported \"%@\" but the network has it: treated as sent",
-                           String(expectedTxId.prefix(12)), error.localizedDescription)
-                return (txId: expectedTxId, endpoint: "already-known")
-            }
-            if error is SubmitAnswerLostError { return try await confirmAfterLostAnswer(txId: expectedTxId) }
             throw error
         }
     }

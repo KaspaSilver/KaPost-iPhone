@@ -129,10 +129,6 @@ extension KachatNames {
 
         var id: String { "\(hex(outpoint.txid)):\(outpoint.index)" }
         var fields: OfferFields { OfferFields(key: key, buyer: buyer, seller: seller, refundAfter: refundAfter) }
-        func refundable(atDaa daa: UInt64) -> Bool { daa > UInt64(max(refundAfter, 0)) }
-        /// Made to an earlier owner of the name (registry v3): it can never be accepted and goes
-        /// back to the buyer (withdraw, or a refund once it expires).
-        func isDeclined(currentOwner: Data) -> Bool { seller != currentOwner }
     }
 
     /// One registry event (history, activity). Parties are x-only keys or addresses depending on
@@ -730,13 +726,6 @@ extension KachatNames {
             return names.first { $0.key == k }
         }
 
-        /// The gaps on either side of a registered key: `(lo, key)` and `(key, hi)`.
-        func neighbours(of key: Data) -> (below: Gap, above: Gap)? {
-            let k = hex(key)
-            guard let below = gaps.first(where: { $0.hi == k }), let above = gaps.first(where: { $0.lo == k }) else { return nil }
-            return (below, above)
-        }
-
         /// The gaps and names tile the key space exactly.
         func checkInvariants() throws {
             let sorted = gaps.sorted { $0.lo < $1.lo }
@@ -799,15 +788,6 @@ extension KachatNames {
                 out.append(("\(o.txid):\(o.index)", m.offer.script(RegistryState.info(o).fields.encoded), false))
             }
             return out
-        }
-
-        // MARK: Offers this device made
-
-        mutating func trackOffer(_ o: OfferInfo, at: Int64?) {
-            let txid = hex(o.outpoint.txid)
-            offers.removeAll { $0.txid == txid && $0.index == o.outpoint.index }
-            offers.append(Offer(txid: txid, index: o.outpoint.index, key: hex(o.key), buyer: hex(o.buyer), seller: hex(o.seller),
-                                refundAfter: o.refundAfter, value: o.amount, name: o.name, createdAt: at))
         }
 
         // MARK: Applying a transaction (registry.rs `Registry::apply`)
@@ -1149,7 +1129,6 @@ extension KachatNames {
         }
 
         struct NamesJSON: Decodable { let names: [NameJSON] }
-        struct ListingsJSON: Decodable { let listings: [NameJSON]; let next: String? }
 
         struct EventJSON: Decodable {
             let txId: String
@@ -1165,16 +1144,6 @@ extension KachatNames {
         }
 
         struct EventsJSON: Decodable { let events: [EventJSON]; let next: String? }
-
-        /// `GET /stats/names`, the parts the app reads: transaction counts and fees (sompi as
-        /// strings), each over 24 hours, 7 days and all time.
-        struct StatsJSON: Decodable {
-            struct Counts: Decodable { let total: UInt64; let last24h: UInt64; let last7d: UInt64 }
-            struct Fees: Decodable { let total: String; let last24h: String; let last7d: String }
-            let transactions: Counts?
-            let activity: [String: Counts]?
-            let fees: Fees?
-        }
 
         struct OfferJSON: Decodable {
             let outpoint: OutpointJSON

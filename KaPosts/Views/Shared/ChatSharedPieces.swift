@@ -9,57 +9,6 @@ import YbridOpus
 
 // Pieces KaChat's 1:1 chat screen shared with the public rooms, kept when that screen went.
 
-struct ScrollViewIntrospector: UIViewRepresentable {
-    let onResolve: (UIScrollView) -> Void
-
-    func makeUIView(context: Context) -> ScrollViewIntrospectorView {
-        let view = ScrollViewIntrospectorView()
-        view.onResolve = onResolve
-        return view
-    }
-
-    func updateUIView(_ uiView: ScrollViewIntrospectorView, context: Context) {
-        uiView.onResolve = onResolve
-        uiView.resolveIfNeeded()
-    }
-}
-
-final class ScrollViewIntrospectorView: UIView {
-    var onResolve: ((UIScrollView) -> Void)?
-    private weak var resolvedScrollView: UIScrollView?
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        resolveIfNeeded()
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        resolveIfNeeded()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        resolveIfNeeded()
-    }
-
-    func resolveIfNeeded() {
-        var candidate: UIView? = self
-        while let view = candidate {
-            if let scrollView = view as? UIScrollView {
-                guard scrollView !== resolvedScrollView else { return }
-                resolvedScrollView = scrollView
-                DispatchQueue.main.async { [weak self, weak scrollView] in
-                    guard let self, let scrollView else { return }
-                    self.onResolve?(scrollView)
-                }
-                return
-            }
-            candidate = view.superview
-        }
-    }
-}
-
 #if canImport(YbridOpus) || OPUS_BRIDGE || OPUS_CATALYST
 private enum WebMOpusEncodingError: LocalizedError {
     case invalidFormat(String)

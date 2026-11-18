@@ -462,6 +462,11 @@ final class PublicChatStore {
             // ended mid-note only the earliest unsettled part can have been submitted. The parts
             // after it never left the phone: Failed, so the note's Retry sends them, instead of
             // "Not confirmed" for good with the room stuck on "Receiving 3 of 12".
+            // Only parts still Sending count: one already "Not confirmed" (settled by an earlier
+            // run) wasn't what this run's sending had in flight. After a Retry of the later parts
+            // it is the earliest, and choosing it marked the part really in flight Failed - whose
+            // Retry could pay twice.
+            let pendingStatus = PublicChatMessage.DeliveryStatus.pending.rawValue
             var earliestIndexByNote: [String: Int] = [:]
             var partOf: [NSManagedObjectID: (note: String, index: Int)] = [:]
             for row in rows {
@@ -469,11 +474,15 @@ final class PublicChatStore {
                       let tag = VoicePartTag.sniff(content) else { continue }
                 let note = "\(row.senderAddress.lowercased())|\(tag.id)|\(tag.count)"
                 partOf[row.objectID] = (note, tag.index)
+                guard row.deliveryStatus == pendingStatus else { continue }
                 earliestIndexByNote[note] = min(earliestIndexByNote[note] ?? tag.index, tag.index)
             }
-            for row in rows {
+            // A delivered copy settles one pending row, not every identical one: two sends of the
+            // same text with one copy on chain leave the other "Not confirmed".
+            var matchedDelivered: Set<NSManagedObjectID> = []
+            for row in rows.sorted(by: { $0.blockTime < $1.blockTime }) {
                 if let part = partOf[row.objectID], let earliest = earliestIndexByNote[part.note],
-                   part.index > earliest, row.id.hasPrefix("pending_") {
+                   part.index > earliest, row.id.hasPrefix("pending_"), row.deliveryStatus == pendingStatus {
                     row.deliveryStatus = PublicChatMessage.DeliveryStatus.failed.rawValue
                     changed = true
                     continue
@@ -484,8 +493,10 @@ final class PublicChatStore {
                     normalized, row.senderAddress, row.content ?? "",
                     PublicChatMessage.DeliveryStatus.sent.rawValue, row.blockTime - 300_000
                 )
-                delivered.fetchLimit = 1
-                if ((try? context.count(for: delivered)) ?? 0) > 0 {
+                delivered.sortDescriptors = [NSSortDescriptor(key: "blockTime", ascending: true)]
+                let copies = (try? context.fetch(delivered)) ?? []
+                if let copy = copies.first(where: { !matchedDelivered.contains($0.objectID) }) {
+                    matchedDelivered.insert(copy.objectID)
                     context.delete(row)
                     changed = true
                 } else if row.deliveryStatus != PublicChatMessage.DeliveryStatus.unconfirmed.rawValue {

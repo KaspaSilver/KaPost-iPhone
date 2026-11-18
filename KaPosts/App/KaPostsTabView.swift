@@ -35,6 +35,10 @@ struct KaPostsTabView: View {
     @ObservedObject private var dock = KaPostsDockRouter.shared
     /// The address profile editor (name, picture, banner, bio) - the profile KaPosts shows.
     @State private var showProfileEditor = false
+    /// The Welcome Guide after a create or import (`WelcomeGuideView`), and after a kill that cut
+    /// one short.
+    @State private var showWelcomeGuide = false
+    @EnvironmentObject private var walletManager: WalletManager
     @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
     @ObservedObject private var publicChatBadge = PublicChatUnreadBadge.shared
 
@@ -97,12 +101,24 @@ struct KaPostsTabView: View {
         .sheet(isPresented: $showProfileEditor) {
             KaChatProfileEditorSheet()
         }
+        .fullScreenCover(isPresented: $showWelcomeGuide) {
+            WelcomeGuideView(onFinished: { showWelcomeGuide = false }, isOnboardingRun: true)
+        }
         // A payment request link tapped anywhere: Send Kaspa with it filled in.
         .modifier(PaymentRequestSheetPresenter())
         .onAppear {
-            // KaChat's welcome guide used to lift the hold create/import put on syncing; KaPosts
-            // has no guide, so the dock lifts it. Then the address's node subscription (balance,
-            // coins for sending) starts - ChatService's 1:1 chat sync stays off in KaPosts.
+            // A new or imported account gets the Welcome Guide once. Marked before presenting, so
+            // an app killed mid-guide shows it again on the next launch.
+            if walletManager.justCreatedNewWallet {
+                walletManager.justCreatedNewWallet = false
+                WelcomeGuideView.markOnboardingRunPending()
+                showWelcomeGuide = true
+            } else if WelcomeGuideView.isOnboardingRunPending {
+                showWelcomeGuide = true
+            }
+            // The dock lifts the hold create/import put on syncing (KaPost's sync is light, so the
+            // guide doesn't wait for it). Then the address's node subscription (balance, coins for
+            // sending) starts - ChatService's 1:1 chat sync stays off in KaPosts.
             let chatService = ChatService.shared
             if chatService.onboardingSyncHeld {
                 chatService.releaseSyncForOnboarding()

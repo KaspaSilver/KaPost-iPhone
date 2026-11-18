@@ -294,6 +294,33 @@ final class ChatService: ObservableObject {
     var contextualFetchInFlight = Set<String>()
     var handshakeFetchTasks: [String: Task<[HandshakeResponse], Error>] = [:]
     var paymentFetchTasks: [String: Task<[PaymentResponse], Error>] = [:]
+    /// Fresh change addresses a send has probed but not yet revealed (that happens only after
+    /// the submit). A payment request reserves its fresh address outside the send queue, so it
+    /// skips these (`isFreshChangeInFlight`) rather than hand out an address a send's change is
+    /// about to land on.
+    private(set) var inFlightChangeAddresses = Set<String>()
+
+    /// `verifiedFreshQuantumSlot()` for a send's change, held as in flight until
+    /// `releaseFreshChange`. A slot something else revealed while the probe awaited (a request's
+    /// reservation) is passed over for the next one. nil when no slot can be had.
+    func claimFreshChangeSlot() async -> (index: Int, address: String)? {
+        for _ in 0..<3 {
+            guard let slot = await WalletManager.shared.verifiedFreshQuantumSlot() else { return nil }
+            let claimedMeanwhile = slot.index - WalletManager.quantumIndexBase <= WalletManager.shared.maxQuantumAddressIndex
+            if claimedMeanwhile || inFlightChangeAddresses.contains(slot.address) { continue }
+            inFlightChangeAddresses.insert(slot.address)
+            return slot
+        }
+        return nil
+    }
+
+    func releaseFreshChange(_ address: String?) {
+        guard let address else { return }
+        inFlightChangeAddresses.remove(address)
+    }
+
+    func isFreshChangeInFlight(_ address: String) -> Bool { inFlightChangeAddresses.contains(address) }
+
     let messagesKey = "kachat_messages"
     let draftsKey = "kachat_message_drafts"
     let aliasesKey = "kachat_conversation_aliases"
@@ -770,44 +797,6 @@ final class ChatService: ObservableObject {
             }
         }
     }
-
-    /// Clear all chat data (called when clearing app data)
-    /// - Parameter skipStoreClear: If true, skips calling messageStore.clearAll() (use when store was already cleared)
-    func clearAllData(skipStoreClear: Bool = false) {
-        stopPolling()
-        resetForNewWallet(skipStoreClear: skipStoreClear)
-        contactsCancellable?.cancel()
-        contactsCancellable = nil
-        settingsCancellable?.cancel()
-        settingsCancellable = nil
-        pingLatencyCancellable?.cancel()
-        pingLatencyCancellable = nil
-        nodePoolSubscriptionStateCancellable?.cancel()
-        nodePoolSubscriptionStateCancellable = nil
-        nodePoolPrimaryEndpointCancellable?.cancel()
-        nodePoolPrimaryEndpointCancellable = nil
-        conversationCountCancellable?.cancel()
-        conversationCountCancellable = nil
-        pendingResubscriptionTask?.cancel()
-        pendingResubscriptionTask = nil
-        // Block-based observers are only released by removing their token - `removeObserver(self)`
-        // does not reach them - so every token `init` registered is dropped here, not just the
-        // first. `resetForNewWallet()` deliberately keeps them: it is a data reset on wallet
-        // switch/logout, nothing re-registers them afterwards, and the handlers self-gate on
-        // the current wallet.
-        if let observer = rpcReconnectObserver {
-            NotificationCenter.default.removeObserver(observer)
-            rpcReconnectObserver = nil
-        }
-        if let observer = rpcReconnectedObserver {
-            NotificationCenter.default.removeObserver(observer)
-            rpcReconnectedObserver = nil
-        }
-    }
-
-    // NOTE: the Danger Zone wipe-and-resync now lives in
-    // `wipeAndResyncIncomingMessages(contacts:progress:)` (ChatService+Fetching.swift), driven
-    // by `IncomingResyncCoordinator` so it reports progress and survives view teardown.
 
     /// Reset chat state for new/imported wallet - clears data but keeps polling active
     /// - Parameter skipStoreClear: If true, skips calling messageStore.clearAll() (use when switching to a fresh wallet store)

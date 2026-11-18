@@ -17,6 +17,10 @@ struct PublicChatChannelView: View {
     @EnvironmentObject var walletManager: WalletManager
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @ObservedObject private var knsService = KNSService.shared
+    // A sender's `.kachat` name landing turns on their link previews
+    // (`PublicChatMessageRow.senderHasKachatName`) through `contactsManager`: the registry sends
+    // ContactsManager's objectWillChange whenever an identity changes. Observing the registry
+    // itself redrew the room on every one of its flags.
     @StateObject private var recorder = PublicChatAudioRecorder()
 
     /// Voice notes go on chain, so the payload cap is the length cap.
@@ -165,6 +169,9 @@ struct PublicChatChannelView: View {
         }
         .onDisappear {
             ChatService.shared.setDraft(messageText, for: "room:\(PublicChatChannelName.normalize(channelName))")
+            // Leaving the room mid-recording: nothing is sent, the file goes, and the audio
+            // session is given back.
+            if recorder.state == .recording { recorder.cancel() }
             publicChatService.release(channelName)
         }
         .task {
@@ -747,6 +754,7 @@ struct PublicChatChannelView: View {
             isOwnMessage: message.senderAddress == myAddress,
             avatarURLString: knsService.profileCache[message.senderAddress]?.avatarURL,
             displayName: displayName(for: message.senderAddress),
+            senderHasKachatName: KachatLive.identityName(message.senderAddress) != nil,
             replyQuote: messageReplyQuote,
             replySenderDisplayName: replySender,
             onViewProfile: { viewProfile(message.senderAddress) },
@@ -1086,7 +1094,9 @@ struct PublicChatChannelView: View {
                             .animation(.linear(duration: 1), value: recorder.elapsedSeconds)
                     }
                     .frame(width: 20, height: 20)
-                    Text(verbatim: "\(AppLocalization.string("Recording...")) \(formatRecordingTime(recorder.elapsedSeconds)) / \(formatRecordingTime(effectiveMaxRecordingDuration))")
+                    // After a call or another app took the microphone: stopped where it got to,
+                    // still there to send or throw away.
+                    Text(verbatim: "\(AppLocalization.string(recorder.wasInterrupted ? "Recording stopped" : "Recording...")) \(formatRecordingTime(recorder.elapsedSeconds)) / \(formatRecordingTime(effectiveMaxRecordingDuration))")
                         .monospacedDigit()
                 }
                 Spacer()
@@ -1135,7 +1145,7 @@ struct PublicChatChannelView: View {
                     try await publicChatService.sendPublicChatAudio(channel: channelName, audioData: only)
                 }
             } catch {
-                showToast("Failed to send voice message: \(error.localizedDescription)")
+                showToast(String(format: AppLocalization.string("Failed to send voice message: %@"), error.localizedDescription))
             }
         }
     }
@@ -1237,7 +1247,7 @@ struct PublicChatChannelView: View {
             do {
                 try await publicChatService.sendPublicChat(channel: channelName, content: trimmed, feeOverride: feeOverride)
             } catch {
-                showToast("Failed to send: \(error.localizedDescription)")
+                showToast(String(format: AppLocalization.string("Failed to send: %@"), error.localizedDescription))
             }
             isSending = false
         }
@@ -1258,7 +1268,7 @@ struct PublicChatChannelView: View {
         if error is SendOutcomeUnknownError {
             showToast(error.localizedDescription)
         } else {
-            showToast("Failed to edit: \(error.localizedDescription)")
+            showToast(String(format: AppLocalization.string("Failed to edit: %@"), error.localizedDescription))
         }
     }
 
@@ -1458,6 +1468,8 @@ private struct PublicChatMessageRow: View, Equatable {
     let isOwnMessage: Bool
     let avatarURLString: String?
     let displayName: String
+    /// The sender has a `.kachat` name: only then do their links preview (`previews`).
+    let senderHasKachatName: Bool
     let replyQuote: MessageReplyContent?
     let replySenderDisplayName: String?
     let onViewProfile: () -> Void
@@ -1524,6 +1536,7 @@ private struct PublicChatMessageRow: View, Equatable {
             && lhs.isOwnMessage == rhs.isOwnMessage
             && lhs.avatarURLString == rhs.avatarURLString
             && lhs.displayName == rhs.displayName
+            && lhs.senderHasKachatName == rhs.senderHasKachatName
             && lhs.replyQuote == rhs.replyQuote
             && lhs.replySenderDisplayName == rhs.replySenderDisplayName
             && lhs.reactions == rhs.reactions
@@ -1779,19 +1792,57 @@ private struct PublicChatMessageRow: View, Equatable {
         if displayText.first != "{",
            internalLink == nil,
            !MessageTextRenderPlan.isEntirelyLink(displayText),
-           let linkURL = MessageTextRenderPlan.firstHTTPLink(in: displayText) {
+           let linkURL = Self.firstExplicitHTTPLink(in: displayText),
+           previews(linkURL) {
             LinkPreviewCardView(
                 url: linkURL,
                 txId: message.id,
                 onDoubleTap: onReact != nil ? { activeQuickReactionMessageId.wrappedValue = message.id } : nil,
-                isOutgoing: isOwnMessage,
-                // Public Chat rooms are open to anyone, so previews never auto-fetch here - each
-                // card is tap-to-load (Decision 5A), including the local user's own posts for
-                // one consistent rule in public rooms. Only KaChat's own site loads by itself.
-                autoFetch: KaChatSiteLink.isSiteLink(linkURL)
+                isOutgoing: isOwnMessage
             )
         }
     }
+
+    /// Rooms follow KaPost's preview rules (owner's call, 2026-11-18): a link previews, by itself
+    /// with no tap, only when its sender has a `.kachat` name and it is KaChat's own site or a
+    /// popular site on the allowed list with no adult words in it (`KaPostLinkPreviewPolicy`).
+    /// Any other link stays plain text in the bubble, so an unknown server is never contacted.
+    private func previews(_ url: URL) -> Bool {
+        senderHasKachatName && (KaChatSiteLink.isSiteLink(url) || KaPostLinkPreviewPolicy.allows(url))
+    }
+
+    /// The first web link the sender wrote out as one - starting `http://`, `https://` or `www.` -
+    /// the same "explicit link" rule as posts: a bare "x.com" in a sentence is text the data
+    /// detector happens to read as a link, and it never previews. Cached per text.
+    static func firstExplicitHTTPLink(in text: String) -> URL? {
+        let key = text as NSString
+        if let cached = explicitLinkCache.object(forKey: key) { return cached.url }
+        var found: URL?
+        if let detector = SharedDetectors.link {
+            let range = NSRange(location: 0, length: key.length)
+            detector.enumerateMatches(in: text, options: [], range: range) { match, _, stop in
+                guard let match, let url = match.url,
+                      let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+                let written = key.substring(with: match.range).lowercased()
+                guard written.hasPrefix("http://") || written.hasPrefix("https://") || written.hasPrefix("www.") else { return }
+                found = url
+                stop.pointee = true
+            }
+        }
+        explicitLinkCache.setObject(ExplicitLinkBox(found), forKey: key)
+        return found
+    }
+
+    private final class ExplicitLinkBox {
+        let url: URL?
+        init(_ url: URL?) { self.url = url }
+    }
+
+    private static let explicitLinkCache: NSCache<NSString, ExplicitLinkBox> = {
+        let cache = NSCache<NSString, ExplicitLinkBox>()
+        cache.countLimit = 500
+        return cache
+    }()
 
     /// A link into KaChat itself inside this row's text, if any - see
     /// `MessageBubbleView.internalLink` (same rule, same cache).
@@ -1824,7 +1875,7 @@ private struct PublicChatMessageRow: View, Equatable {
             && matchedInternalLink == nil
             && displayText.utf8.count <= Self.inlineTextTruncationThreshold
             && MessageTextRenderPlan.isEntirelyLink(displayText))
-            ? MessageTextRenderPlan.firstHTTPLink(in: displayText)
+            ? Self.firstExplicitHTTPLink(in: displayText).flatMap { previews($0) ? $0 : nil }
             : nil
         return Group {
             if let loneInternalLink {
@@ -1834,15 +1885,13 @@ private struct PublicChatMessageRow: View, Equatable {
                     onDoubleTap: onReact != nil ? { activeQuickReactionMessageId.wrappedValue = message.id } : nil
                 )
             } else if let loneLinkURL {
+                // allowed by `previews` above, so it loads by itself
                 LinkPreviewCardView(
                     url: loneLinkURL,
                     txId: message.id,
                     fallbackText: displayText,
                     onDoubleTap: onReact != nil ? { activeQuickReactionMessageId.wrappedValue = message.id } : nil,
-                    isOutgoing: isOwnMessage,
-                    // Public Chat rooms are open to anyone, so previews never auto-fetch here -
-                    // each card is tap-to-load (Decision 5A). Only KaChat's own site loads by itself.
-                    autoFetch: KaChatSiteLink.isSiteLink(loneLinkURL)
+                    isOutgoing: isOwnMessage
                 )
             } else {
                 bubbleContent(voicePayload: voicePayload)
