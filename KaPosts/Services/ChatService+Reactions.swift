@@ -60,8 +60,18 @@ extension ChatService {
 
     /// One encrypted contextual message carrying an envelope (an edit, a payment notice), with no message
     /// row of its own - the same build/submit sequence as `sendReactionInternal`. Returns the txId.
-    func sendEnvelopeInternal(to contact: Contact, payload: String) async throws -> String {
+    /// `owner`: the account that must sign it. If another account is active (now or after any
+    /// await before the submit), it throws and nothing goes out.
+    func sendEnvelopeInternal(to contact: Contact, payload: String, owner: String? = nil) async throws -> String {
         guard let wallet = WalletManager.shared.currentWallet else { throw KasiaError.walletNotFound }
+        func checkOwner() throws {
+            guard let owner else { return }
+            guard WalletManager.shared.currentWallet?.publicAddress.lowercased() == owner.lowercased() else {
+                AppLog.log("[ChatService] envelope dropped: the account changed")
+                throw KasiaError.networkError(AppLocalization.string("The account changed, so this payment wasn't sent."))
+            }
+        }
+        try checkOwner()
         guard let privateKey = WalletManager.shared.getPrivateKey() else { throw KasiaError.keychainError("Could not get private key") }
         guard let recipientPublicKey = KaspaAddress.publicKey(from: contact.address) else { throw KasiaError.invalidAddress }
         guard let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: wallet.publicAddress) else { throw KasiaError.invalidAddress }
@@ -71,8 +81,10 @@ extension ChatService {
         let rpcManager = NodePoolService.shared
         if !rpcManager.isConnected {
             try await rpcManager.connect(network: currentSettings.networkType)
+            try checkOwner()
         }
         let utxos = try await rpcManager.getUtxosByAddresses([wallet.publicAddress])
+        try checkOwner()
         let candidateUtxos = prepareMessageUtxos(confirmed: utxos)
         guard !candidateUtxos.isEmpty else { throw KasiaError.networkError(noSpendableFundsYetMessage()) }
 
@@ -87,19 +99,6 @@ extension ChatService {
         consumePendingUtxos(spentUtxos)
         addPendingOutputs(from: transaction, txId: submitted.txId, senderScriptPubKey: senderScriptPubKey)
         return submitted.txId
-    }
-
-    /// Refreshes `latestReactionByContact` for the whole chat list - called from `ChatListView`
-    /// on appear/pull-to-refresh, mirroring how `fetchKNSDomainsForAllContacts` keeps the list's
-    /// avatars/names warm the same way. Cheap: one Core Data scan across every reaction row, not
-    /// per-conversation, since the underlying key is wallet-wide rather than per-contact.
-    func refreshLatestReactionPreviews() async {
-        guard let key = messageEncryptionKey() else { return }
-        let latest = await messageStore.fetchLatestReactionPerContact(decryptionKey: key)
-        await MainActor.run {
-            // Runs on every return to the chat list; unchanged, it must not re-render the list.
-            if latestReactionByContact != latest { latestReactionByContact = latest }
-        }
     }
 
     /// Applies a reaction to the in-memory index immediately (optimistic UI on send, live update

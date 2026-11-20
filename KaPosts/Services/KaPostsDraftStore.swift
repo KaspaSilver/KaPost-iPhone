@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// A post saved for later: the whole composer state, not just its text.
 ///
@@ -43,18 +44,39 @@ final class KaPostsDraftStore: ObservableObject {
     @Published private(set) var drafts: [KaPostSavedDraft] = []
 
     private let baseKey = "kachat_kaposts_drafts"
+    /// The account `drafts` was read for. Every write goes under THIS account's key, and a write
+    /// first reloads if the open account has changed, so one account's drafts never land under
+    /// another's key.
     private var loadedWallet: String?
+    private var walletCancellable: AnyCancellable?
 
-    private init() { reloadForCurrentWallet() }
+    private init() {
+        reload(for: Self.currentAddress)
+        // Log Out, sign-in, import and switches all change `currentWallet`. `@Published` fires
+        // before the value is stored, so the new address comes from the sink.
+        walletCancellable = WalletManager.shared.$currentWallet
+            .map { $0?.publicAddress ?? "" }
+            .removeDuplicates()
+            .sink { [weak self] address in
+                guard let self else { return }
+                let next: String? = address.isEmpty ? nil : address
+                guard next != self.loadedWallet else { return }
+                self.reload(for: next)
+            }
+    }
 
-    private var scopedKey: String? {
+    private static var currentAddress: String? {
         guard let address = WalletManager.shared.currentWallet?.publicAddress, !address.isEmpty else { return nil }
-        return "\(baseKey)_\(address.replacingOccurrences(of: ":", with: "_"))"
+        return address
+    }
+
+    private func key(for address: String) -> String {
+        "\(baseKey)_\(address.replacingOccurrences(of: ":", with: "_"))"
     }
 
     /// A deleted wallet's drafts go with it.
     func deleteDrafts(forWalletAddress address: String) {
-        UserDefaults.standard.removeObject(forKey: "\(baseKey)_\(address.replacingOccurrences(of: ":", with: "_"))")
+        UserDefaults.standard.removeObject(forKey: key(for: address))
         if loadedWallet == address {
             drafts = []
             loadedWallet = nil
@@ -64,20 +86,28 @@ final class KaPostsDraftStore: ObservableObject {
     /// Re-reads for whichever wallet is active now. Cheap and idempotent, so callers can just
     /// call it when a drafts surface appears rather than tracking wallet changes themselves.
     func reloadForCurrentWallet() {
-        let address = WalletManager.shared.currentWallet?.publicAddress
-        guard let key = scopedKey else {
-            drafts = []
-            loadedWallet = nil
-            return
-        }
-        if loadedWallet == address, !drafts.isEmpty { return }
+        let address = Self.currentAddress
+        if address != nil, loadedWallet == address, !drafts.isEmpty { return }
+        reload(for: address)
+    }
+
+    private func reload(for address: String?) {
         loadedWallet = address
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let address,
+              let data = UserDefaults.standard.data(forKey: key(for: address)),
               let decoded = try? JSONDecoder().decode([KaPostSavedDraft].self, from: data) else {
             drafts = []
             return
         }
         drafts = decoded.sorted { $0.savedAt > $1.savedAt }
+    }
+
+    /// Makes sure `drafts` belongs to the open account before it is changed and written.
+    /// Returns false when no account is open (nothing may be written then).
+    private func syncToCurrentWallet() -> Bool {
+        let address = Self.currentAddress
+        if address != loadedWallet { reload(for: address) }
+        return address != nil
     }
 
     /// Saves a new draft, or updates `id` when re-saving one that was opened for editing.
@@ -91,7 +121,7 @@ final class KaPostsDraftStore: ObservableObject {
     ) -> KaPostSavedDraft? {
         let hasContent = !([text] + threadSegments)
             .allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard hasContent else { return nil }
+        guard hasContent, syncToCurrentWallet() else { return nil }
 
         let draft = KaPostSavedDraft(
             id: id ?? UUID(),
@@ -108,13 +138,15 @@ final class KaPostsDraftStore: ObservableObject {
     }
 
     func delete(_ id: UUID) {
-        guard drafts.contains(where: { $0.id == id }) else { return }
+        guard syncToCurrentWallet(), drafts.contains(where: { $0.id == id }) else { return }
         drafts.removeAll { $0.id == id }
         persist()
     }
 
     private func persist() {
-        guard let key = scopedKey, let data = try? JSONEncoder().encode(drafts) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        // Written under the account the list was read for, never whatever is current now.
+        guard let address = loadedWallet, address == Self.currentAddress,
+              let data = try? JSONEncoder().encode(drafts) else { return }
+        UserDefaults.standard.set(data, forKey: key(for: address))
     }
 }

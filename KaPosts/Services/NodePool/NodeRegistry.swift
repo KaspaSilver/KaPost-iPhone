@@ -337,14 +337,6 @@ actor NodeRegistry {
         scheduleSave()
     }
 
-    /// Set node state directly
-    func setState(_ endpoint: Endpoint, state: NodeState) {
-        guard var record = records[endpoint.key] else { return }
-        record.state = state
-        records[endpoint.key] = record
-        scheduleSave()
-    }
-
     /// Update TCP ping result for a node
     func updateTcpPingResult(
         _ endpoint: Endpoint,

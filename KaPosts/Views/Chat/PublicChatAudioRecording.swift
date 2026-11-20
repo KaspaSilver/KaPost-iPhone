@@ -77,6 +77,8 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
 
     private func beginRecording() {
         do {
+            // Any voice note playing stops, and none starts until the session is given back.
+            VoicePlaybackCoordinator.shared.recordingWillStart()
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .allowBluetoothHFP])
             try session.setActive(true)
@@ -102,6 +104,7 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
             self.state = .recording
             startTimer()
         } catch {
+            releaseAudioSession()
             state = .failed(error.localizedDescription)
         }
     }
@@ -143,6 +146,7 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         try? session.setCategory(.soloAmbient)
+        VoicePlaybackCoordinator.shared.recordingDidEnd()
     }
 
     func cancel() {
@@ -214,58 +218,129 @@ final class PublicChatAudioRecorder: NSObject, ObservableObject, AVAudioRecorder
     }
 }
 
-/// Plays back a single voice message's decoded audio. One instance per message bubble (matches
-/// Android's per-bubble `MediaPlayer` - no single "now playing" registry there either).
+/// Voice-note lengths already worked out, so a bubble scrolling back in doesn't parse its audio
+/// again. Keyed by the audio itself (its size and hash), so two notes never share an entry.
+enum VoiceNoteDurationCache {
+    private static let cache: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 1_000
+        return cache
+    }()
+
+    static func duration(forKey key: String, compute: () -> TimeInterval?) -> TimeInterval? {
+        if let cached = cache.object(forKey: key as NSString) { return cached.doubleValue }
+        guard let duration = compute() else { return nil }
+        cache.setObject(NSNumber(value: duration), forKey: key as NSString)
+        return duration
+    }
+
+    static func key(for data: Data) -> String { "1:\(data.count):\(data.hashValue)" }
+
+    static func key(for input: PublicChatVoiceNoteInput) -> String {
+        "\(input.count):\(input.signature):\(input.partContents.hashValue)"
+    }
+}
+
+/// Plays back a single voice message. One instance per message bubble; the bubble shows the
+/// length read from the file's packets (`WebMOpusDecoder.duration(of:)`), and the audio is decoded
+/// only when Play is tapped. One note plays at a time (`VoicePlaybackCoordinator`).
 @MainActor
 final class PublicChatAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var isPlaying = false
+    /// The length is known: Play is on.
     @Published private(set) var isReady = false
+    /// Decoding after Play was tapped.
+    @Published private(set) var isLoading = false
     @Published private(set) var durationText = "0:00"
 
     private var player: AVAudioPlayer?
     private var decodedURL: URL?
+    private var data: Data?
     private var isPreparing = false
 
     func prepare(data: Data) {
-        guard player == nil, !isPreparing else { return }
+        self.data = data
+        guard !isReady, !isPreparing else { return }
         isPreparing = true
-        Task.detached { [weak self] in
-            guard let self else { return }
-            do {
-                let decoded = try WebMOpusDecoder.decodeToPCMFile(data: data)
-                let player = try AVAudioPlayer(contentsOf: decoded.url, fileTypeHint: AVFileType.caf.rawValue)
-                await MainActor.run {
-                    self.decodedURL = decoded.url
-                    player.delegate = self
-                    self.player = player
-                    self.durationText = Self.formatDuration(player.duration)
-                    self.isReady = true
-                    self.isPreparing = false
+        Task.detached(priority: .utility) { [weak self] in
+            let duration = VoiceNoteDurationCache.duration(forKey: VoiceNoteDurationCache.key(for: data)) {
+                WebMOpusDecoder.duration(of: data)
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.isPreparing = false
+                guard let duration else {
+                    AppLog.log("[PublicChatAudioPlayer] Couldn't read a voice message's length")
+                    return
                 }
-            } catch {
-                AppLog.log("[PublicChatAudioPlayer] Failed to decode voice message: %@", error.localizedDescription)
-                await MainActor.run { self.isPreparing = false }
+                if self.player == nil { self.durationText = Self.formatDuration(duration) }
+                self.isReady = true
             }
         }
     }
 
     func toggle() {
-        guard let player else { return }
         if isPlaying {
-            player.pause()
-            isPlaying = false
-        } else {
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-            if player.currentTime >= player.duration { player.currentTime = 0 }
-            player.play()
-            isPlaying = true
+            pause()
+            return
         }
+        if let player {
+            play(player)
+            return
+        }
+        guard let data, !isLoading else { return }
+        isLoading = true
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var decodedURL: URL?
+            var player: AVAudioPlayer?
+            do {
+                let decoded = try WebMOpusDecoder.decodeToPCMFile(data: data)
+                decodedURL = decoded.url
+                player = try AVAudioPlayer(contentsOf: decoded.url, fileTypeHint: AVFileType.caf.rawValue)
+            } catch {
+                AppLog.log("[PublicChatAudioPlayer] Failed to decode voice message: %@", error.localizedDescription)
+            }
+            await MainActor.run { [player, decodedURL] in
+                guard let self else {
+                    if let decodedURL { try? FileManager.default.removeItem(at: decodedURL) }
+                    return
+                }
+                self.isLoading = false
+                guard let player, let decodedURL else {
+                    if let decodedURL { try? FileManager.default.removeItem(at: decodedURL) }
+                    return
+                }
+                self.decodedURL = decodedURL
+                player.delegate = self
+                player.prepareToPlay()
+                self.player = player
+                self.durationText = Self.formatDuration(player.duration)
+                self.play(player)
+            }
+        }
+    }
+
+    private func play(_ player: AVAudioPlayer) {
+        guard VoicePlaybackCoordinator.shared.willStart(self, stop: { [weak self] in self?.pause() }) else { return }
+        if player.currentTime >= player.duration { player.currentTime = 0 }
+        guard player.play() else {
+            VoicePlaybackCoordinator.shared.didStop(self)
+            return
+        }
+        isPlaying = true
+    }
+
+    private func pause() {
+        player?.pause()
+        isPlaying = false
+        VoicePlaybackCoordinator.shared.didStop(self)
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
-            self?.isPlaying = false
+            guard let self else { return }
+            self.isPlaying = false
+            VoicePlaybackCoordinator.shared.didStop(self)
         }
     }
 
@@ -275,6 +350,8 @@ final class PublicChatAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDele
     }
 
     deinit {
+        // A bubble dropped while playing: its audio stops with it, so give the session back.
+        VoicePlaybackCoordinator.shared.didStop(self)
         if let decodedURL {
             try? FileManager.default.removeItem(at: decodedURL)
         }
@@ -296,13 +373,13 @@ struct PublicChatAudioBubble: View {
                 Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.scaled(size: 26))
             }
-            .disabled(!player.isReady)
+            .disabled(!player.isReady || player.isLoading)
 
             Text(player.durationText)
                 .font(.caption)
                 .monospacedDigit()
 
-            if !player.isReady {
+            if !player.isReady || player.isLoading {
                 ProgressView()
                     .controlSize(.mini)
             }
@@ -360,22 +437,26 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
     /// A seek made before playback started: where the next Play begins.
     private var pendingSeekFraction: Double?
 
-    /// The length of the parts present, again whenever a part arrives (unless playing).
+    /// The length of the parts present, again whenever a part arrives (unless playing). Read
+    /// from the parts' packets without decoding them (`WebMOpusDecoder.duration(ofParts:)`) and
+    /// kept in `VoiceNoteDurationCache`, so scrolling a bubble back in costs nothing; the audio is
+    /// decoded only on Play.
     func preload(_ input: PublicChatVoiceNoteInput) {
         let signature = input.signature
         guard loadedSignature != signature, !isPlaying else { return }
         loadedSignature = signature
         isLoading = duration == nil
         let contents = input.partContents
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let parts = PublicChatVoiceNoteInput.decodedParts(contents)
-            let decoded = try? WebMOpusDecoder.decodePartsToPCMFile(parts: parts)
-            if let url = decoded?.url { try? FileManager.default.removeItem(at: url) }
+        let key = VoiceNoteDurationCache.key(for: input)
+        Task.detached(priority: .utility) { [weak self] in
+            let length = VoiceNoteDurationCache.duration(forKey: key) {
+                WebMOpusDecoder.duration(ofParts: PublicChatVoiceNoteInput.decodedParts(contents))
+            }
             await MainActor.run {
                 guard let self, self.loadedSignature == signature else { return }
-                if let decoded {
-                    self.duration = decoded.duration
-                    self.durationText = Self.formatted(decoded.duration)
+                if let length, self.player == nil {
+                    self.duration = length
+                    self.durationText = Self.formatted(length)
                 }
                 self.isLoading = false
             }
@@ -413,8 +494,6 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
                 self.isLoading = false
                 guard let decoded else { return }
                 do {
-                    try AVAudioSession.sharedInstance().setCategory(.playback)
-                    try AVAudioSession.sharedInstance().setActive(true)
                     let player = try AVAudioPlayer(contentsOf: decoded.url, fileTypeHint: AVFileType.caf.rawValue)
                     player.delegate = self
                     player.prepareToPlay()
@@ -448,6 +527,11 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
     }
 
     private func start(_ player: AVAudioPlayer) {
+        // One note at a time: the one playing before pauses here.
+        guard VoicePlaybackCoordinator.shared.willStart(self, stop: { [weak self] in self?.pause() }) else {
+            stop()
+            return
+        }
         guard player.play() else {
             stop()
             return
@@ -468,6 +552,7 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
         progressTimer?.invalidate()
         progressTimer = nil
         isPlaying = false
+        VoicePlaybackCoordinator.shared.didStop(self)
     }
 
     private func stop() {
@@ -484,6 +569,7 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
         progress = 0
         pendingSeekFraction = nil
         if let duration { durationText = Self.formatted(duration) }
+        VoicePlaybackCoordinator.shared.didStop(self)
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -499,6 +585,7 @@ final class PublicChatMultipartAudioPlayer: NSObject, ObservableObject, AVAudioP
 
     deinit {
         progressTimer?.invalidate()
+        VoicePlaybackCoordinator.shared.didStop(self)
         if let playbackURL {
             try? FileManager.default.removeItem(at: playbackURL)
         }

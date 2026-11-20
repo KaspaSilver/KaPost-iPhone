@@ -208,6 +208,39 @@ final class PublicChatStore {
 
     private var viewContext: NSManagedObjectContext { container.viewContext }
 
+    /// The account's store open now. A background pass captures it at call time and writes only
+    /// into it (`saveIfStillOpen`), so a page that lands after a switch or log out never goes
+    /// into the next account's file.
+    private var currentStore: NSPersistentStore? {
+        container.persistentStoreCoordinator.persistentStores.first
+    }
+
+    private static func isStillOpen(_ store: NSPersistentStore, in context: NSManagedObjectContext) -> Bool {
+        context.persistentStoreCoordinator?.persistentStores.contains { $0 === store } ?? false
+    }
+
+    /// Saves a background pass only into `store`: new rows are assigned to it, so a save after the
+    /// store was closed fails rather than landing in whichever store is open now. Returns false
+    /// (and drops the changes) when the store is gone.
+    @discardableResult
+    private static func saveIfStillOpen(_ context: NSManagedObjectContext, store: NSPersistentStore) -> Bool {
+        guard context.hasChanges else { return isStillOpen(store, in: context) }
+        guard isStillOpen(store, in: context) else {
+            context.rollback()
+            return false
+        }
+        for object in context.insertedObjects {
+            context.assign(object, to: store)
+        }
+        do {
+            try context.save()
+            return true
+        } catch {
+            context.rollback()
+            return false
+        }
+    }
+
     // MARK: - Channels
 
     @discardableResult
@@ -259,23 +292,11 @@ final class PublicChatStore {
         }
     }
 
-    func setAlwaysListen(_ enabled: Bool, forChannel name: String) {
-        updateChannel(name) { channel in
-            channel.alwaysListen = enabled
-            if !enabled { channel.notifyEnabled = false }
-        }
-    }
-
     func setNotifyEnabled(_ enabled: Bool, forChannel name: String) {
         updateChannel(name) { channel in
             channel.notifyEnabled = enabled
             if enabled { channel.alwaysListen = true }
         }
-    }
-
-    func setRetentionMillis(_ millis: Int64, forChannel name: String) {
-        let capped = min(millis, Self.maxRetentionMillis)
-        updateChannel(name) { $0.retentionMillis = capped }
     }
 
     private func updateChannel(_ name: String, _ mutate: (CDPublicChatChannel) -> Void) {
@@ -336,9 +357,14 @@ final class PublicChatStore {
     func insertMessages(
         _ messages: [(id: String, channel: String, senderAddress: String, content: String, blockTime: Int64)]
     ) async -> Set<String> {
-        guard isLoaded, !messages.isEmpty else { return [] }
+        guard isLoaded, !messages.isEmpty, let store = currentStore else { return [] }
         return await withCheckedContinuation { continuation in
             container.performBackgroundTask { context in
+                // Closed (a switch or log out) before this pass ran: nothing to insert.
+                guard Self.isStillOpen(store, in: context) else {
+                    continuation.resume(returning: [])
+                    return
+                }
                 var inserted = Set<String>()
                 for message in messages {
                     let normalized = PublicChatChannelName.normalize(message.channel)
@@ -362,8 +388,9 @@ final class PublicChatStore {
                     row.deliveryStatus = PublicChatMessage.DeliveryStatus.sent.rawValue
                     inserted.insert(message.id)
                 }
-                if context.hasChanges {
-                    try? context.save()
+                guard Self.saveIfStillOpen(context, store: store) else {
+                    continuation.resume(returning: [])
+                    return
                 }
                 continuation.resume(returning: inserted)
             }
@@ -632,7 +659,7 @@ final class PublicChatStore {
 
     // MARK: - Reactions (CDPublicChatReaction)
     //
-    // One row per (targetTxId, reactorAddress), mirroring `GroupStore`'s reaction persistence -
+    // One row per (targetTxId, reactorAddress), mirroring KaChat's group reaction persistence -
     // with one public chat-specific twist: a REMOVE is kept as a tombstone row (`emoji == nil`,
     // real `blockTime`) instead of deleting the row outright. The public chat indexer re-serves
     // the channel's FULL history on every poll, so without a tombstone an already-processed
@@ -641,7 +668,7 @@ final class PublicChatStore {
 
     /// Unconditional write for the local user's OWN reaction changes (optimistic apply at send
     /// time + status flips on success/failure) - user intent always wins over whatever's stored.
-    /// `emoji == nil` writes a remove-tombstone. Mirrors `GroupStore.upsertGroupReaction`.
+    /// `emoji == nil` writes a remove-tombstone. Mirrors KaChat's `GroupStore.upsertGroupReaction`.
     func upsertOwnReaction(
         targetTxId: String,
         channel: String,
@@ -839,9 +866,13 @@ final class PublicChatStore {
         edits: [IncomingEdit],
         channel: String
     ) async -> (reactionsChanged: Bool, appliedEditTxIds: Set<String>) {
-        guard isLoaded, !(reactions.isEmpty && edits.isEmpty) else { return (false, []) }
+        guard isLoaded, !(reactions.isEmpty && edits.isEmpty), let store = currentStore else { return (false, []) }
         return await withCheckedContinuation { continuation in
             container.performBackgroundTask { context in
+                guard Self.isStillOpen(store, in: context) else {
+                    continuation.resume(returning: (false, []))
+                    return
+                }
                 // The store's copy wins a conflict: a reaction or edit the user just made on
                 // the main context is newer than anything a history page carries.
                 context.mergePolicy = NSMergeByPropertyStoreTrumpMergePolicy
@@ -870,7 +901,10 @@ final class PublicChatStore {
                         appliedEdits.insert(edit.editTxId)
                     }
                 }
-                if context.hasChanges { try? context.save() }
+                guard Self.saveIfStillOpen(context, store: store) else {
+                    continuation.resume(returning: (false, []))
+                    return
+                }
                 continuation.resume(returning: (reactionsChanged, appliedEdits))
             }
         }
@@ -931,11 +965,11 @@ final class PublicChatStore {
     }
 
     /// All active (non-tombstone) reactions for `channel`, grouped by the message they target.
-    /// Reuses `GroupStore.ReactionSnapshot` - the value shape is identical, and the shared
+    /// As `PublicChatReactionSnapshot`, the shape KaChat's group reactions use - the shared
     /// reaction UI (`ReactionPillView` + retry affordances) already speaks it.
-    func fetchReactions(forChannel channel: String) -> [String: [GroupStore.ReactionSnapshot]] {
+    func fetchReactions(forChannel channel: String) -> [String: [PublicChatReactionSnapshot]] {
         guard isLoaded else { return [:] }
-        var grouped: [String: [GroupStore.ReactionSnapshot]] = [:]
+        var grouped: [String: [PublicChatReactionSnapshot]] = [:]
         let context = viewContext
         context.performAndWait {
             grouped = Self.reactionSnapshots(forChannel: channel, in: context)
@@ -944,7 +978,7 @@ final class PublicChatStore {
     }
 
     /// `fetchReactions` on a background context - see `fetchEditsAsync`.
-    func fetchReactionsAsync(forChannel channel: String) async -> [String: [GroupStore.ReactionSnapshot]] {
+    func fetchReactionsAsync(forChannel channel: String) async -> [String: [PublicChatReactionSnapshot]] {
         guard isLoaded else { return [:] }
         return await withCheckedContinuation { continuation in
             container.performBackgroundTask { context in
@@ -953,9 +987,9 @@ final class PublicChatStore {
         }
     }
 
-    private static func reactionSnapshots(forChannel channel: String, in context: NSManagedObjectContext) -> [String: [GroupStore.ReactionSnapshot]] {
+    private static func reactionSnapshots(forChannel channel: String, in context: NSManagedObjectContext) -> [String: [PublicChatReactionSnapshot]] {
         let normalized = PublicChatChannelName.normalize(channel)
-        var grouped: [String: [GroupStore.ReactionSnapshot]] = [:]
+        var grouped: [String: [PublicChatReactionSnapshot]] = [:]
         let request = NSFetchRequest<CDPublicChatReaction>(entityName: CDPublicChatReaction.entityName)
         request.predicate = NSPredicate(format: "channelName == %@", normalized)
         guard let results = try? context.fetch(request) else { return grouped }
@@ -967,7 +1001,7 @@ final class PublicChatStore {
             case "pending": status = .pending
             default: status = .sent
             }
-            let snapshot = GroupStore.ReactionSnapshot(
+            let snapshot = PublicChatReactionSnapshot(
                 targetTxId: record.targetTxId,
                 reactorAddress: record.reactorAddress,
                 emoji: emoji,
@@ -1083,7 +1117,7 @@ final class PublicChatStore {
     /// follow-up message re-fetch/re-map when nothing expired (see `pruneNowAndRefresh`).
     @discardableResult
     func pruneExpiredMessages() async -> Bool {
-        guard isLoaded else { return false }
+        guard isLoaded, let store = currentStore else { return false }
         let nowMillis = Int64(Date().timeIntervalSince1970 * 1000)
         // Read on the caller's side: these are the service's main-actor sets.
         let fullWindowChannels = PublicChatService.indexerTrackedChannels.union(PublicChatService.serviceChannels)
@@ -1092,6 +1126,11 @@ final class PublicChatStore {
         // every 30 s while a room was open and after every merge, all on main.
         return await withCheckedContinuation { continuation in
           container.performBackgroundTask { context in
+            // The sets above are this account's: never prune the next one's store with them.
+            guard Self.isStillOpen(store, in: context) else {
+                continuation.resume(returning: false)
+                return
+            }
             var didDelete = false
             let channelRequest = NSFetchRequest<CDPublicChatChannel>(entityName: CDPublicChatChannel.entityName)
             let channels = (try? context.fetch(channelRequest)) ?? []
@@ -1113,11 +1152,14 @@ final class PublicChatStore {
                 // while the indexer still serves the corresponding history window.
                 let reactionRequest = NSFetchRequest<NSFetchRequestResult>(entityName: CDPublicChatReaction.entityName)
                 reactionRequest.predicate = NSPredicate(format: "channelName == %@ AND blockTime < %lld", channel.channelName, cutoff)
-                _ = try? context.execute(NSBatchDeleteRequest(fetchRequest: reactionRequest))
+                let reactionDelete = NSBatchDeleteRequest(fetchRequest: reactionRequest)
+                reactionDelete.affectedStores = [store]
+                _ = try? context.execute(reactionDelete)
                 let request = NSFetchRequest<NSFetchRequestResult>(entityName: CDPublicChatMessage.entityName)
                 request.predicate = NSPredicate(format: "channelName == %@ AND blockTime < %lld", channel.channelName, cutoff)
                 let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
                 deleteRequest.resultType = .resultTypeObjectIDs
+                deleteRequest.affectedStores = [store]
                 guard let result = try? context.execute(deleteRequest) as? NSBatchDeleteResult,
                       let objectIds = result.result as? [NSManagedObjectID],
                       !objectIds.isEmpty else { continue }
@@ -1130,7 +1172,7 @@ final class PublicChatStore {
                     into: [context, viewContext]
                 )
             }
-            if didDelete, context.hasChanges { try? context.save() }
+            if didDelete { Self.saveIfStillOpen(context, store: store) }
             continuation.resume(returning: didDelete)
           }
         }

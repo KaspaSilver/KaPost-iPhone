@@ -965,16 +965,6 @@ final class UtxoSubscriptionManager: ObservableObject {
 
     // MARK: - Manual Triggers
 
-    /// Force failover to standby (for testing)
-    func forceFailover() async {
-        await performFailover()
-    }
-
-    /// Force resync UTXO state
-    func forceResync() async {
-        await resyncUtxoState()
-    }
-
     /// Get current status for UI
     var statusDescription: String {
         var parts: [String] = []

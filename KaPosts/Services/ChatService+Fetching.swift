@@ -1217,14 +1217,6 @@ extension ChatService {
         registerSuppressedPaymentTxIds(txIds, reason: "contract-address-chat")
     }
 
-    @discardableResult
-    func suppressKNSPaymentTxIfNeeded(_ transaction: KaspaFullTransactionResponse, source: String) -> Bool {
-        let suppressed = suppressedKNSPaymentTxIds(from: [transaction])
-        guard !suppressed.isEmpty else { return false }
-        registerSuppressedPaymentTxIds(Array(suppressed), reason: source)
-        return suppressed.contains(transaction.transactionId.lowercased())
-    }
-
     func decodeKNSRevealOperationJSON(signatureScriptHex: String) -> [String: Any]? {
         let lowered = signatureScriptHex.lowercased()
         guard let startRange = lowered.range(of: "7b22") else { return nil } // {"...
@@ -3303,16 +3295,6 @@ extension ChatService {
             // A reply to a message this device never received is the one signal that a message
             // was missed; act on it rather than leave a quote that opens onto nothing.
             recoverMissingReplyOriginalIfNeeded(for: message, contactAddress: contactAddress)
-        }
-
-        // If user is currently viewing this chat, advance read marker immediately
-        // to prevent unread counter resurrection after store reload/merge.
-        if isNewMessage && !message.isOutgoing && isUserViewing && message.blockTime > 0 {
-            ReadStatusSyncManager.shared.markAsRead(
-                contactAddress: contactAddress,
-                lastReadTxId: message.txId,
-                lastReadBlockTime: message.blockTime
-            )
         }
 
         // Send local notification for new incoming messages.

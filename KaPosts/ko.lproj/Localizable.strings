@@ -266,7 +266,6 @@
 "None yet" = "아직 없음";
 ".kachat Name" = ".kachat 이름";
 ".kachat names are coming" = ".kachat 이름이 곧 나옵니다";
-"Get a %@ domain at %@" = "%2$@에서 %1$@ 도메인 받기";
 "No %@ names yet." = "아직 %@ 이름이 없습니다.";
 "Couldn't reach %@. Pull down to try again." = "%@에 연결할 수 없습니다. 아래로 당겨 다시 시도하세요.";
 "Settling" = "확정 중";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost는 아직 테스트넷에서 사용할 수 없습니다";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "테스트넷용 KaPost 인덱서가 없습니다. 메인넷에서 읽고 게시하려면 설정 > 연결에서 테스트넷을 끄세요.";
-"Offer accepted" = "제안 수락됨";
 "Expired" = "만료됨";
 "Keep" = "유지";
 "Cancelled." = "취소됐어요.";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "Kaspa와 통화 간 전환";
 "Opens this transaction in the block explorer." = "블록 탐색기에서 이 거래를 엽니다.";
 "New Public Chat" = "새 공개 채팅";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "이 주소는 채팅과 도메인 전용입니다. 1 Kaspa로 앱에서 약 500번의 활동을 할 수 있습니다. 도메인은 이름에 따라 35~4,000 Kaspa입니다.";
 "Unpinned" = "고정 해제됨";
 "Coin Control" = "코인 컨트롤";
 "Automatic" = "자동";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "갱신 가능: 유지하려면 %@ 전에 갱신하세요.";
 "%@ has expired" = "%@ 만료됨";
 "Renew it before %@ or anyone can claim it." = "%@ 전에 갱신하지 않으면 누구나 가져갈 수 있어요.";
-"%@ sold" = "%@ 판매됨";
-"%@ KAS was paid to you." = "%@ KAS가 지급되었어요.";
-"Your listing was bought." = "등록한 이름이 판매되었어요.";
-"You accepted an offer for it." = "이 이름에 대한 제안을 수락했어요.";
-"New offer on %@" = "%@에 새 제안";
-"%@ KAS offered for it." = "%@ KAS가 제안되었어요.";
-"%@ is yours now." = "%@이(가) 이제 내 것이에요.";
-"Offer on %@ declined" = "%@에 대한 제안 거절됨";
-"The owner declined it. The KAS is back with you." = "소유자가 거절했어요. KAS가 돌아왔어요.";
-"Offer on %@ expired" = "%@에 대한 제안 만료됨";
-"Nobody accepted it in time. The KAS is back with you." = "제때 아무도 수락하지 않았어요. KAS가 돌아왔어요.";
-"Offer on %@ returned" = "%@에 대한 제안 반환됨";
-"It can no longer be accepted. The KAS is back with you." = "더 이상 수락할 수 없어요. KAS가 돌아왔어요.";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ 해제됨";
-"It expired and was cleared from the registry. Your bond is back with you." = "만료되어 레지스트리에서 정리되었습니다. 보증금이 돌아왔습니다.";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@은(는) 더 이상 내 것이 아닙니다";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "이 주소에는 공개 키가 없습니다.";
 "This address holds funds, so this looks like the right account." = "이 주소에 자금이 있으므로 맞는 계정으로 보입니다.";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "이 카드에는 이미 백업이 있습니다. 저장하면 새 백업이 확인된 후에 교체됩니다.";
-"This file is no longer shared" = "이 파일은 더 이상 공유되지 않습니다";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "이 iPhone에 계정은 있지만 키는 없습니다. 휴대폰을 백업에서 복원하면 이런 일이 생깁니다. KaPost의 키는 생성된 기기에 묶여 있기 때문입니다. 여기서 잠금 해제하려면 12개 또는 24개 단어를 입력하세요. 이 기기의 메시지는 유지됩니다.";
 "This is more than the address you're sending from holds." = "보내는 주소의 잔액보다 많습니다.";
 "This is much more than the network needs." = "네트워크에 필요한 금액보다 훨씬 많습니다.";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "여기 있는 모든 것은 필요할 때 다시 내려받거나 생성되므로, 지워도 데이터를 조금 쓸 뿐 다른 영향은 없습니다.";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "아래에서 켜 둔 모든 항목은 앱이 닫혀 있어도 알림을 보냅니다. 끄면 모두 조용해집니다.";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "앱/기기 정보, 연결 설정, 로컬 메시지 수, 최근 앱 로그를 zip으로 내보냅니다. 지원팀과 문제를 해결하는 데 쓰입니다. 개인 키, 12개 또는 24개 단어, 복호화된 메시지 내용은 포함되지 않습니다.";
-"FILE" = "파일";
 "Failed to edit: %@" = "편집하지 못했습니다: %@";
 "Failed to send voice message: %@" = "음성 메시지를 보내지 못했습니다: %@";
 "Failed to send: %@" = "보내지 못했습니다: %@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "기본 팁을 즉시 보내기";
 "Sends this message again." = "이 메시지를 다시 보냅니다.";
 "Share this room" = "이 방 공유";
-"Shared File" = "공유된 파일";
 "Shares it to your followers as-is." = "그대로 팔로워에게 공유합니다.";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "공유하면 KaPost에서 이 방을 여는 링크와, KaPost가 없는 사람을 위한 웹 링크가 전송됩니다. 숨기기는 방마다 적용되어, 여기서 숨긴 사람도 다른 방에서는 계속 보입니다.";
 "Show %@ new posts" = "새 게시물 %@개 보기";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "탭하여 이 공개 채팅 방을 엽니다.";
 "Tap to open your chat." = "탭하여 채팅을 엽니다.";
 "Terms of Use" = "이용 약관";
-"Testnet (testnet-10)" = "테스트넷 (testnet-10)";
 "The catch" = "단점";
 "The key that spends this address. Never share it." = "이 주소에서 지출하는 키입니다. 절대 공유하지 마세요.";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "KaPost가 조회하는 유일한 이름 서비스로, 주소를 입력할 수 있는 모든 곳에서 쓰입니다. 직접 이름 인덱서를 운영해 그 주소를 여기에 넣거나, 비워 두면 기본값을 사용합니다. 인덱서가 응답하지 않거나 뒤처지면 이름은 체인에서 직접 읽습니다.";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "지금은 이 주소들을 생성할 수 없습니다. 이전 페이지로 가거나 이 화면을 다시 열어 재시도하세요.";
 "When a spending address receives Kaspa from someone else." = "지출 주소가 다른 사람에게서 Kaspa를 받을 때.";
 "Your Domains" = "내 도메인";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "한 번도 쓰지 않은 새 주소입니다. 여기로 보낸 Kaspa는 이 계정에 들어오고 지출 잔액에 포함됩니다. .kachat 이름을 제외한 모든 용도에 쓰세요.";
 "Address hidden. Re-enable it in Address Visibility." = "주소를 숨겼습니다. 주소 표시에서 다시 켤 수 있습니다.";
 "Check off every address you want on the list, in one sitting." = "목록에 넣을 주소를 한 번에 모두 체크하세요.";
 "Full screen, for scanning with another device." = "전체 화면. 다른 기기로 스캔할 때 쓰세요.";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "KaPay를 열어 결제합니다.";
 "Puts the full address on the clipboard." = "전체 주소를 클립보드에 복사합니다.";
 "Removes it from this list. Re-enable it in Address Visibility." = "이 목록에서 뺍니다. 주소 표시에서 다시 켤 수 있습니다.";
-"Reveals the next unused address in this wallet." = "이 지갑의 다음 미사용 주소를 보여줍니다.";
 "This address can't be hidden." = "이 주소는 숨길 수 없습니다.";
 "Unlock to view this address's private key" = "이 주소의 개인 키를 보려면 잠금을 해제하세요";
 "Tips From" = "팁 보낼 주소";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "주소 #%@이(가) 준비되었습니다.";
 "One send wasn't confirmed. Check that address before trying again." = "전송 1건이 확인되지 않았습니다. 다시 시도하기 전에 해당 주소를 확인하세요.";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "전송 %@건이 확인되지 않았습니다. 다시 시도하기 전에 해당 주소들을 확인하세요.";
+"%@ Actions" = "%@ 작업";
+"%@ Address Visibility" = "%@ 주소 표시";
+"%@ Balance" = "%@ 잔액";
+"%@ History" = "%@ 내역";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ 토큰은 일반 Kaspa 주소로만 보낼 수 있으며, 양자 내성 주소나 다른 스크립트 주소로는 보낼 수 없습니다.";
+"%@ held with it" = "함께 보관된 %@";
+"%d Addresses" = "주소 %d개";
+"%d coins into 1" = "%d개를 1개로";
+"%d found so far" = "지금까지 %d개 찾음";
+"%d hidden: they still count in the total." = "%d개 숨김: 합계에는 계속 포함돼요.";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "한 번도 쓰거나 공유한 적 없는 새 주소예요. 이 결제는 이름과 연결될 수 없어요.";
+"A quantum-resistant address: its key stays hidden until it spends." = "양자 내성 주소예요. 보낼 때까지 키가 숨겨져 있어요.";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "받기에서 주는 것과 같은 일반 주소예요. kUSDT를 포함해 모든 것에 쓸 수 있어요.";
+"A spending address of yours: a payment here isn't tied to your name." = "당신의 지출 주소예요. 여기로 결제해도 이름과 연결되지 않아요.";
+"About %@" = "%@ 정보";
+"Add %@ More" = "%@ 더 추가";
+"Add %@ for Fee and Change Coin" = "수수료와 잔돈 코인용 %@ 추가";
+"Add %@ for the Network Fee" = "네트워크 수수료용 %@ 추가";
+"Address #%lld is ready." = "주소 #%lld이(가) 준비되었습니다.";
+"Adds a brand-new regular address of yours to this list." = "새로운 일반 주소를 이 목록에 추가해요.";
+"Amount (%@)" = "금액(%@)";
+"Available: %@" = "사용 가능: %@";
+"Back to This Address" = "이 주소로 돌아오는 금액";
+"Bridged In" = "브리지로 입금";
+"Bridged USDT" = "브리지 USDT";
+"Bridged by %@" = "%@ 브리지";
+"Broadcasting to the Kaspa BlockDAG..." = "Kaspa BlockDAG에 전파하는 중...";
+"Building the transaction…" = "트랜잭션 만드는 중…";
+"Check Again" = "다시 확인";
+"Check off which addresses holding kUSDT are on the list." = "kUSDT를 보유한 주소 중 목록에 보일 주소를 체크하세요.";
+"Checking address #%d" = "주소 #%d 확인 중";
+"Checking your %@..." = "%@ 확인 중…";
+"Coins Combined" = "코인을 합쳤어요";
+"Combine Coins" = "코인 합치기";
+"Combined" = "합친 금액";
+"Combined Coins" = "코인 합침";
+"Couldn't check %@ just now: %@ Pull down to try again." = "지금은 %1$@을(를) 확인하지 못했어요: %2$@ 아래로 당겨 다시 시도하세요.";
+"Discover kUSDT Addresses" = "kUSDT 주소 찾기";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "이더리움, BNB 체인, 거래소에서 이 주소로 USDT를 보내지 마세요. 잃게 돼요. 먼저 Trestly에서 Kaspa로 브리지하세요.";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "여기로 kUSDT를 보내지 마세요. 양자 내성 주소에서는 거래할 수 없어요. 일반 주소는 받기를 쓰세요.";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "%@ 코인마다 %@가 들어 있어요. 하나로 합치면 남는 KAS가 네트워크 수수료를 빼고 일반 KAS로 이 주소에 돌아와요. %@ 금액은 그대로예요.";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "%@ 코인 하나에는 %@씩 들어 있습니다. 이 KAS는 %@ 토큰과 함께 받는 사람에게 전달되므로 사라지지 않습니다.";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "kUSDT 코인 하나에는 1.5 KAS씩 들어 있습니다. kUSDT를 보낼 때 함께 전송됩니다.";
+"Finds your addresses holding kUSDT." = "kUSDT를 보유한 주소를 찾아요.";
+"Found %d addresses with %@." = "%2$@ 있는 주소 %1$d개를 찾았어요.";
+"Generate Non-Quantum Address" = "비양자 주소 만들기";
+"Generate Quantum-Resistant Address" = "양자 내성 주소 만들기";
+"Goes With It" = "함께 전송";
+"Held On" = "보관 위치";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "이 계정으로 들어오고 지출 합계에 포함돼요. .kachat 이름을 빼고 모든 것에 쓰세요.";
+"KAS Held With It" = "포함된 KAS";
+"KAS Paid From" = "KAS 결제 주소";
+"KAS for a %@ send" = "%@ 전송용 KAS";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "여기로 Kaspa와 Kaspa 위의 kUSDT를 보낼 수 있어요.";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "보낼 때까지 키를 숨겨 둬요. Kaspa 전용: 여기서는 kUSDT를 거래할 수 없어요.";
+"Manage %@" = "%@ 관리";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "%1$@ 관리가 채팅 주소만으로 다시 시작돼요. 잃는 건 없어요. 여기서 어떤 주소든 되돌릴 수 있고, 그 %2$@도 계속 합계에 포함돼요.";
+"Merges its coins into one and gives the extra KAS back." = "코인을 하나로 합치고 남는 KAS를 돌려줘요.";
+"More than your %@." = "%@ 잔액보다 많습니다.";
+"Moves Kaspa from this address to your Chatting Address." = "이 주소의 Kaspa를 채팅 주소로 옮겨요.";
+"Moves kUSDT from this address to your Chatting Address." = "이 주소의 kUSDT를 채팅 주소로 옮겨요.";
+"No %@ Yet" = "아직 %@ 없음";
+"No %@ activity yet." = "아직 %@ 활동이 없어요.";
+"No addresses with %@ found." = "%@ 있는 주소를 찾지 못했어요.";
+"No addresses with %@ yet" = "아직 %@ 있는 주소 없음";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "확인되지 않음: 네트워크가 응답하지 않았어요. 아직 처리될 수 있어요. 다시 시도는 같은 트랜잭션을 보내므로 두 번 결제되지 않아요.";
+"Not independently audited yet. Hold only what you can afford to lose." = "아직 독립적인 감사를 받지 않았습니다. 잃어도 괜찮은 만큼만 보유하세요.";
+"On %d of your addresses" = "당신의 주소 %d개로";
+"On your %@" = "당신의 %@(으)로";
+"Only %@ on Kaspa, or KAS, can be sent here." = "Kaspa의 %@ 또는 KAS만 이곳으로 보낼 수 있습니다.";
+"Only Kaspa can be sent here." = "여기로는 Kaspa만 보낼 수 있어요.";
+"Pending" = "대기 중";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "KAS를 보낼 주소를 고르고 위로 밀면 다시 여기로 돌아와요.";
+"Receive %@" = "%@ 받기";
+"Received %@" = "%@ 받음";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "이 목록에서 빼요. %@ 주소 표시에서 다시 켤 수 있어요.";
+"Sample Data" = "샘플 데이터";
+"Send %@" = "%@ 보내기";
+"Send to Chatting Address" = "채팅 주소로 보내기";
+"Sends, receives and combines on this phone show here from now on." = "이제부터 이 휴대폰에서 보내고 받고 합친 내역이 여기에 표시돼요.";
+"Swapped" = "스왑 완료";
+"Swipe up to Combine" = "위로 밀어서 합치기";
+"Tap to Manage" = "탭하여 관리";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "그 금액은 이 주소의 kUSDT 코인 3개 이상에 나뉘어 있어요. 지금은 더 적은 금액을 보내세요.";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "수수료 KAS는 같은 주소에서 나가므로, 이 전송이 다른 주소와 연결되지 않아요.";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "보낸 KAS가 아직 이 주소에 보이지 않아요. 보통 몇 초면 도착해요.";
+"The Trestly API address in Connection Settings isn't a valid https address." = "연결 설정의 Trestly API 주소가 올바른 https 주소가 아니에요.";
+"The built transaction didn't match what you approved, so nothing was sent." = "만들어진 트랜잭션이 승인한 내용과 달라서 아무것도 보내지 않았어요.";
+"The transaction couldn't be built. Nothing was sent." = "트랜잭션을 만들 수 없었어요. 아무것도 보내지 않았어요.";
+"This address doesn't hold that much kUSDT." = "이 주소에는 그만큼의 kUSDT가 없어요.";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "이 주소에 KAS가 없어서 네트워크 수수료는 kUSDT와 함께 가는 KAS에서 냈어요.";
+"This address holds its kUSDT in one coin already." = "이 주소의 kUSDT는 이미 코인 하나에 있어요.";
+"This address needs a little KAS for the network fee." = "이 주소에는 네트워크 수수료용 KAS가 조금 필요해요.";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "이 주소에는 KAS가 조금 필요해요. 네트워크 수수료와 잔돈 코인(남는 kUSDT)에 들어갈 1.5 KAS예요. 그 1.5 KAS는 계속 당신 거예요.";
+"This address on the Kaspa explorer." = "Kaspa 탐색기에서 이 주소 보기.";
+"This address's key isn't available on this phone." = "이 주소의 키가 이 폰에 없어요.";
+"Total KAS" = "총 KAS";
+"Trestly API URL" = "Trestly API URL";
+"Trestly answered HTTP %d." = "Trestly가 HTTP %d(으)로 응답했어요.";
+"Trestly didn't answer." = "Trestly가 응답하지 않았어요.";
+"Trestly's answer couldn't be read." = "Trestly의 응답을 읽을 수 없어요.";
+"Up to %d coins combine at a time. Combine again for the rest." = "한 번에 최대 %d개까지 합쳐져요. 나머지는 한 번 더 합치세요.";
+"Waiting for your KAS to arrive…" = "KAS가 도착하기를 기다리는 중…";
+"What are you sending?" = "무엇을 보내시나요?";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "채팅 주소에는 .kachat 이름과 신원이 보여요. 여기로 결제하는 사람은 당신인 걸 알 수 있어요.";
+"kUSDT Address Visibility" = "kUSDT 주소 표시";
+"kUSDT Balances" = "kUSDT 잔액";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT는 일반 Kaspa 주소로만 보낼 수 있어요.";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT는 Ethereum과 BNB Chain의 USDT로, Trestly 금고에 1:1로 보관되며 Kaspa에서 토큰으로 발행됩니다. Tether가 발행한 것이 아니며, USDT로 다시 바꿀 수 있는 것은 Trestly뿐입니다.";
+"kUSDT's transaction builder couldn't start." = "kUSDT 트랜잭션 빌더를 시작할 수 없었어요.";
+"kUSDT's transaction builder gave no answer." = "kUSDT 트랜잭션 빌더가 응답하지 않았어요.";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "kUSDT 트랜잭션 빌더가 고정된 것이 아니라서 실행하지 않아요.";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "KaPost의 kUSDT 템플릿이 없어 kUSDT를 확인할 수 없어요.";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "네트워크 수수료가 KaPost의 안전 한도를 넘었어요. 아무것도 보내지 않았어요.";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "KaPost가 어떤 주소에 kUSDT가 있는지 조회하는 곳이에요. 모든 응답은 표시 전에 Kaspa 네트워크에서 확인돼요.";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "새 주소로 받으세요. KAS를 kUSDT로 바꾸는 건 KaPay에서 하세요.";
+"Swap kUSDT in KaPay." = "kUSDT 교환은 KaPay에서 하세요.";
+"Release to Confirm" = "놓아서 확인";
+"The transaction didn't go out." = "거래가 전송되지 않았습니다.";
+"Fee %@" = "수수료 %@";
+"Push" = "푸시";
+"Trestly" = "Trestly";
+"Reading names from" = "이름을 읽어오는 곳";
+"Not live on this network" = "이 네트워크에서 사용 불가";
+"The chain" = "체인";
+"Indexer not usable right now" = "현재 Indexer를 사용할 수 없음";
+"Not set" = "설정 안 됨";
+"Use for chatting and acquiring .kachat domains." = "채팅과 .kachat 도메인 획득에 사용하세요.";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "kUSDT 때문에 표시됨";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "이 주소는 kUSDT 목록에 있으므로 여기에 남습니다. 먼저 kUSDT 관리에서 숨기세요.";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "팁 통화";
+"Ask Each Time" = "매번 묻기";
+"What are you tipping in?" = "무엇으로 팁을 보낼까요?";
+"Not counted on the post" = "게시물에 집계되지 않음";
+"Set what Tip sends in Settings > KaPost > Tip In." = "팁으로 보낼 것을 설정 > KaPost > 팁 통화에서 정하세요.";
+"Tip asks whether to send Kaspa or kUSDT each time." = "팁을 누를 때마다 Kaspa와 kUSDT 중 무엇을 보낼지 묻습니다.";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "팁은 작성자의 채팅 주소로 kUSDT를 보냅니다. kUSDT 팁은 게시물에 집계되지 않습니다.";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "KaPay 받기";
+"None of your addresses holds %@ yet." = "아직 %@을(를) 가진 주소가 없습니다.";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "계정이 바뀌어서 보내지 않았습니다.";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "검토 화면이 한동안 열려 있어 거래를 다시 만들었습니다. 아무것도 보내지 않았습니다. 확인한 뒤 다시 밀어 주세요.";
+"Balance increased by %@" = "잔액이 %@ 늘었습니다";
+"%d of your addresses" = "주소 %d개";
+"Chatting address %@" = "채팅 주소 %@";
+"Spending address %@" = "지출 주소 %@";

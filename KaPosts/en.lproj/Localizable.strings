@@ -266,7 +266,6 @@
 "None yet" = "None yet";
 ".kachat Name" = ".kachat Name";
 ".kachat names are coming" = ".kachat names are coming";
-"Get a %@ domain at %@" = "Get a %@ domain at %@";
 "No %@ names yet." = "No %@ names yet.";
 "Couldn't reach %@. Pull down to try again." = "Couldn't reach %@. Pull down to try again.";
 "Settling" = "Settling";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost isn't available on Testnet yet";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet.";
-"Offer accepted" = "Offer accepted";
 "Expired" = "Expired";
 "Keep" = "Keep";
 "Cancelled." = "Cancelled.";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "Switch between Kaspa and your currency";
 "Opens this transaction in the block explorer." = "Opens this transaction in the block explorer.";
 "New Public Chat" = "New Public Chat";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name.";
 "Unpinned" = "Unpinned";
 "Coin Control" = "Coin Control";
 "Automatic" = "Automatic";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "Renewal is open: renew it before %@ to keep it.";
 "%@ has expired" = "%@ has expired";
 "Renew it before %@ or anyone can claim it." = "Renew it before %@ or anyone can claim it.";
-"%@ sold" = "%@ sold";
-"%@ KAS was paid to you." = "%@ KAS was paid to you.";
-"Your listing was bought." = "Your listing was bought.";
-"You accepted an offer for it." = "You accepted an offer for it.";
-"New offer on %@" = "New offer on %@";
-"%@ KAS offered for it." = "%@ KAS offered for it.";
-"%@ is yours now." = "%@ is yours now.";
-"Offer on %@ declined" = "Offer on %@ declined";
-"The owner declined it. The KAS is back with you." = "The owner declined it. The KAS is back with you.";
-"Offer on %@ expired" = "Offer on %@ expired";
-"Nobody accepted it in time. The KAS is back with you." = "Nobody accepted it in time. The KAS is back with you.";
-"Offer on %@ returned" = "Offer on %@ returned";
-"It can no longer be accepted. The KAS is back with you." = "It can no longer be accepted. The KAS is back with you.";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ was freed";
-"It expired and was cleared from the registry. Your bond is back with you." = "It expired and was cleared from the registry. Your bond is back with you.";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ is no longer yours";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -745,7 +726,6 @@
 "Where do you want to be paid?" = "Where do you want to be paid?";
 "You're requesting" = "You're requesting";
 "Your Domains" = "Your Domains";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names.";
 "Address hidden. Re-enable it in Address Visibility." = "Address hidden. Re-enable it in Address Visibility.";
 "Check off every address you want on the list, in one sitting." = "Check off every address you want on the list, in one sitting.";
 "Full screen, for scanning with another device." = "Full screen, for scanning with another device.";
@@ -759,7 +739,6 @@
 "Opens KaPay to pay it." = "Opens KaPay to pay it.";
 "Puts the full address on the clipboard." = "Puts the full address on the clipboard.";
 "Removes it from this list. Re-enable it in Address Visibility." = "Removes it from this list. Re-enable it in Address Visibility.";
-"Reveals the next unused address in this wallet." = "Reveals the next unused address in this wallet.";
 "This address can't be hidden." = "This address can't be hidden.";
 "Unlock to view this address's private key" = "Unlock to view this address's private key";
 "Tips From" = "Tips From";
@@ -1153,7 +1132,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else.";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it.";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included.";
-"FILE" = "FILE";
 "Failed to send. Tap to retry." = "Failed to send. Tap to retry.";
 "Fee (KAS)" = "Fee (KAS)";
 "Find posts by what they say, and people by their name or domain. Only people who have posted appear." = "Find posts by what they say, and people by their name or domain. Only people who have posted appear.";
@@ -1388,7 +1366,6 @@
 "Sends this message again." = "Sends this message again.";
 "Set your network fee" = "Set your network fee";
 "Share this room" = "Share this room";
-"Shared File" = "Shared File";
 "Shares it to your followers as-is." = "Shares it to your followers as-is.";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room.";
 "Show %@ new posts" = "Show %@ new posts";
@@ -1416,7 +1393,6 @@
 "Tap to retry" = "Tap to retry";
 "Tap to reveal your 12 or 24 words" = "Tap to reveal your 12 or 24 words";
 "Terms of Use" = "Terms of Use";
-"Testnet (testnet-10)" = "Testnet (testnet-10)";
 "That doesn't match. Check your paper and try again." = "That doesn't match. Check your paper and try again.";
 "That doesn't match. Check your paper, or go back to see it again." = "That doesn't match. Check your paper, or go back to see it again.";
 "That doesn't match. Check your paper, or go back to see the words again." = "That doesn't match. Check your paper, or go back to see the words again.";
@@ -1441,7 +1417,6 @@
 "This address does not carry a public key." = "This address does not carry a public key.";
 "This address holds funds, so this looks like the right account." = "This address holds funds, so this looks like the right account.";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "This card already holds a backup. Saving replaces it once the new one is confirmed.";
-"This file is no longer shared" = "This file is no longer shared";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept.";
 "This is more than the address you're sending from holds." = "This is more than the address you're sending from holds.";
 "This is much more than the network needs." = "This is much more than the network needs.";
@@ -1544,3 +1519,157 @@
 "· %@ posts" = "· %@ posts";
 "· %lld posts" = "· %lld posts";
 "· edited" = "· edited";
+"%@ Actions" = "%@ Actions";
+"%@ Address Visibility" = "%@ Address Visibility";
+"%@ Balance" = "%@ Balance";
+"%@ History" = "%@ History";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ can only go to a regular Kaspa address, not a quantum-safe or other script address.";
+"%@ held with it" = "%@ held with it";
+"%d Addresses" = "%d Addresses";
+"%d coins into 1" = "%d coins into 1";
+"%d found so far" = "%d found so far";
+"%d hidden: they still count in the total." = "%d hidden: they still count in the total.";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "A brand-new address of yours, never used or handed out: this payment can't be tied to your name.";
+"A quantum-resistant address: its key stays hidden until it spends." = "A quantum-resistant address: its key stays hidden until it spends.";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "A regular address, like Receive gives you. Works with everything, kUSDT included.";
+"A spending address of yours: a payment here isn't tied to your name." = "A spending address of yours: a payment here isn't tied to your name.";
+"About %@" = "About %@";
+"Add %@ More" = "Add %@ More";
+"Add %@ for Fee and Change Coin" = "Add %@ for Fee and Change Coin";
+"Add %@ for the Network Fee" = "Add %@ for the Network Fee";
+"Address #%lld is ready." = "Address #%lld is ready.";
+"Adds a brand-new regular address of yours to this list." = "Adds a brand-new regular address of yours to this list.";
+"Amount (%@)" = "Amount (%@)";
+"Available: %@" = "Available: %@";
+"Back to This Address" = "Back to This Address";
+"Bridged In" = "Bridged In";
+"Bridged USDT" = "Bridged USDT";
+"Bridged by %@" = "Bridged by %@";
+"Broadcasting to the Kaspa BlockDAG..." = "Broadcasting to the Kaspa BlockDAG...";
+"Building the transaction…" = "Building the transaction…";
+"Check Again" = "Check Again";
+"Check off which addresses holding kUSDT are on the list." = "Check off which addresses holding kUSDT are on the list.";
+"Checking address #%d" = "Checking address #%d";
+"Checking your %@..." = "Checking your %@...";
+"Coins Combined" = "Coins Combined";
+"Combine Coins" = "Combine Coins";
+"Combined" = "Combined";
+"Combined Coins" = "Combined Coins";
+"Couldn't check %@ just now: %@ Pull down to try again." = "Couldn't check %@ just now: %@ Pull down to try again.";
+"Discover kUSDT Addresses" = "Discover kUSDT Addresses";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first.";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one.";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same.";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost.";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it.";
+"Finds your addresses holding kUSDT." = "Finds your addresses holding kUSDT.";
+"Found %d addresses with %@." = "Found %d addresses with %@.";
+"Generate Non-Quantum Address" = "Generate Non-Quantum Address";
+"Generate Quantum-Resistant Address" = "Generate Quantum-Resistant Address";
+"Goes With It" = "Goes With It";
+"Held On" = "Held On";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "It lands in this account and shows in your spending total. Use it for everything except .kachat names.";
+"KAS Held With It" = "KAS Held With It";
+"KAS Paid From" = "KAS Paid From";
+"KAS for a %@ send" = "KAS for a %@ send";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "Kaspa, and kUSDT on Kaspa, can be sent here.";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it.";
+"Manage %@" = "Manage %@";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total.";
+"Merges its coins into one and gives the extra KAS back." = "Merges its coins into one and gives the extra KAS back.";
+"More than your %@." = "More than your %@.";
+"Moves Kaspa from this address to your Chatting Address." = "Moves Kaspa from this address to your Chatting Address.";
+"Moves kUSDT from this address to your Chatting Address." = "Moves kUSDT from this address to your Chatting Address.";
+"No %@ Yet" = "No %@ Yet";
+"No %@ activity yet." = "No %@ activity yet.";
+"No addresses with %@ found." = "No addresses with %@ found.";
+"No addresses with %@ yet" = "No addresses with %@ yet";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice.";
+"Not independently audited yet. Hold only what you can afford to lose." = "Not independently audited yet. Hold only what you can afford to lose.";
+"On %d of your addresses" = "On %d of your addresses";
+"On your %@" = "On your %@";
+"Only %@ on Kaspa, or KAS, can be sent here." = "Only %@ on Kaspa, or KAS, can be sent here.";
+"Only Kaspa can be sent here." = "Only Kaspa can be sent here.";
+"Pending" = "Pending";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "Pick which of your addresses the KAS comes from, swipe up, and you're back here.";
+"Receive %@" = "Receive %@";
+"Received %@" = "Received %@";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "Removes it from this list. Re-enable it in %@ Address Visibility.";
+"Sample Data" = "Sample Data";
+"Send %@" = "Send %@";
+"Send to Chatting Address" = "Send to Chatting Address";
+"Sends, receives and combines on this phone show here from now on." = "Sends, receives and combines on this phone show here from now on.";
+"Swapped" = "Swapped";
+"Swipe up to Combine" = "Swipe up to Combine";
+"Tap to Manage" = "Tap to Manage";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now.";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses.";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds.";
+"The Trestly API address in Connection Settings isn't a valid https address." = "The Trestly API address in Connection Settings isn't a valid https address.";
+"The built transaction didn't match what you approved, so nothing was sent." = "The built transaction didn't match what you approved, so nothing was sent.";
+"The transaction couldn't be built. Nothing was sent." = "The transaction couldn't be built. Nothing was sent.";
+"This address doesn't hold that much kUSDT." = "This address doesn't hold that much kUSDT.";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT.";
+"This address holds its kUSDT in one coin already." = "This address holds its kUSDT in one coin already.";
+"This address needs a little KAS for the network fee." = "This address needs a little KAS for the network fee.";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours.";
+"This address on the Kaspa explorer." = "This address on the Kaspa explorer.";
+"This address's key isn't available on this phone." = "This address's key isn't available on this phone.";
+"Total KAS" = "Total KAS";
+"Trestly API URL" = "Trestly API URL";
+"Trestly answered HTTP %d." = "Trestly answered HTTP %d.";
+"Trestly didn't answer." = "Trestly didn't answer.";
+"Trestly's answer couldn't be read." = "Trestly's answer couldn't be read.";
+"Up to %d coins combine at a time. Combine again for the rest." = "Up to %d coins combine at a time. Combine again for the rest.";
+"Waiting for your KAS to arrive…" = "Waiting for your KAS to arrive…";
+"What are you sending?" = "What are you sending?";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you.";
+"kUSDT Address Visibility" = "kUSDT Address Visibility";
+"kUSDT Balances" = "kUSDT Balances";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT can only go to a regular Kaspa address.";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT.";
+"kUSDT's transaction builder couldn't start." = "kUSDT's transaction builder couldn't start.";
+"kUSDT's transaction builder gave no answer." = "kUSDT's transaction builder gave no answer.";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "kUSDT's transaction builder isn't the pinned one, so it won't run.";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "KaPost's kUSDT template is missing, so kUSDT can't be checked.";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "The network fee is above KaPost's safety limit. Nothing was sent.";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown.";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "Receive it on a fresh address. Swap KAS for kUSDT in KaPay.";
+"Swap kUSDT in KaPay." = "Swap kUSDT in KaPay.";
+"Release to Confirm" = "Release to Confirm";
+"The transaction didn't go out." = "The transaction didn't go out.";
+"Fee %@" = "Fee %@";
+"Push" = "Push";
+"Trestly" = "Trestly";
+"Reading names from" = "Reading names from";
+"Not live on this network" = "Not live on this network";
+"The chain" = "The chain";
+"Indexer not usable right now" = "Indexer not usable right now";
+"Not set" = "Not set";
+"Use for chatting and acquiring .kachat domains." = "Use for chatting and acquiring .kachat domains.";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "Shown for kUSDT";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first.";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "Tip In";
+"Ask Each Time" = "Ask Each Time";
+"What are you tipping in?" = "What are you tipping in?";
+"Not counted on the post" = "Not counted on the post";
+"Set what Tip sends in Settings > KaPost > Tip In." = "Set what Tip sends in Settings > KaPost > Tip In.";
+"Tip asks whether to send Kaspa or kUSDT each time." = "Tip asks whether to send Kaspa or kUSDT each time.";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post.";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "Get KaPay";
+"None of your addresses holds %@ yet." = "None of your addresses holds %@ yet.";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "The account changed, so this wasn't sent.";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again.";
+"Balance increased by %@" = "Balance increased by %@";
+"%d of your addresses" = "%d of your addresses";
+"Chatting address %@" = "Chatting address %@";
+"Spending address %@" = "Spending address %@";

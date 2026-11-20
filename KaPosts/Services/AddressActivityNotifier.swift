@@ -27,9 +27,11 @@ import UserNotifications
 /// resolution fails. First run just seeds the baseline silently so enabling the feature (or
 /// importing a wallet) never blasts notifications for historical funds.
 ///
-/// Gated by Settings > Notifications > "Address Activity" (default ON) plus the master
-/// notification mode. Deliberately NOT gated by Simple Mode - Portfolio, Manage Addresses and
-/// Cold Storage all remain available there, and these are wallet notifications, not social.
+/// In KaPost: on whenever notifications are (Settings > Notifications > Push Notifications,
+/// `AppSettings.notificationMode`, plus `addressActivityNotificationsEnabled`, which has no switch
+/// here and stays on). Per account, Settings > Notifications > Wallet > Notify on receive
+/// (`spendingReceiveNotificationsEnabled`) decides whether the spending addresses notify; the
+/// chatting address notifies for plain transfers only (`notifiableAddressSet`).
 ///
 /// Addresses currently reserved-and-offered as fresh payment-pool receive addresses are
 /// excluded from notification (payments to those DO create chat bubbles via the
@@ -42,6 +44,11 @@ final class AddressActivityNotifier: ObservableObject {
         // A subscription restored after a failover: what arrived meanwhile is found by the
         // balance diff (debounced), never by replaying the UTXO set as new (IOS-070).
         NotificationCenter.default.addObserver(forName: .rpcSubscriptionsRestored, object: nil, queue: .main) { _ in
+            Task { @MainActor in await AddressActivityNotifier.shared.runCatchUpIfNeeded() }
+        }
+        // Back in the front: what arrived while the app was away (debounced, and nothing at all
+        // while the feature is off).
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in await AddressActivityNotifier.shared.runCatchUpIfNeeded() }
         }
     }
@@ -196,9 +203,17 @@ final class AddressActivityNotifier: ObservableObject {
 
     /// Catch-up path, run on app foreground: diff live balances of every watched address
     /// against the persisted baseline and notify for increases not attributable to our own
-    /// activity. Debounced; the first run for a wallet only seeds the baseline.
+    /// activity. Debounced; the first run for a wallet only seeds the baseline, and so does the
+    /// first run after the feature was off (its baselines are dropped then, since nothing kept
+    /// them current), so turning it on never announces old funds.
     func runCatchUpIfNeeded() async {
         guard let wallet = WalletManager.shared.currentWallet else { return }
+        guard featureEnabled else {
+            // Nothing is notifiable: no balance reads. Forget the baselines and where the last
+            // catch-up ended, so the next run with it on starts fresh and silent.
+            forgetCatchUpState(wallet: wallet.publicAddress)
+            return
+        }
         if let last = lastCatchUpAt,
            lastCatchUpWallet == wallet.publicAddress,
            Date().timeIntervalSince(last) < 60 {
@@ -227,8 +242,19 @@ final class AddressActivityNotifier: ObservableObject {
         }
 
         var baselines = loadBaselines(wallet: wallet.publicAddress)
-        let isFirstRun = baselines.isEmpty
-        var changed = false
+        // Only what's watched now keeps a baseline: an address that stops notifying (Notify on
+        // receive off) is seeded again, silently, when it comes back.
+        let pruned = baselines.filter { watched.contains($0.key) }
+        var changed = pruned.count != baselines.count
+        baselines = pruned
+        // No record of where the last catch-up ended (first run, or the feature was just off):
+        // seed every baseline silently.
+        let lastCatchUpMs = UserDefaults.standard.object(forKey: catchUpAtKey(wallet: wallet.publicAddress)) as? Double
+        let isFirstRun = baselines.isEmpty || lastCatchUpMs == nil
+        // Receives older than the previous catch-up are already in its baselines (10 min slack
+        // for block times), so the attribution never announces old history.
+        let attributionFloorMs = UInt64(max(0, (lastCatchUpMs ?? 0) - 600_000))
+        let startedAtMs = Date().timeIntervalSince1970 * 1000
 
         for (address, balance) in currentBalances {
             guard let previous = baselines[address] else {
@@ -247,17 +273,32 @@ final class AddressActivityNotifier: ObservableObject {
                 await attributeAndNotifyIncrease(
                     address: address,
                     delta: balance - previous,
-                    walletAddress: wallet.publicAddress
+                    walletAddress: wallet.publicAddress,
+                    floorMs: attributionFloorMs
                 )
                 guard isSignedIn(wallet.publicAddress) else { return }
             }
             baselines[address] = balance
         }
 
+        UserDefaults.standard.set(startedAtMs, forKey: catchUpAtKey(wallet: wallet.publicAddress))
         if changed {
             saveBaselines(baselines, wallet: wallet.publicAddress)
             NotificationCenter.default.post(name: .ownAddressActivity, object: nil)
         }
+    }
+
+    /// Where the last completed catch-up started (ms since 1970), per wallet.
+    private func catchUpAtKey(wallet: String) -> String {
+        "kachat_addr_activity_catchup_at_\(wallet)"
+    }
+
+    private func forgetCatchUpState(wallet: String) {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: catchUpAtKey(wallet: wallet)) != nil
+                || defaults.object(forKey: baselinesKey(wallet: wallet)) != nil else { return }
+        defaults.removeObject(forKey: catchUpAtKey(wallet: wallet))
+        defaults.removeObject(forKey: baselinesKey(wallet: wallet))
     }
 
     // MARK: - Live resolution
@@ -332,7 +373,8 @@ final class AddressActivityNotifier: ObservableObject {
     private func attributeAndNotifyIncrease(
         address: String,
         delta: UInt64,
-        walletAddress: String
+        walletAddress: String,
+        floorMs: UInt64
     ) async {
         let ownAll = ownInputAddressSet(walletAddress: walletAddress)
         let isChatting = address == walletAddress
@@ -363,6 +405,12 @@ final class AddressActivityNotifier: ObservableObject {
         for tx in recentTxs {
             if isChatting {
                 guard Self.isPlainTransfer(tx), (tx.blockTime ?? 0) > floor else { continue }
+            }
+            // Already in the previous catch-up's baseline: old history, never announced. (A tx
+            // with no block time yet is new.)
+            if let blockTime = tx.blockTime, blockTime < floorMs {
+                markHandled(txId: tx.transactionId, wallet: walletAddress)
+                continue
             }
             let toAddress = tx.outputs
                 .filter { $0.scriptPublicKeyAddress == address }
@@ -398,7 +446,7 @@ final class AddressActivityNotifier: ObservableObject {
         guard total > 0 else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "Received \(Self.formatKas(total)) \(KaspaUnit.symbol)"
+        content.title = String(format: AppLocalization.string("Received %@"), "\(Self.formatKas(total)) \(KaspaUnit.symbol)")
         content.body = bodyDescribing(addresses: hits.map { $0.address })
         content.threadIdentifier = Self.notificationThreadIdentifier
         // The tap opens the history of the address that got the Kaspa - with several, the one
@@ -414,16 +462,12 @@ final class AddressActivityNotifier: ObservableObject {
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "addr-activity-\(dedupeKey)", content: content, trigger: nil)
         )
-        // Also list it in the Profile notifications bell.
-        Task { @MainActor in
-            // the bell's entry opens the same address's history
-        }
     }
 
     private func postBalanceIncreasedNotification(address: String, delta: UInt64) {
         guard featureEnabled else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Balance increased by \(Self.formatKas(delta)) \(KaspaUnit.symbol)"
+        content.title = String(format: AppLocalization.string("Balance increased by %@"), "\(Self.formatKas(delta)) \(KaspaUnit.symbol)")
         content.body = describe(address: address)
         content.threadIdentifier = Self.notificationThreadIdentifier
         content.userInfo = ["kind": kindKey(for: address), "address": address]
@@ -433,8 +477,6 @@ final class AddressActivityNotifier: ObservableObject {
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: balId, content: content, trigger: nil)
         )
-        Task { @MainActor in
-        }
     }
 
     private func applySoundPreference(to content: UNMutableNotificationContent) {
@@ -452,17 +494,17 @@ final class AddressActivityNotifier: ObservableObject {
         if unique.count == 1, let only = unique.first {
             return describe(address: only)
         }
-        return "\(unique.count) of your addresses"
+        return String(format: AppLocalization.string("%d of your addresses"), unique.count)
     }
 
     private func describe(address: String) -> String {
         if address == WalletManager.shared.currentWallet?.publicAddress {
-            return "Chatting address \(Self.shortAddress(address))"
+            return String(format: AppLocalization.string("Chatting address %@"), Self.shortAddress(address))
         }
         if let accountLabel = coldLabelByAddress[address] {
             return "Cold storage (\(accountLabel)) \(Self.shortAddress(address))"
         }
-        return "Spending address \(Self.shortAddress(address))"
+        return String(format: AppLocalization.string("Spending address %@"), Self.shortAddress(address))
     }
 
     private func kindKey(for address: String) -> String {
@@ -485,11 +527,15 @@ final class AddressActivityNotifier: ObservableObject {
 
     // MARK: - Gating
 
-    /// Always off in KaPosts: its notifications are about posts only, so an address receiving
-    /// KAS never notifies (the wallet screens still update through `postUtxoActivityEvent`,
-    /// which this does not gate). In KaChat this is Settings > Notifications > "Address
-    /// Activity" plus the master notification mode.
-    private var featureEnabled: Bool { false }
+    /// On while notifications are (Settings > Notifications > Push Notifications) and
+    /// `addressActivityNotificationsEnabled` (no switch in KaPost, so on), as for kUSDT
+    /// (`TokenWallet.notificationsEnabled`). Which addresses notify is per account
+    /// (`notifiableAddressSet`: Notify on receive for the spending addresses). The wallet screens
+    /// update through `postUtxoActivityEvent` either way, which this does not gate.
+    private var featureEnabled: Bool {
+        let settings = AppSettings.load()
+        return settings.notificationMode != .disabled && settings.addressActivityNotificationsEnabled
+    }
 
     // MARK: - Address set caching
 
@@ -529,6 +575,7 @@ final class AddressActivityNotifier: ObservableObject {
     /// address. For the chatting address only a plain transfer counts (no payload): a chat
     /// payment or a handshake is the chat's own news (`isPlainTransfer`).
     private func notifiableAddressSet(walletAddress: String) -> Set<String> {
+        guard featureEnabled else { return [] }
         // Per account: the spending chain has its own switch, and each cold-storage account
         // its own - an account switched off is still ours (self-send check), just quiet.
         var set = coldLabelByAddress.keys.filter { !coldMutedAddresses.contains($0) }.reduce(into: Set<String>()) { $0.insert($1) }
@@ -595,6 +642,14 @@ final class AddressActivityNotifier: ObservableObject {
             baselines[address] = balance
         }
         saveBaselines(baselines, wallet: wallet)
+    }
+
+    /// A transaction this phone sends whose KAS change lands on one of your addresses with no input
+    /// from one of them (a kUSDT send or Combine Coins: its inputs are token coins at their own
+    /// contract addresses), so the own-funds check can't tell it's yours: never "Received".
+    func markOwnTransaction(_ txId: String) {
+        guard let wallet = WalletManager.shared.currentWallet?.publicAddress else { return }
+        markHandled(txId: txId.lowercased(), wallet: wallet)
     }
 
     // MARK: - Handled-tx persistence

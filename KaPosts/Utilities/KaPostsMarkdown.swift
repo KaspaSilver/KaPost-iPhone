@@ -61,11 +61,6 @@ enum KaPostsMarkdown {
         var hasFormatting: Bool { !spans.isEmpty }
     }
 
-    /// True if `source` contains anything this parser would style. Cheap enough to gate on.
-    static func containsFormatting(_ source: String) -> Bool {
-        render(source).hasFormatting
-    }
-
     /// The output under construction. `count` is tracked by hand: `String.count` walks the
     /// whole string, and the parser used to ask for it at every marker of every line - a
     /// quadratic cost that made long formatted posts a hitch on first render.

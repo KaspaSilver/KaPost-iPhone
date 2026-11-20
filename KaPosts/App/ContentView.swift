@@ -22,7 +22,6 @@ struct ContentView: View {
             switch LaunchRouter.route(
                 isWalletMetadataLoading: walletManager.isLoading,
                 hasCurrentWallet: walletManager.currentWallet != nil,
-                isPendingSeedPhraseConfirmation: walletManager.isAwaitingSeedPhraseConfirmation,
                 needsKeyRecovery: walletManager.walletNeedingKeyRecovery != nil
             ) {
             case .loading:
@@ -42,7 +41,7 @@ struct ContentView: View {
         }
         .animation(
             .easeInOut,
-            value: walletManager.currentWallet != nil && !walletManager.isAwaitingSeedPhraseConfirmation
+            value: walletManager.currentWallet != nil
         )
         .onChange(of: walletManager.currentWallet == nil) { signedOut in
             guard signedOut else { return }

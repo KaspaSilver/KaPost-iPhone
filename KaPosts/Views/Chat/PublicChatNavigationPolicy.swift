@@ -5,16 +5,7 @@ enum PublicChatChannelPresentationMode: Equatable {
     case navigationDestination
 }
 
-enum PublicChatListPresentationMode: Equatable {
-    case splitDetail
-    case navigationDestination
-}
-
 enum PublicChatNavigationPolicy {
-    static func listPresentationMode(usesSplitLayout: Bool) -> PublicChatListPresentationMode {
-        usesSplitLayout ? .splitDetail : .navigationDestination
-    }
-
     static func channelPresentationMode(isMacCatalyst: Bool) -> PublicChatChannelPresentationMode {
         isMacCatalyst ? .inlineReplacement : .navigationDestination
     }

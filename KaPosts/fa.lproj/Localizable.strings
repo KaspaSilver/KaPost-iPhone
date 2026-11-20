@@ -266,7 +266,6 @@
 "None yet" = "هنوز ندارد";
 ".kachat Name" = "نام .kachat";
 ".kachat names are coming" = "نام‌های .kachat به‌زودی می‌آیند";
-"Get a %@ domain at %@" = "یک دامنه %1$@ از %2$@ بگیرید";
 "No %@ names yet." = "هنوز نام %@ ندارد.";
 "Couldn't reach %@. Pull down to try again." = "دسترسی به %@ ممکن نشد. برای تلاش دوباره به پایین بکشید.";
 "Settling" = "در حال تأیید";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost هنوز در شبکه آزمایشی در دسترس نیست";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "برای شبکه آزمایشی هیچ ایندکسر KaPost وجود ندارد. برای خواندن و ارسال در شبکه اصلی، شبکه آزمایشی را در تنظیمات > اتصال خاموش کنید.";
-"Offer accepted" = "پیشنهاد پذیرفته شد";
 "Expired" = "منقضی";
 "Keep" = "نگه دار";
 "Cancelled." = "لغو شد.";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "جابه‌جایی بین Kaspa و ارز شما";
 "Opens this transaction in the block explorer." = "این تراکنش را در کاوشگر بلاک باز می‌کند.";
 "New Public Chat" = "گفتگوی عمومی جدید";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "این آدرس فقط برای گفتگو و دامنه‌هاست. ۱ Kaspa برای حدود ۵۰۰ تعامل در برنامه کافی است. قیمت دامنه‌ها بسته به نام از ۳۵ تا ۴٬۰۰۰ Kaspa است.";
 "Unpinned" = "سنجاق برداشته شد";
 "Coin Control" = "کنترل کوین";
 "Automatic" = "خودکار";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "تمدید باز است: پیش از %@ تمدیدش کنید تا بماند.";
 "%@ has expired" = "%@ منقضی شد";
 "Renew it before %@ or anyone can claim it." = "پیش از %@ تمدیدش کنید وگرنه هر کسی می‌تواند آن را بگیرد.";
-"%@ sold" = "%@ فروخته شد";
-"%@ KAS was paid to you." = "%@ KAS به شما پرداخت شد.";
-"Your listing was bought." = "آگهی شما خریده شد.";
-"You accepted an offer for it." = "یک پیشنهاد برای آن را پذیرفتید.";
-"New offer on %@" = "پیشنهاد تازه برای %@";
-"%@ KAS offered for it." = "%@ KAS برای آن پیشنهاد شد.";
-"%@ is yours now." = "%@ اکنون مال شماست.";
-"Offer on %@ declined" = "پیشنهاد برای %@ رد شد";
-"The owner declined it. The KAS is back with you." = "مالک آن را رد کرد. KAS به شما برگشت.";
-"Offer on %@ expired" = "پیشنهاد برای %@ منقضی شد";
-"Nobody accepted it in time. The KAS is back with you." = "کسی به‌موقع آن را نپذیرفت. KAS به شما برگشت.";
-"Offer on %@ returned" = "پیشنهاد برای %@ برگشت";
-"It can no longer be accepted. The KAS is back with you." = "دیگر قابل پذیرش نیست. KAS به شما برگشت.";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ آزاد شد";
-"It expired and was cleared from the registry. Your bond is back with you." = "منقضی شد و از رجیستری پاک شد. وثیقه شما به شما برگشت.";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ دیگر متعلق به شما نیست";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "این آدرس کلید عمومی ندارد.";
 "This address holds funds, so this looks like the right account." = "این آدرس موجودی دارد، پس به نظر حساب درست همین است.";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "این کارت از قبل یک نسخه پشتیبان دارد. ذخیره، پس از تأیید نسخه جدید آن را جایگزین می‌کند.";
-"This file is no longer shared" = "این فایل دیگر به اشتراک گذاشته نشده است";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "این iPhone حساب شما را دارد اما کلیدهایش را نه. این اتفاق پس از بازیابی تلفن از نسخه پشتیبان می‌افتد، چون کلیدهای KaPost به دستگاهی که روی آن ساخته شده‌اند وابسته‌اند. برای باز کردن قفل در اینجا، ۱۲ یا ۲۴ کلمه خود را وارد کنید. پیام‌های شما در این دستگاه حفظ می‌شوند.";
 "This is more than the address you're sending from holds." = "این بیشتر از موجودی نشانی ارسال‌کننده است.";
 "This is much more than the network needs." = "این خیلی بیشتر از نیاز شبکه است.";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "همه چیزهای اینجا هر وقت لازم شوند دوباره دانلود یا ساخته می‌شوند، پس پاک کردنشان کمی داده مصرف می‌کند و بس.";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "هر چیزی که در پایین روشن کرده‌اید می‌تواند به شما برسد، حتی وقتی برنامه بسته است. خاموش کردن این گزینه همه را ساکت می‌کند.";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "اطلاعات برنامه/دستگاه، تنظیمات اتصال، تعداد پیام‌های محلی و گزارش‌های اخیر برنامه را در یک فایل zip صادر می‌کند - برای عیب‌یابی با پشتیبانی. هیچ کلید خصوصی، ۱۲ یا ۲۴ کلمه یا محتوای رمزگشایی‌شده پیام‌ها در آن نیست.";
-"FILE" = "فایل";
 "Failed to edit: %@" = "ویرایش ناموفق بود: %@";
 "Failed to send voice message: %@" = "ارسال پیام صوتی ناموفق بود: %@";
 "Failed to send: %@" = "ارسال ناموفق بود: %@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "یک انعام پیش‌فرض را فوری بفرستید";
 "Sends this message again." = "این پیام را دوباره می‌فرستد.";
 "Share this room" = "اشتراک‌گذاری این اتاق";
-"Shared File" = "فایل به‌اشتراک‌گذاشته‌شده";
 "Shares it to your followers as-is." = "آن را همان‌طور که هست با دنبال‌کنندگانتان به اشتراک می‌گذارد.";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "اشتراک‌گذاری پیوندی می‌فرستد که این اتاق را در KaPost باز می‌کند، و یک پیوند وب برای کسانی که آن را ندارند. پنهان کردن برای هر اتاق جداست: کسی که اینجا پنهان شده در هر اتاق دیگر همچنان دیده می‌شود.";
 "Show %@ new posts" = "نمایش %@ پست جدید";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "برای باز کردن این اتاق گفتگوی عمومی ضربه بزنید.";
 "Tap to open your chat." = "برای باز کردن گفتگویتان ضربه بزنید.";
 "Terms of Use" = "شرایط استفاده";
-"Testnet (testnet-10)" = "شبکه آزمایشی (testnet-10)";
 "The catch" = "نکته منفی";
 "The key that spends this address. Never share it." = "کلیدی که از این آدرس خرج می‌کند. هرگز آن را به اشتراک نگذارید.";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "تنها نام‌هایی که KaPost جستجو می‌کند، در هر جایی که می‌توانید آدرس تایپ کنید. ایندکسر نام‌های خودتان را اجرا کنید و آدرسش را اینجا بگذارید، یا برای پیش‌فرض خالی بگذارید. وقتی ایندکسر پاسخ نمی‌دهد یا عقب می‌ماند، نام‌ها مستقیم از زنجیره خوانده می‌شوند.";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "این آدرس‌ها فعلاً قابل استخراج نیستند. یک صفحه برگردید یا این صفحه را دوباره باز کنید تا دوباره امتحان شود.";
 "When a spending address receives Kaspa from someone else." = "وقتی یک آدرس خرج کردن از کس دیگری Kaspa دریافت می‌کند.";
 "Your Domains" = "دامنه‌های شما";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "یک آدرس تازه که هرگز استفاده نشده. Kaspa ارسال‌شده به اینجا به این حساب می‌آید و در موجودی خرج حساب می‌شود. برای همه‌چیز جز نام‌های ‎.kachat از آن استفاده کنید.";
 "Address hidden. Re-enable it in Address Visibility." = "آدرس پنهان شد. از نمایش آدرس‌ها دوباره فعالش کنید.";
 "Check off every address you want on the list, in one sitting." = "همه آدرس‌هایی را که در فهرست می‌خواهید یک‌جا علامت بزنید.";
 "Full screen, for scanning with another device." = "تمام‌صفحه، برای اسکن با دستگاه دیگر.";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "KaPay را برای پرداخت باز می‌کند.";
 "Puts the full address on the clipboard." = "کل آدرس را در کلیپ‌بورد کپی می‌کند.";
 "Removes it from this list. Re-enable it in Address Visibility." = "آن را از این فهرست برمی‌دارد. از نمایش آدرس‌ها دوباره فعالش کنید.";
-"Reveals the next unused address in this wallet." = "آدرس استفاده‌نشده بعدی این کیف پول را نشان می‌دهد.";
 "This address can't be hidden." = "این آدرس را نمی‌توان پنهان کرد.";
 "Unlock to view this address's private key" = "برای دیدن کلید خصوصی این آدرس قفل را باز کنید";
 "Tips From" = "انعام از";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "آدرس شماره %@ آماده است.";
 "One send wasn't confirmed. Check that address before trying again." = "یکی از ارسال‌ها تأیید نشد. پیش از تلاش دوباره، آن آدرس را بررسی کنید.";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "%@ ارسال تأیید نشد. پیش از تلاش دوباره، آن آدرس‌ها را بررسی کنید.";
+"%@ Actions" = "کارهای %@";
+"%@ Address Visibility" = "نمایش آدرس‌های %@";
+"%@ Balance" = "موجودی %@";
+"%@ History" = "تاریخچهٔ %@";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ فقط می‌تواند به یک آدرس معمولی Kaspa برود، نه به آدرس مقاوم در برابر کوانتوم یا آدرس اسکریپتی دیگر.";
+"%@ held with it" = "%@ همراهش نگه داشته شده";
+"%d Addresses" = "%d آدرس";
+"%d coins into 1" = "%d سکه به ۱";
+"%d found so far" = "تا اینجا %d پیدا شد";
+"%d hidden: they still count in the total." = "%d پنهان: همچنان در جمع حساب می‌شوند.";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "یک آدرس کاملاً تازه از خودتان که هرگز استفاده یا داده نشده: این پرداخت به نام شما ربط داده نمی‌شود.";
+"A quantum-resistant address: its key stays hidden until it spends." = "آدرسی مقاوم در برابر کوانتوم: کلیدش تا زمان خرج کردن پنهان می‌ماند.";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "یک آدرس معمولی، مثل آنچه دریافت می‌دهد. با همه‌چیز کار می‌کند، از جمله kUSDT.";
+"A spending address of yours: a payment here isn't tied to your name." = "یکی از آدرس‌های خرج شما: پرداخت به اینجا به نام شما ربط ندارد.";
+"About %@" = "دربارهٔ %@";
+"Add %@ More" = "افزودن %@ دیگر";
+"Add %@ for Fee and Change Coin" = "افزودن %@ برای کارمزد و سکهٔ باقی‌مانده";
+"Add %@ for the Network Fee" = "افزودن %@ برای کارمزد شبکه";
+"Address #%lld is ready." = "آدرس شماره %lld آماده است.";
+"Adds a brand-new regular address of yours to this list." = "یک آدرس معمولی کاملاً تازه از شما به این فهرست اضافه می‌کند.";
+"Amount (%@)" = "مبلغ (%@)";
+"Available: %@" = "در دسترس: %@";
+"Back to This Address" = "برگشت به این آدرس";
+"Bridged In" = "واریز از پل";
+"Bridged USDT" = "USDT از طریق پل";
+"Bridged by %@" = "پل %@";
+"Broadcasting to the Kaspa BlockDAG..." = "در حال پخش در BlockDAG کاسپا...";
+"Building the transaction…" = "در حال ساخت تراکنش…";
+"Check Again" = "بررسی مجدد";
+"Check off which addresses holding kUSDT are on the list." = "مشخص کنید کدام آدرس‌های دارای kUSDT در فهرست باشند.";
+"Checking address #%d" = "در حال بررسی آدرس #%d";
+"Checking your %@..." = "در حال بررسی %@ شما…";
+"Coins Combined" = "سکه‌ها ادغام شدند";
+"Combine Coins" = "ادغام سکه‌ها";
+"Combined" = "ادغام‌شده";
+"Combined Coins" = "سکه‌ها ادغام شدند";
+"Couldn't check %@ just now: %@ Pull down to try again." = "الان نشد %1$@ را بررسی کرد: %2$@ برای تلاش دوباره به پایین بکشید.";
+"Discover kUSDT Addresses" = "یافتن آدرس‌های kUSDT";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "از Ethereum، BNB Chain یا صرافی USDT به این آدرس نفرستید: از دست می‌رود. اول آن را در Trestly به Kaspa پل بزنید.";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "اینجا kUSDT نفرستید: از آدرس مقاوم در برابر کوانتوم نمی‌شود با آن معامله کرد. برای آدرس معمولی از دریافت استفاده کنید.";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "هر سکهٔ %@ مقدار %@ نگه می‌دارد. با ادغام آن‌ها در یک سکه، KAS اضافه پس از کسر کارمزد شبکه به‌صورت KAS معمولی به این آدرس برمی‌گردد. مقدار %@ شما تغییری نمی‌کند.";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "هر سکه %@ مقدار %@ در خود دارد. این KAS همراه %@ به گیرنده می‌رسد، پس از دست نمی‌رود.";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "هر سکه kUSDT مقدار 1.5 KAS در خود دارد. وقتی kUSDT را می‌فرستید، همراه آن می‌رود.";
+"Finds your addresses holding kUSDT." = "آدرس‌هایی از شما را که kUSDT دارند پیدا می‌کند.";
+"Found %d addresses with %@." = "%1$d آدرس با %2$@ پیدا شد.";
+"Generate Non-Quantum Address" = "ساخت آدرس غیرکوانتومی";
+"Generate Quantum-Resistant Address" = "ساخت آدرس مقاوم در برابر کوانتوم";
+"Goes With It" = "همراهش می‌رود";
+"Held On" = "نگهداری روی";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "به این حساب می‌رسد و در جمع خرج شما حساب می‌شود. برای همه‌چیز جز نام‌های ‎.kachat از آن استفاده کنید.";
+"KAS Held With It" = "KAS همراه";
+"KAS Paid From" = "KAS پرداخت‌شده از";
+"KAS for a %@ send" = "KAS برای یک ارسال %@";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "می‌شود Kaspa، و kUSDT روی Kaspa، را اینجا فرستاد.";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "کلیدش را تا زمان خرج کردن پنهان نگه می‌دارد. فقط برای Kaspa: از آن نمی‌شود kUSDT معامله کرد.";
+"Manage %@" = "مدیریت %@";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "مدیریت %1$@ فقط با آدرس گفت‌وگوی شما از نو شروع می‌شود. چیزی از دست نمی‌رود: هر آدرسی را از اینجا برگردانید، و %2$@ آن همچنان در جمع شما حساب می‌شود.";
+"Merges its coins into one and gives the extra KAS back." = "سکه‌هایش را یکی می‌کند و KAS اضافه را برمی‌گرداند.";
+"More than your %@." = "بیشتر از موجودی %@ شما.";
+"Moves Kaspa from this address to your Chatting Address." = "Kaspa را از این آدرس به آدرس گفتگوی شما منتقل می‌کند.";
+"Moves kUSDT from this address to your Chatting Address." = "kUSDT را از این آدرس به آدرس گفتگوی شما منتقل می‌کند.";
+"No %@ Yet" = "هنوز %@ ندارید";
+"No %@ activity yet." = "هنوز فعالیت %@ نیست.";
+"No addresses with %@ found." = "آدرسی با %@ پیدا نشد.";
+"No addresses with %@ yet" = "هنوز آدرسی با %@ نیست";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "تأیید نشد: شبکه پاسخ نداد. ممکن است هنوز انجام شود. «دوباره» همان تراکنش را می‌فرستد، پس دوبار پرداخت نمی‌شود.";
+"Not independently audited yet. Hold only what you can afford to lose." = "هنوز به‌طور مستقل حسابرسی نشده است. فقط مقداری نگه دارید که توان از دست دادنش را دارید.";
+"On %d of your addresses" = "روی %d آدرس شما";
+"On your %@" = "روی %@ شما";
+"Only %@ on Kaspa, or KAS, can be sent here." = "فقط %@ روی Kaspa، یا KAS، را می‌توان به اینجا فرستاد.";
+"Only Kaspa can be sent here." = "فقط Kaspa را می‌شود اینجا فرستاد.";
+"Pending" = "در انتظار";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "انتخاب کنید KAS از کدام آدرستان بیاید، به بالا بکشید و به اینجا برمی‌گردید.";
+"Receive %@" = "دریافت %@";
+"Received %@" = "%@ دریافت شد";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "آن را از این فهرست برمی‌دارد. در نمایش آدرس‌های %@ دوباره فعالش کنید.";
+"Sample Data" = "داده‌های نمونه";
+"Send %@" = "ارسال %@";
+"Send to Chatting Address" = "ارسال به آدرس گفتگو";
+"Sends, receives and combines on this phone show here from now on." = "از این پس ارسال، دریافت و ادغام‌های این گوشی اینجا نشان داده می‌شود.";
+"Swapped" = "تبادل‌شده";
+"Swipe up to Combine" = "برای ادغام به بالا بکشید";
+"Tap to Manage" = "برای مدیریت ضربه بزنید";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "این مبلغ روی بیش از ۳ سکهٔ kUSDT در این آدرس پخش است. فعلاً مبلغ کمتری بفرستید.";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "KAS کارمزد از همان آدرس پرداخت می‌شود، پس این ارسال آن را به آدرس‌های دیگرتان ربط نمی‌دهد.";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "KAS که فرستادید هنوز روی این آدرس نیامده. معمولاً چند ثانیه طول می‌کشد.";
+"The Trestly API address in Connection Settings isn't a valid https address." = "آدرس API ‏Trestly در تنظیمات اتصال یک آدرس https معتبر نیست.";
+"The built transaction didn't match what you approved, so nothing was sent." = "تراکنش ساخته‌شده با آنچه تأیید کردید یکی نبود، پس چیزی فرستاده نشد.";
+"The transaction couldn't be built. Nothing was sent." = "تراکنش ساخته نشد. چیزی فرستاده نشد.";
+"This address doesn't hold that much kUSDT." = "این آدرس این‌قدر kUSDT ندارد.";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "این آدرس KAS نداشت، پس کارمزد شبکه از KAS همراه kUSDT برداشته شد.";
+"This address holds its kUSDT in one coin already." = "این آدرس kUSDT خود را از قبل در یک سکه دارد.";
+"This address needs a little KAS for the network fee." = "این آدرس برای کارمزد شبکه کمی KAS لازم دارد.";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "این آدرس کمی KAS لازم دارد: کارمزد شبکه، به‌علاوهٔ ۱٫۵ KAS برای سکهٔ باقی‌ماندهٔ شما (kUSDT که نگه می‌دارید). آن ۱٫۵ KAS مال شما می‌ماند.";
+"This address on the Kaspa explorer." = "این آدرس در کاوشگر Kaspa.";
+"This address's key isn't available on this phone." = "کلید این آدرس روی این گوشی نیست.";
+"Total KAS" = "کل KAS";
+"Trestly API URL" = "آدرس API ‏Trestly";
+"Trestly answered HTTP %d." = "Trestly با HTTP %d پاسخ داد.";
+"Trestly didn't answer." = "Trestly پاسخ نداد.";
+"Trestly's answer couldn't be read." = "پاسخ Trestly خوانده نشد.";
+"Up to %d coins combine at a time. Combine again for the rest." = "هر بار حداکثر %d سکه ادغام می‌شود. برای بقیه دوباره ادغام کنید.";
+"Waiting for your KAS to arrive…" = "در انتظار رسیدن KAS شما…";
+"What are you sending?" = "چه چیزی می‌فرستید؟";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "آدرس گفت‌وگوی شما نام ‎.kachat و هویتتان را نشان می‌دهد: هر کس اینجا پرداخت کند می‌بیند که شمایید.";
+"kUSDT Address Visibility" = "نمایش آدرس‌های kUSDT";
+"kUSDT Balances" = "موجودی‌های kUSDT";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT فقط به یک آدرس معمولی Kaspa می‌رود.";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT همان USDT از Ethereum و BNB Chain است که 1:1 در خزانه Trestly نگهداری و به‌صورت توکن روی Kaspa صادر می‌شود. Tether آن را صادر نمی‌کند و فقط Trestly می‌تواند آن را دوباره به USDT تبدیل کند.";
+"kUSDT's transaction builder couldn't start." = "سازندهٔ تراکنش kUSDT اجرا نشد.";
+"kUSDT's transaction builder gave no answer." = "سازندهٔ تراکنش kUSDT پاسخی نداد.";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "سازندهٔ تراکنش kUSDT همانِ ثبت‌شده نیست، پس اجرا نمی‌شود.";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "الگوی kUSDT در KaPost نیست، پس kUSDT را نمی‌شود بررسی کرد.";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "کارمزد شبکه از سقف ایمنی KaPost بیشتر است. چیزی فرستاده نشد.";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "جایی که KaPost می‌پرسد کدام آدرس‌های شما kUSDT دارند. هر پاسخ پیش از نمایش روی شبکهٔ Kaspa بررسی می‌شود.";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "آن را روی یک آدرس تازه دریافت کنید. KAS را در KaPay با kUSDT مبادله کنید.";
+"Swap kUSDT in KaPay." = "kUSDT را در KaPay مبادله کنید.";
+"Release to Confirm" = "برای تأیید رها کنید";
+"The transaction didn't go out." = "تراکنش ارسال نشد.";
+"Fee %@" = "کارمزد %@";
+"Push" = "اعلان‌ها";
+"Trestly" = "Trestly";
+"Reading names from" = "خواندن نام‌ها از";
+"Not live on this network" = "روی این شبکه فعال نیست";
+"The chain" = "زنجیره";
+"Indexer not usable right now" = "ایندکسر در حال حاضر قابل استفاده نیست";
+"Not set" = "تنظیم نشده";
+"Use for chatting and acquiring .kachat domains." = "برای گفتگو و دریافت دامنه‌های ‎.kachat استفاده کنید.";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "به‌خاطر kUSDT نمایش داده می‌شود";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "این نشانی در فهرست kUSDT شماست، پس اینجا می‌ماند. ابتدا آن را از مدیریت kUSDT پنهان کنید.";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "انعام با";
+"Ask Each Time" = "هر بار بپرس";
+"What are you tipping in?" = "با چه چیزی انعام می‌دهید؟";
+"Not counted on the post" = "روی پست شمرده نمی‌شود";
+"Set what Tip sends in Settings > KaPost > Tip In." = "آنچه انعام می‌فرستد را در تنظیمات > KaPost > انعام با انتخاب کنید.";
+"Tip asks whether to send Kaspa or kUSDT each time." = "انعام هر بار می‌پرسد Kaspa بفرستد یا kUSDT.";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "انعام، kUSDT را به آدرس گفتگوی نویسنده پست می‌فرستد. انعام‌های kUSDT روی پست شمرده نمی‌شوند.";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "دریافت KaPay";
+"None of your addresses holds %@ yet." = "هنوز هیچ‌کدام از نشانی‌های شما %@ ندارد.";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "حساب عوض شد، برای همین این ارسال نشد.";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "بازبینی مدتی باز ماند، برای همین تراکنش دوباره ساخته شد. چیزی ارسال نشد: آن را بررسی کنید و دوباره بکشید.";
+"Balance increased by %@" = "موجودی %@ افزایش یافت";
+"%d of your addresses" = "%d آدرس شما";
+"Chatting address %@" = "آدرس گفتگو %@";
+"Spending address %@" = "آدرس خرج %@";

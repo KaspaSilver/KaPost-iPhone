@@ -198,32 +198,6 @@ final class ContactsManager: ObservableObject {
         }
     }
 
-    /// Get KNS info for a contact
-    func getKNSInfo(for contact: Contact) -> KNSAddressInfo? {
-        knsService.identityInfo(for: contact.address)
-    }
-
-    /// Get KNS domains for a contact
-    func getKNSDomains(for contact: Contact) -> [KNSDomain] {
-        knsService.identityInfo(for: contact.address)?.allDomains ?? []
-    }
-
-    /// Get selected KNS profile for a contact address (primary domain if available).
-    func getKNSProfile(for contact: Contact) -> KNSAddressProfileInfo? {
-        knsService.profileCache[contact.address]
-    }
-
-    /// Fetch KNS info for a specific contact
-    func fetchKNSInfo(for contact: Contact, network: NetworkType = .mainnet) async -> KNSAddressInfo? {
-        guard KNSService.showsDomainNamesAsIdentity else { return nil }
-        return await knsService.fetchInfo(for: contact.address, network: network)
-    }
-
-    /// Fetch selected KNS profile for a specific contact.
-    func fetchKNSProfile(for contact: Contact, network: NetworkType = .mainnet) async -> KNSAddressProfileInfo? {
-        await knsService.fetchProfile(for: contact.address, network: network)
-    }
-
     func balanceSompi(for address: String) -> UInt64? {
         contactBalances[address]
     }
@@ -473,46 +447,6 @@ final class ContactsManager: ObservableObject {
         }
     }
 
-    /// Permanently deletes a contact: purges every local message with them and tombstones their
-    /// address so a future incoming message or handshake can't silently recreate the conversation.
-    /// Matches Android's `ChatRepository.deleteChat` - not reversible, unlike the old archive.
-    func deleteContact(_ contact: Contact) {
-        // Your own address is your chat with yourself, which cannot be deleted (see
-        // `ChatService.ensureSelfConversation`). A backstop behind the UI, which never offers it.
-        if let mine = WalletManager.shared.currentWallet?.publicAddress,
-           contact.address.lowercased() == mine.lowercased() {
-            return
-        }
-        deletedAddresses.insert(contact.address)
-        // Stamped in the indexer's BLOCK-TIME clock, not the wall clock, and the two are not
-        // interchangeable. Mixing them is what Android hit first: a device whose clock runs ahead
-        // of the chain stamps a tombstone in the future, and a genuinely new re-handshake arriving
-        // before the clocks converge gets dropped as history. So the stamp is the newest block
-        // time actually seen in this conversation, and the wall clock is only the fallback for a
-        // conversation with nothing in it - where there is no history to suppress anyway.
-        let conversationMessages = ChatService.shared.conversations
-            .first(where: { $0.contact.address == contact.address })?
-            .messages ?? []
-        let newestSeen = conversationMessages.map { Int64($0.blockTime) }.max() ?? 0
-        let deletedAt = newestSeen > 0 ? newestSeen : Int64(Date().timeIntervalSince1970 * 1000)
-        deletedAtByAddress[contact.address] = deletedAt
-        // The ids already ours at that instant, so a new transaction sharing it is recognisable.
-        deletedTxIdsByAddress[contact.address] = Set(
-            conversationMessages.filter { Int64($0.blockTime) == deletedAt }.map(\.txId).filter { !$0.isEmpty }
-        )
-        saveDeletedAddresses()
-        // A deleted chat is no longer one you accepted: if they start a new one, it's a Message
-        // Request like any stranger's.
-        ChatService.shared.forgetChatAcceptance(contact.address)
-        // The contact leaves the list immediately; the store delete runs off the main thread. The
-        // `deletedAtByAddress` marker above is what keeps the old history from being re-fetched
-        // in the meantime, so nothing depends on the delete having finished first.
-        let address = contact.address
-        Task { await MessageStore.shared.deleteConversation(contactAddress: address) }
-        contacts.removeAll { $0.id == contact.id }
-        saveContacts()
-    }
-
     func deleteAllContacts() {
         contacts.removeAll()
         if let contactsKey = activeContactsKey {
@@ -569,31 +503,6 @@ final class ContactsManager: ObservableObject {
         return Contact.generateDefaultAlias(from: address)
     }
 
-    /// The accepted/established-contact predicate shared by the stranger-gating features:
-    /// true for contacts the user added themselves, or ones the user has ever sent a message
-    /// to (which includes accepting their handshake - the handshake response IS an outgoing
-    /// message). False only for auto-added, never-replied-to strangers. Used by the photo
-    /// auto-display gate below and by link-preview auto-fetch gating (Decision 5A).
-    func isAcceptedContact(_ contact: Contact) -> Bool {
-        !contact.isAutoAdded || contact.hasSentOutgoingMessage
-    }
-
-    /// Whether photo bubbles from this contact should auto-decode and render, vs. staying
-    /// hidden behind a "Show Photo" tap. Defaults to trusting contacts you added yourself or
-    /// have ever messaged; untrusted (auto-added, never-replied-to) contacts are hidden by
-    /// default until the user overrides it in Chat Info or disables the setting globally.
-    func shouldAutoDisplayPhotos(for contact: Contact, settings: AppSettings) -> Bool {
-        switch contact.photoAutoDisplayOverride {
-        case .alwaysShow:
-            return true
-        case .alwaysHide:
-            return false
-        case .automatic, nil:
-            guard settings.requirePhotoApprovalForNewContacts else { return true }
-            return isAcceptedContact(contact)
-        }
-    }
-
     /// Marks that the user has sent at least one outgoing message to this contact, which
     /// establishes trust for features like photo auto-display even if they were auto-added.
     func markHasSentOutgoingMessage(address: String) {
@@ -636,16 +545,6 @@ final class ContactsManager: ObservableObject {
         }
 
         return contact
-    }
-
-    func searchContacts(_ query: String) -> [Contact] {
-        guard !query.isEmpty else { return contacts }
-
-        let lowercasedQuery = query.lowercased()
-        return contacts.filter {
-            $0.alias.lowercased().contains(lowercasedQuery) ||
-            $0.address.lowercased().contains(lowercasedQuery)
-        }
     }
 
     // MARK: - Validation

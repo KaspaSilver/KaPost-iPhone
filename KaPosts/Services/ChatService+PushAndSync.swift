@@ -71,6 +71,7 @@ extension ChatService {
         }
         startPollingWhenStoreReadyTask?.cancel()
         startPollingWhenStoreReadyTask = nil
+        storeWaitAttempts = nil
 
         // Wallet loaded + store ready: make sure the foreground contact sweep is running (no-op
         // if it already is). It self-gates on app-active and on the initial sync having finished,
@@ -183,14 +184,48 @@ extension ChatService {
         return messageStore.isStoreLoaded && messageStore.currentWalletAddress == walletAddress
     }
 
+    /// The message store isn't open for this account yet. The address's UTXO subscription (balance,
+    /// coins for posts, tips and room messages) doesn't need it, so it starts now; the sync itself
+    /// waits, backing off, and gives up after `maxStoreWaitAttempts` (a store that failed to load
+    /// would otherwise be polled four times a second for the rest of the run). A later
+    /// `startPolling` (the app coming back to the front) finds the store ready if it opened since.
     private func scheduleStartPollingWhenStoreReady(interval: TimeInterval) {
-        guard startPollingWhenStoreReadyTask == nil else { return }
-        AppLog.log("[ChatService] Delaying message sync until wallet message store is ready")
+        guard startPollingWhenStoreReadyTask == nil,
+              let walletAddress = WalletManager.shared.currentWallet?.publicAddress else { return }
+        let attempts = storeWaitAttempts?.wallet == walletAddress ? storeWaitAttempts?.count ?? 0 : 0
+        if attempts == 0 {
+            AppLog.log("[ChatService] Delaying message sync until wallet message store is ready")
+        }
+        startSubscriptionWithoutStoreIfNeeded()
+        guard attempts < maxStoreWaitAttempts else {
+            if attempts == maxStoreWaitAttempts {
+                AppLog.log("[ChatService] Message store still not ready - sync not started (subscription only)")
+                storeWaitAttempts = (walletAddress, attempts + 1)
+            }
+            return
+        }
+        storeWaitAttempts = (walletAddress, attempts + 1)
+        // 0.25 s, 0.5 s, 1 s ... capped at 15 s: about a minute in all
+        let delay = min(15.0, 0.25 * pow(2.0, Double(attempts)))
         startPollingWhenStoreReadyTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
             self.startPollingWhenStoreReadyTask = nil
             self.startPolling(interval: interval)
+        }
+    }
+
+    /// Brings up the UTXO subscription (or the fallback balance poll) while the message store waits.
+    private func startSubscriptionWithoutStoreIfNeeded() {
+        guard !isUtxoSubscribed, earlySubscriptionTask == nil else { return }
+        earlySubscriptionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.setupUtxoSubscription()
+            guard !Task.isCancelled else { return }
+            if !self.isUtxoSubscribed && self.pollTask == nil {
+                self.startFallbackPolling()
+            }
+            self.earlySubscriptionTask = nil
         }
     }
 

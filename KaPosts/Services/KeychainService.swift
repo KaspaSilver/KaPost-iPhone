@@ -23,8 +23,6 @@ final class KeychainService {
         case seedPhrase = "kachat_seed_phrase"
         case wallet = "kachat_wallet"
         case privateKey = "kachat_private_key"
-        case groupBag = "kachat_group_bag"
-        case nextcloudCredentials = "kachat_nextcloud_credentials"
         /// A random stand-in for the Secure Enclave key hash on hardware that has no Secure
         /// Enclave at all (see `deviceIdentifier()`).
         case deviceIdFallback = "kachat_device_id_fallback"
@@ -117,79 +115,6 @@ final class KeychainService {
         try deleteSensitiveData(baseKey: .seedPhrase)
     }
 
-    /// Check if seed phrase exists for current device
-    func hasSeedPhrase() -> Bool {
-        do {
-            return try loadSeedPhrase() != nil
-        } catch {
-            return false
-        }
-    }
-
-    // MARK: - Nextcloud (server + app-password credentials, see NextcloudService)
-    //
-    // Scoped per wallet account: the key name carries the same SHA256(walletAddress).prefix(8)
-    // hex suffix MessageStore uses for its store files, so every account
-    // keeps its own Nextcloud login. Entries are device-local (never iCloud-keychain synced),
-    // matching the rest of the app's per-account storage.
-
-    func saveNextcloudCredentials(_ data: Data, walletAddress: String) throws {
-        try saveSensitiveDataRaw(data, keyName: Self.nextcloudKeyName(walletAddress: walletAddress))
-    }
-
-    func loadNextcloudCredentials(walletAddress: String) throws -> Data? {
-        try loadSensitiveDataRaw(keyName: Self.nextcloudKeyName(walletAddress: walletAddress))
-    }
-
-    func deleteNextcloudCredentials(walletAddress: String) throws {
-        try deleteSensitiveDataRaw(keyName: Self.nextcloudKeyName(walletAddress: walletAddress))
-    }
-
-    /// The pre-4.0 single global entry every account shared. Kept only so NextcloudService can
-    /// migrate it into the active wallet's scoped entry once, then delete it.
-    func loadLegacyNextcloudCredentials() throws -> Data? {
-        let data = try load(forKey: .nextcloudCredentials)
-        scrubSyncedNextcloudCredentialsIfNeeded()
-        return data
-    }
-
-    func deleteLegacyNextcloudCredentials() throws {
-        try delete(forKey: .nextcloudCredentials)
-    }
-
-    private static let syncedNextcloudScrubDoneKey = "kachat_nextcloud_icloud_keychain_scrub_done"
-
-    /// Before this fix, `save(data:forKey:)` passed the `kSecAttrSynchronizable` constant itself
-    /// as that attribute's VALUE, which Security reads as "true" - so the global Nextcloud login
-    /// (server + app password) went into the iCloud-synced keychain and replicated to every
-    /// device on the account. The save paths are device-only now, but a copy already pushed to
-    /// iCloud stays there until something deletes it explicitly, so this removes any
-    /// synchronizable item for that key once (deletions propagate through iCloud Keychain). It
-    /// runs from the legacy load path AFTER the read, so a login that only survives in the
-    /// synced copy still gets migrated into the device-only scoped entry first.
-    private func scrubSyncedNextcloudCredentialsIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: Self.syncedNextcloudScrubDoneKey) else { return }
-        for includeAccessGroup in [true, false] {
-            var query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: serviceName,
-                kSecAttrAccount as String: KeychainKey.nextcloudCredentials.rawValue,
-            ]
-            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
-            if includeAccessGroup, let accessGroup = keychainAccessGroup {
-                query[kSecAttrAccessGroup as String] = accessGroup
-            }
-            SecItemDelete(query as CFDictionary)
-        }
-        defaults.set(true, forKey: Self.syncedNextcloudScrubDoneKey)
-    }
-
-    /// "kachat_nextcloud_credentials_<hash>" - see `walletHashSuffix`.
-    private static func nextcloudKeyName(walletAddress: String) -> String {
-        "\(KeychainKey.nextcloudCredentials.rawValue)_\(walletHashSuffix(walletAddress))"
-    }
-
     /// First 8 bytes of SHA256(walletAddress) as hex - the identical derivation MessageStore
     /// uses for its per-wallet store file, so all per-wallet storage shares one suffix scheme.
     static func walletHashSuffix(_ walletAddress: String) -> String {
@@ -197,8 +122,6 @@ final class KeychainService {
         return hash.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - Simple Mode password record (device-specific, SE-wrapped)
-    //
     // MARK: - Wallet
 
     func saveWallet(_ wallet: Wallet) throws {
@@ -235,15 +158,6 @@ final class KeychainService {
 
     func deletePrivateKey() throws {
         try deleteSensitiveData(baseKey: .privateKey)
-    }
-
-    /// Check if private key exists for current device
-    func hasPrivateKey() -> Bool {
-        do {
-            return try loadPrivateKey() != nil
-        } catch {
-            return false
-        }
     }
 
     /// Whether this device holds signing material for the stored wallet. `missing` means both
@@ -326,34 +240,6 @@ final class KeychainService {
         try? deleteLegacyPrivateKey(includeAccessGroup: false)
         try deleteSecureEnclaveKey()
         clearDeviceIdCache()
-        groupBagCacheLock.withLock { groupBagCache.removeAll() }
-    }
-
-    func privateKeyStorageStatus() -> String {
-        do {
-            let deviceId = try deviceIdentifier()
-            let deviceKey = "\(KeychainKey.privateKey.rawValue).\(deviceId)"
-
-            guard let data = try loadSensitiveDataRaw(keyName: deviceKey) else {
-                // Check legacy storage
-                if let legacyData = try loadLegacyPrivateKeyData(includeAccessGroup: true) {
-                    if legacyData.starts(with: secureEnclaveHeader) {
-                        return "legacy wrapped (needs migration)"
-                    }
-                    return "legacy raw (needs migration)"
-                }
-                return "missing"
-            }
-
-            if data.starts(with: secureEnclaveHeader) {
-                let hasKey = secureEnclaveKeyExists(includeAccessGroup: true)
-                return "device-specific wrapped (SE: \(hasKey ? "ok" : "missing"), device: \(deviceId))"
-            }
-
-            return "device-specific raw (device: \(deviceId))"
-        } catch {
-            return "error (\(error.localizedDescription))"
-        }
     }
 
     /// Returns the current device identifier for diagnostics
@@ -386,68 +272,6 @@ final class KeychainService {
     func deleteAccountSnapshot(publicAddress: String) throws {
         try deleteSensitiveDataForAccount(baseKey: .seedPhrase, publicAddress: publicAddress)
         try deleteSensitiveDataForAccount(baseKey: .privateKey, publicAddress: publicAddress)
-    }
-
-    // MARK: - Group Chat Secrets (Device-specific, SE-wrapped, keyed by groupId)
-    //
-    // GroupBag holds a group's symmetric key material (groupSeed/groupRootEpoch/blindingKey) -
-    // deliberately Keychain-only, never synced anywhere, matching the seed-phrase precedent.
-    // A new device won't auto-restore group membership - the admin has to re-add it directly.
-
-    /// Decoded bags, by group id. `loadGroupBag` is on the group poll's path - every group,
-    /// every tick (5s while a group is open), and again per incoming message - and each uncached
-    /// call is a Keychain read, a Secure Enclave unwrap and a JSON decode, on the main actor
-    /// for its KaChat's `GroupChatService` callers. The bag only changes through `saveGroupBag` /
-    /// `deleteGroupBag` here, which keep this in step; `clearAll` drops it.
-    private var groupBagCache: [String: GroupBag] = [:]
-    private let groupBagCacheLock = NSLock()
-
-    func saveGroupBag(_ bag: GroupBag) throws {
-        let data = try JSONEncoder().encode(bag)
-        try saveSensitiveDataForGroup(data, baseKey: .groupBag, groupId: bag.groupId)
-        groupBagCacheLock.withLock { groupBagCache[bag.groupId] = bag }
-    }
-
-    func loadGroupBag(groupId: String) throws -> GroupBag? {
-        if let cached = groupBagCacheLock.withLock({ groupBagCache[groupId] }) { return cached }
-        guard let data = try loadSensitiveDataForGroup(baseKey: .groupBag, groupId: groupId) else {
-            return nil
-        }
-        let bag = try JSONDecoder().decode(GroupBag.self, from: data)
-        groupBagCacheLock.withLock { groupBagCache[groupId] = bag }
-        return bag
-    }
-
-    func deleteGroupBag(groupId: String) throws {
-        groupBagCacheLock.withLock { _ = groupBagCache.removeValue(forKey: groupId) }
-        try deleteSensitiveDataForGroup(baseKey: .groupBag, groupId: groupId)
-    }
-
-    private func saveSensitiveDataForGroup(_ data: Data, baseKey: KeychainKey, groupId: String) throws {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        let wrapped = try wrapForStorage(data)
-        try saveSensitiveDataRaw(wrapped, keyName: keyName)
-    }
-
-    private func loadSensitiveDataForGroup(baseKey: KeychainKey, groupId: String) throws -> Data? {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        guard let data = try loadSensitiveDataRaw(keyName: keyName) else {
-            return nil
-        }
-        if data.starts(with: secureEnclaveHeader) {
-            return try unwrapPrivateKey(data)
-        }
-        return data
-    }
-
-    private func deleteSensitiveDataForGroup(baseKey: KeychainKey, groupId: String) throws {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        try deleteSensitiveDataRaw(keyName: keyName)
-    }
-
-    private func groupScopedKeyName(baseKey: KeychainKey, groupId: String) throws -> String {
-        let deviceId = try deviceIdentifier()
-        return "\(baseKey.rawValue).\(deviceId).\(groupId)"
     }
 
     // MARK: - Device-Specific Sensitive Data Storage
@@ -723,18 +547,7 @@ final class KeychainService {
 
     @discardableResult
     private func save(data: Data, forKey key: KeychainKey) throws -> Bool {
-        let query = genericPasswordQuery(for: key, includeAccessGroup: true)
-
-        // Delete any existing item
-        SecItemDelete(query as CFDictionary)
-
-        // Add new item
-        var newQuery = query
-        newQuery[kSecValueData as String] = data
-        newQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        newQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse
-
-        let status = SecItemAdd(newQuery as CFDictionary, nil)
+        let status = upsert(data, query: genericPasswordQuery(for: key, includeAccessGroup: true))
         if status == errSecMissingEntitlement {
             try saveLegacy(data: data, forKey: key)
             return false
@@ -745,26 +558,29 @@ final class KeychainService {
         return true
     }
 
-    private func secureEnclaveKeyExists() -> Bool {
-        return secureEnclaveKeyExists(includeAccessGroup: true)
-    }
-
-    private func secureEnclaveKeyExists(includeAccessGroup: Bool) -> Bool {
-        let tagData = secureEnclaveTag.data(using: .utf8) ?? Data()
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecAttrApplicationTag as String: tagData,
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+    /// Updated in place, added only when missing, like `upsertSensitiveDataRaw`: a delete then a
+    /// failed add (the phone locked, say) lost the only copy. Written device-only; a copy an older
+    /// build put in iCloud Keychain is removed only once the device-only one is in place.
+    private func upsert(_ data: Data, query base: [String: Any]) -> OSStatus {
+        var deviceOnly = base
+        deviceOnly[kSecAttrSynchronizable as String] = kCFBooleanFalse
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        if includeAccessGroup, let accessGroup = keychainAccessGroup {
-            query[kSecAttrAccessGroup as String] = accessGroup
+        var status = SecItemUpdate(deviceOnly as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = deviceOnly
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = SecItemAdd(add as CFDictionary, nil)
         }
-
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
-        if status == errSecMissingEntitlement {
-            return false
+        if status == errSecSuccess {
+            var synced = base
+            synced[kSecAttrSynchronizable as String] = kCFBooleanTrue
+            SecItemDelete(synced as CFDictionary)
         }
-        return status == errSecSuccess
+        return status
     }
 
     private func load(forKey key: KeychainKey) throws -> Data? {
@@ -980,10 +796,6 @@ final class KeychainService {
         try? deleteSecureEnclaveKey(includeAccessGroup: false)
     }
 
-    private func deletePrivateKey(includeAccessGroup: Bool) throws {
-        try delete(forKey: .privateKey, includeAccessGroup: includeAccessGroup)
-    }
-
     private func deleteSecureEnclaveKey(includeAccessGroup: Bool) throws {
         let tagData = secureEnclaveTag.data(using: .utf8) ?? Data()
         var query: [String: Any] = [
@@ -1017,15 +829,7 @@ final class KeychainService {
     }
 
     private func saveLegacy(data: Data, forKey key: KeychainKey) throws {
-        let query = genericPasswordQuery(for: key, includeAccessGroup: false)
-        SecItemDelete(query as CFDictionary)
-
-        var newQuery = query
-        newQuery[kSecValueData as String] = data
-        newQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        newQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse
-
-        let status = SecItemAdd(newQuery as CFDictionary, nil)
+        let status = upsert(data, query: genericPasswordQuery(for: key, includeAccessGroup: false))
         guard status == errSecSuccess else {
             throw KasiaError.keychainError("Failed to save to keychain: \(status)")
         }

@@ -411,7 +411,8 @@ final class NodePoolService: ObservableObject {
     }
 
     /// Get UTXOs by addresses
-    /// Uses ordered failover: active nodes by lowest latency first, then selector fallback.
+    /// Asks active nodes by lowest latency first, then selector fallback, two at a time with an
+    /// overall deadline (`utxoReadDeadlineNanos`), then the REST API.
     /// `allowRestFallback: false` asks nodes only - for a check whose point is a source other
     /// than the REST API (`ChatService.nodeConfirmsIncomingPayment`).
     func getUtxosByAddresses(_ addresses: [String], allowRestFallback: Bool = true) async throws -> [UTXO] {
@@ -435,44 +436,62 @@ final class NodePoolService: ObservableObject {
         orderedEndpoints.append(contentsOf: fallbackEndpoints)
 
         var attempted = Set<String>()
-        var lastError: Error?
+        let uniqueEndpoints = orderedEndpoints.filter { attempted.insert($0.key).inserted }
 
-        for endpoint in orderedEndpoints where attempted.insert(endpoint.key).inserted {
-            let conn = await connectionPool.connection(for: endpoint)
+        // Two nodes race at a time (the second after the hedge delay), a failure starts the next,
+        // and the whole read gives up after `utxoReadDeadline`, then the REST fallback. Asking the
+        // nodes one by one with 15 s each could keep a balance or a send waiting for minutes.
+        let hedgeDelay = epochMonitor.effectiveHedgeDelayMs * 1_000_000
+        let deadline = Self.utxoReadDeadlineNanos
+        let outcome = await withTaskGroup(of: UtxoReadAttempt.self, returning: Result<[UTXO], Error>.self) { group in
+            var pending = uniqueEndpoints[...]
+            var inFlight = 0
+            var lastError: Error?
 
-            do {
-                if await !conn.isConnected {
-                    try await conn.connect()
-                }
-
-                let startTime = Date()
-                let utxos = try await requestUtxosByAddresses(addresses, from: conn)
-                let latencyMs = Date().timeIntervalSince(startTime) * 1000
-
-                await registry.recordResult(
-                    endpoint: endpoint,
-                    epochId: epochMonitor.epochId,
-                    latencyMs: latencyMs,
-                    isTimeout: false,
-                    isError: false
-                )
-
-                await updatePoolStats()
-                return utxos
-            } catch {
-                let isTimeout = error.localizedDescription.lowercased().contains("timeout")
-                await registry.recordResult(
-                    endpoint: endpoint,
-                    epochId: epochMonitor.epochId,
-                    latencyMs: nil,
-                    isTimeout: isTimeout,
-                    isError: true
-                )
-                lastError = error
-                AppLog.log("[NodePool] getUtxosByAddresses failed on %@: %@ (trying next node)",
-                      endpoint.key, error.localizedDescription)
+            group.addTask {
+                try? await Task.sleep(nanoseconds: deadline)
+                return .deadline
             }
+            while inFlight < Self.utxoReadParallelism, let endpoint = pending.popFirst() {
+                let delay = hedgeDelay * UInt64(inFlight)
+                group.addTask { await self.attemptUtxoRead(addresses, endpoint: endpoint, after: delay) }
+                inFlight += 1
+            }
+            if inFlight == 0 {
+                group.cancelAll()
+                return .failure(KasiaError.networkError("All endpoints failed"))
+            }
+
+            while let attempt = await group.next() {
+                switch attempt {
+                case .success(let utxos):
+                    group.cancelAll()
+                    return .success(utxos)
+                case .deadline:
+                    AppLog.log("[NodePool] getUtxosByAddresses: no node answered in %.0f s",
+                               Double(deadline) / 1_000_000_000)
+                    group.cancelAll()
+                    return .failure(lastError ?? KasiaError.networkError("Timed out reading from the network"))
+                case .failure(let error):
+                    lastError = error
+                    inFlight -= 1
+                    if let endpoint = pending.popFirst() {
+                        group.addTask { await self.attemptUtxoRead(addresses, endpoint: endpoint, after: 0) }
+                        inFlight += 1
+                    } else if inFlight == 0 {
+                        group.cancelAll()
+                        return .failure(error)
+                    }
+                }
+            }
+            return .failure(lastError ?? KasiaError.networkError("All endpoints failed"))
         }
+
+        if case .success(let utxos) = outcome {
+            await updatePoolStats()
+            return utxos
+        }
+        let lastError: Error? = { if case .failure(let error) = outcome { return error }; return nil }()
 
         await updatePoolStats()
 
@@ -695,6 +714,46 @@ final class NodePoolService: ObservableObject {
         }
     }
 
+    /// `submitRpcTransaction` with the same lookup as `submitTransaction`: a failed submit of a
+    /// transaction the network already has (by its locally computed `expectedTxId`) is a send.
+    /// For the version-1 builders (kUSDT's `KusdtTransfer`), whose transactions aren't
+    /// `KaspaRpcTransaction`s. Its inputs are held back as in `submitTransaction`: held from before
+    /// the submit, reserved on success, given back on a definite failure (unless the node said
+    /// they're spent) and on an unknown outcome.
+    func submitRpcTransaction(_ rpcTransaction: Protowire_RpcTransaction, expectedTxId: String) async throws -> (txId: String, endpoint: String) {
+        let held = ChatService.shared.holdOutpointKeysForSubmit(Self.outpointKeys(of: rpcTransaction))
+        do {
+            let sent = try await submitRpcTransactionUnrecorded(rpcTransaction, expectedTxId: expectedTxId)
+            reserveInputs(of: rpcTransaction)
+            return sent
+        } catch let unknown as SendOutcomeUnknownError {
+            // Not held, so a resend picks these same coins and only one of the two can land.
+            ChatService.shared.releaseOutpointKeys(held)
+            ChatService.shared.invalidateUtxoCache()
+            throw unknown
+        } catch {
+            releaseUnlessSpent(held, after: error)
+            throw error
+        }
+    }
+
+    private func submitRpcTransactionUnrecorded(_ rpcTransaction: Protowire_RpcTransaction, expectedTxId: String) async throws -> (txId: String, endpoint: String) {
+        do {
+            let sent = try await submitRpcTransaction(rpcTransaction)
+            return try await checkedSubmit(sent, rpcTransaction: rpcTransaction, expectedTxId: expectedTxId)
+        } catch let unknown as SendOutcomeUnknownError {
+            throw unknown
+        } catch {
+            if await isTransactionKnown(txId: expectedTxId, afterRejection: !(error is SubmitAnswerLostError)) {
+                AppLog.log("[NodePool] submit of %@ reported \"%@\" but the network has it: treated as sent",
+                           String(expectedTxId.prefix(12)), error.localizedDescription)
+                return (txId: expectedTxId, endpoint: "already-known")
+            }
+            if error is SubmitAnswerLostError { return try await confirmAfterLostAnswer(txId: expectedTxId) }
+            throw error
+        }
+    }
+
     /// A node may have the transaction and its answer never came, so a resend could pay twice. Asks
     /// the network for longer than `isTransactionKnown` does, for one that's still on its way.
     /// `excluding`: nodes whose word doesn't count (one that answered with a wrong id).
@@ -793,8 +852,9 @@ final class NodePoolService: ObservableObject {
         }
     }
 
-    /// `answerLost` is set only around the request itself: a node that couldn't be connected to
-    /// never saw the transaction, and one that rejected it has answered.
+    /// `answerLost` is set only around the request itself: a node that couldn't be connected to, or
+    /// whose connection refused the request before writing it (`RequestNotSentError`), never saw
+    /// the transaction, and one that rejected it has answered.
     private func hedgedSubmit(_ rpcTransaction: Protowire_RpcTransaction, allowOrphan: Bool, answerLost: SubmitAnswerLostFlag) async throws -> (txId: String, endpoint: String) {
         try await executeHedged(op: .submitTransaction) { conn in
             var msg = Protowire_KaspadMessage()
@@ -805,7 +865,10 @@ final class NodePoolService: ObservableObject {
 
             let response: Protowire_KaspadMessage
             do {
-                response = try await conn.sendRequest(msg, type: .submitTransaction, timeout: 15.0)
+                response = try await conn.sendRequestReportingNotSent(msg, type: .submitTransaction, timeout: 15.0)
+            } catch let notSent as RequestNotSentError {
+                // Refused before it left the phone: no node saw it, so nothing was lost.
+                throw notSent.underlying
             } catch {
                 answerLost.set()
                 throw error
@@ -1057,6 +1120,58 @@ final class NodePoolService: ObservableObject {
         }
     }
 
+    private enum UtxoReadAttempt {
+        case success([UTXO])
+        case failure(Error)
+        case deadline
+    }
+
+    /// How long `getUtxosByAddresses` waits on the nodes in all before the REST fallback.
+    private static let utxoReadDeadlineNanos: UInt64 = 20_000_000_000
+    /// How many nodes a UTXO read asks at once.
+    private static let utxoReadParallelism = 2
+
+    /// One node's try at a UTXO read for `getUtxosByAddresses`, started after `delay` ns. A try
+    /// cancelled because another node answered (or the deadline passed) isn't counted against
+    /// the node.
+    private func attemptUtxoRead(_ addresses: [String], endpoint: Endpoint, after delay: UInt64) async -> UtxoReadAttempt {
+        if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+        if Task.isCancelled { return .failure(CancellationError()) }
+
+        let conn = await connectionPool.connection(for: endpoint)
+        do {
+            if await !conn.isConnected {
+                try await conn.connect()
+            }
+
+            let startTime = Date()
+            let utxos = try await requestUtxosByAddresses(addresses, from: conn)
+            let latencyMs = Date().timeIntervalSince(startTime) * 1000
+
+            await registry.recordResult(
+                endpoint: endpoint,
+                epochId: epochMonitor.epochId,
+                latencyMs: latencyMs,
+                isTimeout: false,
+                isError: false
+            )
+            return .success(utxos)
+        } catch {
+            if Task.isCancelled { return .failure(error) }
+            let isTimeout = error.localizedDescription.lowercased().contains("timeout")
+            await registry.recordResult(
+                endpoint: endpoint,
+                epochId: epochMonitor.epochId,
+                latencyMs: nil,
+                isTimeout: isTimeout,
+                isError: true
+            )
+            AppLog.log("[NodePool] getUtxosByAddresses failed on %@: %@ (trying next node)",
+                  endpoint.key, error.localizedDescription)
+            return .failure(error)
+        }
+    }
+
     private func requestUtxosByAddresses(_ addresses: [String], from conn: GRPCStreamConnection) async throws -> [UTXO] {
         var msg = Protowire_KaspadMessage()
         var req = Protowire_GetUtxosByAddressesRequestMessage()
@@ -1162,10 +1277,6 @@ final class NodePoolService: ObservableObject {
     /// the scanners take the block to their own serial queues.
     func addBlockHandler(_ handler: @escaping BlockScanRegistry.Handler) -> UUID {
         BlockScanRegistry.shared.add(handler)
-    }
-
-    func removeBlockHandler(_ id: UUID) {
-        BlockScanRegistry.shared.remove(id)
     }
 
     /// Remove notification handler
@@ -1518,6 +1629,10 @@ final class NodePoolService: ObservableObject {
 #endif
 
                 if !Task.isCancelled {
+                    // The selector's lag score needs a median DAA score of the good nodes.
+                    if await selector.needsReferenceRefresh {
+                        await selector.updateReferenceDaaScore()
+                    }
                     await updatePoolStats()
                 }
             }
@@ -1712,20 +1827,6 @@ final class NodePoolService: ObservableObject {
         await connectionPool.removeConnection(for: endpoint)
         await updatePoolStats()
     }
-
-    /// Network status description
-    var networkStatusDescription: String {
-        var parts: [String] = []
-        parts.append("Health: \(poolHealth)")
-        parts.append("Active: \(activeNodeCount)")
-        parts.append("Network: \(networkQuality)")
-
-        if let primary = primaryEndpoint {
-            parts.append("Primary: \(primary.host)")
-        }
-
-        return parts.joined(separator: " | ")
-    }
 }
 
 // MARK: - Compatibility Layer
@@ -1751,11 +1852,6 @@ extension NodePoolService {
             return "secure"
         }
         return "plaintext"
-    }
-
-    /// Check if subscribed to UTXOs
-    var isSubscribedToUtxos: Bool {
-        subscriptionState == .subscribed
     }
 
     /// Total node count

@@ -266,7 +266,6 @@
 "None yet" = "暂无";
 ".kachat Name" = ".kachat 名称";
 ".kachat names are coming" = ".kachat 名称即将推出";
-"Get a %@ domain at %@" = "在 %2$@ 获取 %1$@ 域名";
 "No %@ names yet." = "还没有 %@ 名称。";
 "Couldn't reach %@. Pull down to try again." = "无法连接 %@。下拉重试。";
 "Settling" = "确认中";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost 暂不支持测试网";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "测试网还没有 KaPost 索引器。在“设置 > 连接”中关闭测试网，即可在主网阅读和发帖。";
-"Offer accepted" = "报价已接受";
 "Expired" = "已过期";
 "Keep" = "保留";
 "Cancelled." = "已取消。";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "在 Kaspa 和你的货币之间切换";
 "Opens this transaction in the block explorer." = "在区块浏览器中打开此交易。";
 "New Public Chat" = "新公共聊天";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "此地址仅用于聊天和域名。1 Kaspa 足够在应用内进行约 500 次操作。域名价格为 35 至 4,000 Kaspa，取决于名称。";
 "Unpinned" = "已取消置顶";
 "Coin Control" = "币控";
 "Automatic" = "自动";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "续期已开放：在 %@ 前续期以保留它。";
 "%@ has expired" = "%@ 已过期";
 "Renew it before %@ or anyone can claim it." = "在 %@ 前续期，否则任何人都可以认领。";
-"%@ sold" = "%@ 已售出";
-"%@ KAS was paid to you." = "已向你支付 %@ KAS。";
-"Your listing was bought." = "你挂牌的名称已被购买。";
-"You accepted an offer for it." = "你接受了对它的报价。";
-"New offer on %@" = "%@ 收到新报价";
-"%@ KAS offered for it." = "有人为它报价 %@ KAS。";
-"%@ is yours now." = "%@ 现在归你了。";
-"Offer on %@ declined" = "对 %@ 的报价被拒绝";
-"The owner declined it. The KAS is back with you." = "所有者拒绝了报价。KAS 已退回给你。";
-"Offer on %@ expired" = "对 %@ 的报价已过期";
-"Nobody accepted it in time. The KAS is back with you." = "没有人及时接受。KAS 已退回给你。";
-"Offer on %@ returned" = "对 %@ 的报价已退回";
-"It can no longer be accepted. The KAS is back with you." = "它已无法被接受。KAS 已退回给你。";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ 已被释放";
-"It expired and was cleared from the registry. Your bond is back with you." = "它已过期并从注册表中清除。你的押金已退还给你。";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ 已不再属于你";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "此地址不带公钥。";
 "This address holds funds, so this looks like the right account." = "此地址上有资金，所以看起来这就是正确的账户。";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "这张卡上已有备份。保存时，会在新备份确认后将其替换。";
-"This file is no longer shared" = "此文件已不再共享";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "这台 iPhone 上有你的账户，但没有其密钥。从备份恢复手机后会出现这种情况，因为 KaPost 的密钥绑定在创建它们的设备上。请输入你的 12 或 24 个单词以在此解锁。此设备上的消息会保留。";
 "This is more than the address you're sending from holds." = "超出了发送地址的余额。";
 "This is much more than the network needs." = "这远高于网络所需。";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "这里的所有内容在需要时都会重新下载或生成，因此清除只会多用一点流量，不会有其他影响。";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "你在下面开启的所有内容，即使应用已关闭也会提醒你。关闭此项将使全部静音。";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "将应用/设备信息、连接设置、本地消息数量和最近的应用日志导出为 zip，用于联系支持排查问题。不包含私钥、12 或 24 个单词以及解密后的消息内容。";
-"FILE" = "文件";
 "Failed to edit: %@" = "编辑失败：%@";
 "Failed to send voice message: %@" = "语音消息发送失败：%@";
 "Failed to send: %@" = "发送失败：%@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "立即发送默认金额的打赏";
 "Sends this message again." = "重新发送此消息。";
 "Share this room" = "分享此房间";
-"Shared File" = "分享的文件";
 "Shares it to your followers as-is." = "原样分享给你的粉丝。";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "分享会发送一个在 KaPost 中打开此房间的链接，以及供没有安装它的人使用的网页链接。隐藏仅对单个房间有效：在这里被隐藏的人仍会显示在其他所有房间中。";
 "Show %@ new posts" = "显示 %@ 条新帖子";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "点按以打开此公共聊天房间。";
 "Tap to open your chat." = "点按以打开你的聊天。";
 "Terms of Use" = "使用条款";
-"Testnet (testnet-10)" = "测试网 (testnet-10)";
 "The catch" = "需要注意";
 "The key that spends this address. Never share it." = "用于花费此地址资金的密钥。切勿分享。";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "KaPost 查询名称的唯一来源，在所有可输入地址的地方都会使用。你可以运行自己的名称索引器并在此填入其地址，或留空使用默认值。当索引器无响应或落后时，名称会直接从链上读取。";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "暂时无法推导出这些地址。请返回上一页，或重新打开此页面再试。";
 "When a spending address receives Kaspa from someone else." = "当支出地址收到别人发来的 Kaspa 时。";
 "Your Domains" = "你的域名";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "一个全新、从未用过的地址。发送到这里的 Kaspa 会进入此账户，并计入你的支出余额。除 .kachat 名称外均可使用。";
 "Address hidden. Re-enable it in Address Visibility." = "地址已隐藏。可在“地址可见性”中重新显示。";
 "Check off every address you want on the list, in one sitting." = "一次勾选你希望出现在列表中的所有地址。";
 "Full screen, for scanning with another device." = "全屏显示，便于用另一台设备扫描。";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "打开 KaPay 付款。";
 "Puts the full address on the clipboard." = "将完整地址复制到剪贴板。";
 "Removes it from this list. Re-enable it in Address Visibility." = "从此列表中移除。可在“地址可见性”中重新显示。";
-"Reveals the next unused address in this wallet." = "显示此钱包下一个未使用的地址。";
 "This address can't be hidden." = "此地址无法隐藏。";
 "Unlock to view this address's private key" = "解锁以查看此地址的私钥";
 "Tips From" = "打赏来源";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "地址 #%@ 已就绪。";
 "One send wasn't confirmed. Check that address before trying again." = "有一笔发送未获确认。请先检查该地址，再重试。";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "有 %@ 笔发送未获确认。请先检查这些地址，再重试。";
+"%@ Actions" = "%@ 操作";
+"%@ Address Visibility" = "%@ 地址显示";
+"%@ Balance" = "%@ 余额";
+"%@ History" = "%@ 记录";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ 只能发送到普通 Kaspa 地址，不能发送到抗量子地址或其他脚本地址。";
+"%@ held with it" = "随附 %@";
+"%d Addresses" = "%d 个地址";
+"%d coins into 1" = "%d 个合为 1 个";
+"%d found so far" = "目前已找到 %d 个";
+"%d hidden: they still count in the total." = "已隐藏 %d 个：仍计入总额。";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "一个全新的地址，从未使用或给出：这笔付款无法与你的名字关联。";
+"A quantum-resistant address: its key stays hidden until it spends." = "抗量子地址：在花费前密钥一直隐藏。";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "普通地址，和“收款”给出的一样。适用于一切，包括 kUSDT。";
+"A spending address of yours: a payment here isn't tied to your name." = "你的一个支出地址：付款到这里不会与你的名字关联。";
+"About %@" = "关于 %@";
+"Add %@ More" = "再添加 %@";
+"Add %@ for Fee and Change Coin" = "添加 %@ 用于手续费和找零币";
+"Add %@ for the Network Fee" = "添加 %@ 用于网络费";
+"Address #%lld is ready." = "地址 #%lld 已就绪。";
+"Adds a brand-new regular address of yours to this list." = "向此列表添加一个全新的普通地址。";
+"Amount (%@)" = "金额（%@）";
+"Available: %@" = "可用：%@";
+"Back to This Address" = "退回此地址";
+"Bridged In" = "跨链转入";
+"Bridged USDT" = "跨链 USDT";
+"Bridged by %@" = "由 %@ 跨链";
+"Broadcasting to the Kaspa BlockDAG..." = "正在广播到 Kaspa BlockDAG...";
+"Building the transaction…" = "正在创建交易…";
+"Check Again" = "重新检查";
+"Check off which addresses holding kUSDT are on the list." = "勾选要在列表中显示的持有 kUSDT 的地址。";
+"Checking address #%d" = "正在检查地址 #%d";
+"Checking your %@..." = "正在核对你的 %@…";
+"Coins Combined" = "已合并币";
+"Combine Coins" = "合并币";
+"Combined" = "合并数量";
+"Combined Coins" = "已合并币";
+"Couldn't check %@ just now: %@ Pull down to try again." = "暂时无法核对 %1$@：%2$@ 下拉重试。";
+"Discover kUSDT Addresses" = "查找 kUSDT 地址";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "不要从以太坊、BNB Chain 或交易所向此地址发送 USDT：会丢失。请先在 Trestly 上跨链到 Kaspa。";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "不要向此处发送 kUSDT：抗量子地址无法交易它。普通地址请用“收款”。";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "每个 %@ 币都持有 %@。将它们合并为一个币后，多出的 KAS 会扣除网络费，以普通 KAS 退回此地址。你的 %@ 数量不变。";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "每枚 %@ 含有 %@。这些 KAS 会随 %@ 一起转给收款人，因此不会丢失。";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "每枚 kUSDT 含有 1.5 KAS。发送 kUSDT 时，这些 KAS 会一起发送。";
+"Finds your addresses holding kUSDT." = "查找你持有 kUSDT 的地址。";
+"Found %d addresses with %@." = "找到 %1$d 个持有 %2$@ 的地址。";
+"Generate Non-Quantum Address" = "生成非量子地址";
+"Generate Quantum-Resistant Address" = "生成抗量子地址";
+"Goes With It" = "随附";
+"Held On" = "存放于";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "款项进入此账户，计入你的支出总额。除 .kachat 名称外都可使用。";
+"KAS Held With It" = "所含 KAS";
+"KAS Paid From" = "KAS 支付地址";
+"KAS for a %@ send" = "用于 %@ 发送的 KAS";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "可向此处发送 Kaspa，以及 Kaspa 上的 kUSDT。";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "在花费前一直隐藏密钥。仅限 Kaspa：无法从此地址交易 kUSDT。";
+"Manage %@" = "管理 %@";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "“管理 %1$@”将重新开始，只保留你的聊天地址。不会丢失任何东西：可在这里恢复任意地址，其 %2$@ 仍计入你的总额。";
+"Merges its coins into one and gives the extra KAS back." = "将其币合并为一个，并退回多出的 KAS。";
+"More than your %@." = "超过你的 %@ 余额。";
+"Moves Kaspa from this address to your Chatting Address." = "将此地址的 Kaspa 转到你的聊天地址。";
+"Moves kUSDT from this address to your Chatting Address." = "将此地址的 kUSDT 转到你的聊天地址。";
+"No %@ Yet" = "还没有 %@";
+"No %@ activity yet." = "还没有 %@ 记录。";
+"No addresses with %@ found." = "未找到持有 %@ 的地址。";
+"No addresses with %@ yet" = "还没有持有 %@ 的地址";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "未确认：网络没有响应。它仍可能完成。“重试”会发送同一笔交易，因此不会重复付款。";
+"Not independently audited yet. Hold only what you can afford to lose." = "尚未经过独立审计。只持有你能承受损失的金额。";
+"On %d of your addresses" = "到你的 %d 个地址";
+"On your %@" = "到你的 %@";
+"Only %@ on Kaspa, or KAS, can be sent here." = "这里只能接收 Kaspa 上的 %@ 或 KAS。";
+"Only Kaspa can be sent here." = "此处只能接收 Kaspa。";
+"Pending" = "待处理";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "选择从哪个地址转出 KAS，上滑发送，然后回到这里。";
+"Receive %@" = "接收 %@";
+"Received %@" = "已收到 %@";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "从此列表中移除。可在“%@ 地址显示”中重新启用。";
+"Sample Data" = "示例数据";
+"Send %@" = "发送 %@";
+"Send to Chatting Address" = "发送到聊天地址";
+"Sends, receives and combines on this phone show here from now on." = "从现在起，此手机上的发送、接收和合并会显示在这里。";
+"Swapped" = "已兑换";
+"Swipe up to Combine" = "上滑以合并";
+"Tap to Manage" = "轻点以管理";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "该金额分散在此地址超过 3 个 kUSDT 币上。请先发送较小的金额。";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "手续费的 KAS 来自同一地址，因此这次发送不会把它与你的其他地址关联起来。";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "你发送的 KAS 还没有出现在此地址上。通常只需几秒钟。";
+"The Trestly API address in Connection Settings isn't a valid https address." = "连接设置中的 Trestly API 地址不是有效的 https 地址。";
+"The built transaction didn't match what you approved, so nothing was sent." = "创建的交易与你批准的内容不一致，因此没有发送任何内容。";
+"The transaction couldn't be built. Nothing was sent." = "无法创建交易。没有发送任何内容。";
+"This address doesn't hold that much kUSDT." = "此地址没有这么多 kUSDT。";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "此地址没有 KAS，因此网络费从随 kUSDT 一起转出的 KAS 中扣除。";
+"This address holds its kUSDT in one coin already." = "此地址的 kUSDT 已在一个币中。";
+"This address needs a little KAS for the network fee." = "此地址需要少量 KAS 支付网络费。";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "此地址需要少量 KAS：网络费，加上你的找零币（你保留的 kUSDT）所需的 1.5 KAS。这 1.5 KAS 仍归你所有。";
+"This address on the Kaspa explorer." = "在 Kaspa 浏览器中查看此地址。";
+"This address's key isn't available on this phone." = "此地址的密钥不在这部手机上。";
+"Total KAS" = "KAS 总计";
+"Trestly API URL" = "Trestly API 网址";
+"Trestly answered HTTP %d." = "Trestly 返回了 HTTP %d。";
+"Trestly didn't answer." = "Trestly 没有响应。";
+"Trestly's answer couldn't be read." = "无法读取 Trestly 的响应。";
+"Up to %d coins combine at a time. Combine again for the rest." = "每次最多合并 %d 个币。其余的请再合并一次。";
+"Waiting for your KAS to arrive…" = "正在等待你的 KAS 到账…";
+"What are you sending?" = "你要发送什么？";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "你的聊天地址会显示你的 .kachat 名称和身份：付款到这里的人能看出是你。";
+"kUSDT Address Visibility" = "kUSDT 地址显示";
+"kUSDT Balances" = "kUSDT 余额";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT 只能发送到普通 Kaspa 地址。";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT 是来自 Ethereum 和 BNB Chain 的 USDT，以 1:1 存放在 Trestly 的金库中，并作为代币在 Kaspa 上发行。它不是由 Tether 发行的，只有 Trestly 能把它换回 USDT。";
+"kUSDT's transaction builder couldn't start." = "kUSDT 交易构建器无法启动。";
+"kUSDT's transaction builder gave no answer." = "kUSDT 交易构建器没有响应。";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "kUSDT 交易构建器不是固定的那个，因此不会运行。";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "KaPost 缺少 kUSDT 模板，无法核对 kUSDT。";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "网络费超过 KaPost 的安全上限。没有发送任何内容。";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "KaPost 查询你的哪些地址持有 kUSDT 的地方。每个结果在显示前都会通过 Kaspa 网络核实。";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "用新地址接收。在 KaPay 中用 KAS 兑换 kUSDT。";
+"Swap kUSDT in KaPay." = "在 KaPay 中兑换 kUSDT。";
+"Release to Confirm" = "松开以确认";
+"The transaction didn't go out." = "交易没有发出。";
+"Fee %@" = "手续费 %@";
+"Push" = "推送";
+"Trestly" = "Trestly";
+"Reading names from" = "名称读取来源";
+"Not live on this network" = "此网络上未启用";
+"The chain" = "链上";
+"Indexer not usable right now" = "Indexer 当前不可用";
+"Not set" = "未设置";
+"Use for chatting and acquiring .kachat domains." = "用于聊天和获取 .kachat 域名。";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "因 kUSDT 而显示";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "此地址在你的 kUSDT 列表中，因此会保留在这里。请先在“管理 kUSDT”中隐藏它。";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "打赏币种";
+"Ask Each Time" = "每次询问";
+"What are you tipping in?" = "你用什么打赏?";
+"Not counted on the post" = "不计入帖子";
+"Set what Tip sends in Settings > KaPost > Tip In." = "在 设置 > KaPost > 打赏币种 中选择打赏发送什么。";
+"Tip asks whether to send Kaspa or kUSDT each time." = "每次打赏都会询问发送 Kaspa 还是 kUSDT。";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "打赏会把 kUSDT 发送到发帖人的聊天地址。kUSDT 打赏不计入帖子。";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "获取 KaPay";
+"None of your addresses holds %@ yet." = "你的地址中还没有持有 %@ 的。";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "账户已切换，因此未发送。";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "确认页面打开了一段时间，所以已重新生成交易。未发送任何内容：请检查后再次滑动。";
+"Balance increased by %@" = "余额增加了 %@";
+"%d of your addresses" = "你的 %d 个地址";
+"Chatting address %@" = "聊天地址 %@";
+"Spending address %@" = "支出地址 %@";

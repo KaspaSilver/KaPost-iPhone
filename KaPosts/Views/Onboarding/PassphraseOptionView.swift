@@ -695,17 +695,27 @@ struct PassphraseAddressPreview: View {
         // Held from the first keystroke, not only once the lookup starts: an Import tapped in
         // the pause would otherwise go to #0.
         isSearching?.wrappedValue = selection != nil
+        // Copied for the derivation, which runs off the main actor.
+        let seedWords = words
+        let previewIndex = chattingIndex
+        let previewFamily = family
+        let network = SettingsViewModel.loadSettings().networkType
         previewTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
-            let address = walletManager.previewChattingAddress(
-                words: words,
-                passphrase: typed,
-                chattingIndex: chattingIndex,
-                family: family
-            )
+            // The seed (PBKDF2, the slow part) once per passphrase, in the background: the
+            // preview, every wallet type's #0 and the search all derive from it. A newer
+            // passphrase cancels this task, and its results are dropped below.
+            let derived = await Task.detached(priority: .userInitiated) { () -> (seed: WalletManager.ImportSeed, address: String?)? in
+                guard let seed = WalletManager.importSeed(words: seedWords, passphrase: typed, network: network) else { return nil }
+                return (seed, WalletManager.previewChattingAddress(seed: seed, chattingIndex: previewIndex, family: previewFamily))
+            }.value
+            var seed = derived?.seed
+            defer { seed?.wipe() }
+            guard !Task.isCancelled else { return }
+            let address = derived?.address
             previewAddress = address
-            guard let address else {
+            guard let address, let importSeed = seed else {
                 previewBalanceFailed = true
                 isSearching?.wrappedValue = false
                 return
@@ -714,7 +724,12 @@ struct PassphraseAddressPreview: View {
             try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled else { return }
             if selection != nil {
-                everyWalletType = walletManager.importAddressesAtZero(words: words, passphrase: typed)
+                let rows = await Task.detached(priority: .userInitiated) {
+                    (zero: WalletManager.importAddressesAtZero(seed: importSeed),
+                     search: WalletManager.importSearchCandidates(seed: importSeed))
+                }.value
+                guard !Task.isCancelled else { return }
+                everyWalletType = rows.zero
                 // A slow or unreachable node lets Import go after the timeout, onto #0, and says
                 // so; an answer that comes later is ignored.
                 let token = UUID()
@@ -730,7 +745,7 @@ struct PassphraseAddressPreview: View {
                     previewTask?.cancel()
                 }
                 searchTimeoutTask = timeout
-                let found = await walletManager.findImportAccounts(words: words, passphrase: typed)
+                let found = await walletManager.findImportAccounts(candidates: rows.search)
                 timeout.cancel()
                 guard !Task.isCancelled, searchToken == token else { return }
                 searchToken = nil

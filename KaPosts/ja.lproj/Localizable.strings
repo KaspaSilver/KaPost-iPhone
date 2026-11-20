@@ -266,7 +266,6 @@
 "None yet" = "まだありません";
 ".kachat Name" = ".kachat 名";
 ".kachat names are coming" = ".kachat 名はまもなく登場";
-"Get a %@ domain at %@" = "%2$@ で %1$@ ドメインを取得";
 "No %@ names yet." = "%@ の名前はまだありません。";
 "Couldn't reach %@. Pull down to try again." = "%@ に接続できません。下に引いて再試行してください。";
 "Settling" = "確定待ち";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost はまだテストネットでは利用できません";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "テストネット用の KaPost インデクサーはありません。メインネットで閲覧・投稿するには、設定 > 接続 でテストネットをオフにしてください。";
-"Offer accepted" = "オファー承諾";
 "Expired" = "期限切れ";
 "Keep" = "そのまま";
 "Cancelled." = "取り消しました。";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "Kaspaと通貨を切り替え";
 "Opens this transaction in the block explorer." = "このトランザクションをブロックエクスプローラで開きます。";
 "New Public Chat" = "新しい公開チャット";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "このアドレスはチャットとドメイン専用です。1 Kaspaでアプリ内の操作が約500回できます。ドメインは名前によって35〜4,000 Kaspaです。";
 "Unpinned" = "固定を解除しました";
 "Coin Control" = "コインコントロール";
 "Automatic" = "自動";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "更新できます: 保持するには %@ までに更新してください。";
 "%@ has expired" = "%@ の期限が切れました";
 "Renew it before %@ or anyone can claim it." = "%@ までに更新しないと誰でも取得できるようになります。";
-"%@ sold" = "%@ が売れました";
-"%@ KAS was paid to you." = "%@ KAS が支払われました。";
-"Your listing was bought." = "出品した名前が購入されました。";
-"You accepted an offer for it." = "この名前へのオファーを承諾しました。";
-"New offer on %@" = "%@ に新しいオファー";
-"%@ KAS offered for it." = "%@ KAS のオファーがありました。";
-"%@ is yours now." = "%@ があなたのものになりました。";
-"Offer on %@ declined" = "%@ へのオファーが辞退されました";
-"The owner declined it. The KAS is back with you." = "所有者が辞退しました。KAS は返金されました。";
-"Offer on %@ expired" = "%@ へのオファーが期限切れ";
-"Nobody accepted it in time. The KAS is back with you." = "期限内に承諾されませんでした。KAS は返金されました。";
-"Offer on %@ returned" = "%@ へのオファーが返却されました";
-"It can no longer be accepted. The KAS is back with you." = "もう承諾できません。KAS は返金されました。";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ が解放されました";
-"It expired and was cleared from the registry. Your bond is back with you." = "期限が切れてレジストリから削除されました。保証金はあなたに返却されました。";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ はあなたのものではなくなりました";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "このアドレスには公開鍵がありません。";
 "This address holds funds, so this looks like the right account." = "このアドレスには資金があるため、正しいアカウントのようです。";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "このカードにはすでにバックアップがあります。保存すると、新しいバックアップが確認された後で置き換えられます。";
-"This file is no longer shared" = "このファイルは共有されなくなりました";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "このiPhoneにはアカウントがありますが、鍵がありません。電話をバックアップから復元すると起こります。KaPostの鍵は作成されたデバイスに紐づいているためです。ここでロックを解除するには12語または24語を入力してください。このデバイスのメッセージは保持されます。";
 "This is more than the address you're sending from holds." = "送金元アドレスの残高を超えています。";
 "This is much more than the network needs." = "ネットワークに必要な額よりかなり多くなっています。";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "ここにあるものは、必要なときに再ダウンロードまたは再生成されるため、クリアしても少しデータを使うだけで他に影響はありません。";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "下でオンにしたものはすべて、アプリを閉じていても届きます。オフにするとすべて無音になります。";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "アプリ/デバイス情報、接続設定、ローカルのメッセージ数、最近のアプリログを zip でエクスポートします。サポートでのトラブルシューティング用です。秘密鍵、12語または24語、復号したメッセージ内容は含まれません。";
-"FILE" = "ファイル";
 "Failed to edit: %@" = "編集に失敗しました: %@";
 "Failed to send voice message: %@" = "ボイスメッセージの送信に失敗しました: %@";
 "Failed to send: %@" = "送信に失敗しました: %@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "デフォルトのチップをすぐに送る";
 "Sends this message again." = "このメッセージをもう一度送信します。";
 "Share this room" = "このルームを共有";
-"Shared File" = "共有されたファイル";
 "Shares it to your followers as-is." = "そのままフォロワーに共有します。";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "共有すると、KaPost でこのルームを開くリンクと、KaPost を持っていない人向けの Web リンクが送られます。非表示はルームごとの設定で、ここで非表示にした人も他のルームでは表示されます。";
 "Show %@ new posts" = "新しい投稿を %@ 件表示";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "タップしてこのパブリックチャットルームを開きます。";
 "Tap to open your chat." = "タップしてチャットを開きます。";
 "Terms of Use" = "利用規約";
-"Testnet (testnet-10)" = "テストネット (testnet-10)";
 "The catch" = "注意点";
 "The key that spends this address. Never share it." = "このアドレスから支払うための鍵です。絶対に共有しないでください。";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "KaPost が検索する唯一の名前サービスで、アドレスを入力できるすべての場所で使われます。自分の名前インデクサーを運用してそのアドレスをここに入力するか、空欄でデフォルトを使います。インデクサーが応答しない、または遅れているときは、名前はチェーンから直接読み取られます。";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "現在、これらのアドレスを導出できません。前のページに戻るか、この画面を開き直して再試行してください。";
 "When a spending address receives Kaspa from someone else." = "支出アドレスが他の人からKaspaを受け取ったとき。";
 "Your Domains" = "あなたのドメイン";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "未使用の新しいアドレスです。ここに送られたKaspaはこのアカウントに入り、支出残高に含まれます。.kachatの名前以外のすべてに使えます。";
 "Address hidden. Re-enable it in Address Visibility." = "アドレスを非表示にしました。「アドレスの表示」で再表示できます。";
 "Check off every address you want on the list, in one sitting." = "リストに載せたいアドレスを一度にすべてチェックしてください。";
 "Full screen, for scanning with another device." = "全画面表示。別の端末で読み取るときに。";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "KaPayを開いて支払います。";
 "Puts the full address on the clipboard." = "アドレス全体をクリップボードにコピーします。";
 "Removes it from this list. Re-enable it in Address Visibility." = "このリストから外します。「アドレスの表示」で再表示できます。";
-"Reveals the next unused address in this wallet." = "このウォレットの次の未使用アドレスを表示します。";
 "This address can't be hidden." = "このアドレスは非表示にできません。";
 "Unlock to view this address's private key" = "このアドレスの秘密鍵を表示するにはロックを解除してください";
 "Tips From" = "チップの送信元";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "アドレス #%@ の準備ができました。";
 "One send wasn't confirmed. Check that address before trying again." = "1 件の送金が確認されませんでした。もう一度試す前に、そのアドレスを確認してください。";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "%@ 件の送金が確認されませんでした。もう一度試す前に、それらのアドレスを確認してください。";
+"%@ Actions" = "%@ の操作";
+"%@ Address Visibility" = "%@ アドレスの表示";
+"%@ Balance" = "%@ 残高";
+"%@ History" = "%@ の履歴";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ は通常の Kaspa アドレスにのみ送れます。量子耐性アドレスやその他のスクリプトアドレスには送れません。";
+"%@ held with it" = "%@ を一緒に保持";
+"%d Addresses" = "%d 件のアドレス";
+"%d coins into 1" = "%d 枚を 1 枚に";
+"%d found so far" = "これまでに %d 件";
+"%d hidden: they still count in the total." = "%d 件を非表示：合計には含まれます。";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "一度も使ったり渡したりしていない新しいアドレス：この支払いはあなたの名前と結び付けられません。";
+"A quantum-resistant address: its key stays hidden until it spends." = "耐量子アドレス：使うまで鍵は隠れたままです。";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "「受け取る」と同じ通常のアドレスです。kUSDT を含め、何にでも使えます。";
+"A spending address of yours: a payment here isn't tied to your name." = "あなたの支払い用アドレス：ここへの支払いは名前と結び付きません。";
+"About %@" = "%@ について";
+"Add %@ More" = "さらに %@ を追加";
+"Add %@ for Fee and Change Coin" = "手数料とお釣りコイン用に %@ を追加";
+"Add %@ for the Network Fee" = "ネットワーク手数料用に %@ を追加";
+"Address #%lld is ready." = "アドレス #%lld の準備ができました。";
+"Adds a brand-new regular address of yours to this list." = "まったく新しい通常のアドレスをこの一覧に追加します。";
+"Amount (%@)" = "金額（%@）";
+"Available: %@" = "利用可能: %@";
+"Back to This Address" = "このアドレスに戻る額";
+"Bridged In" = "ブリッジで入金";
+"Bridged USDT" = "ブリッジ USDT";
+"Bridged by %@" = "%@ によるブリッジ";
+"Broadcasting to the Kaspa BlockDAG..." = "Kaspa BlockDAG にブロードキャスト中...";
+"Building the transaction…" = "トランザクションを作成中…";
+"Check Again" = "再確認";
+"Check off which addresses holding kUSDT are on the list." = "kUSDT を保有するアドレスのうち、一覧に表示するものにチェックを入れます。";
+"Checking address #%d" = "アドレス #%d を確認中";
+"Checking your %@..." = "%@ を確認中…";
+"Coins Combined" = "コインをまとめました";
+"Combine Coins" = "コインをまとめる";
+"Combined" = "まとめた額";
+"Combined Coins" = "コインをまとめました";
+"Couldn't check %@ just now: %@ Pull down to try again." = "%1$@ を確認できませんでした：%2$@ 下に引いて再試行してください。";
+"Discover kUSDT Addresses" = "kUSDT アドレスを検出";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "Ethereum、BNB Chain、取引所からこのアドレスに USDT を送らないでください：失われます。先に Trestly で Kaspa へブリッジしてください。";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "ここに kUSDT を送らないでください：耐量子アドレスからは取引できません。通常のアドレスは「受け取る」で。";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "%@ のコインはそれぞれ %@ を保持しています。1枚にまとめると、余分な KAS がネットワーク手数料を差し引いて通常の KAS としてこのアドレスに戻ります。%@ の額は変わりません。";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "%@ コインには1枚ごとに %@ が含まれます。この KAS は %@ と一緒に受取人に届くため、失われません。";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "kUSDT コインには1枚ごとに 1.5 KAS が含まれます。kUSDT を送ると一緒に送られます。";
+"Finds your addresses holding kUSDT." = "kUSDT を保有しているアドレスを見つけます。";
+"Found %d addresses with %@." = "%2$@ のあるアドレスが %1$d 件見つかりました。";
+"Generate Non-Quantum Address" = "非量子アドレスを作成";
+"Generate Quantum-Resistant Address" = "耐量子アドレスを作成";
+"Goes With It" = "一緒に送付";
+"Held On" = "保管先";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "このアカウントに入り、支払い用の合計に含まれます。.kachat の名前以外なら何にでも使えます。";
+"KAS Held With It" = "含まれる KAS";
+"KAS Paid From" = "KAS の支払い元";
+"KAS for a %@ send" = "%@ 送金用の KAS";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "ここには Kaspa と、Kaspa 上の kUSDT を送れます。";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "使うまで鍵を隠しておきます。Kaspa 専用：ここから kUSDT は取引できません。";
+"Manage %@" = "%@ を管理";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "「%1$@ を管理」はチャットアドレスだけから始め直します。何も失われません。ここでどのアドレスも戻せ、その %2$@ は引き続き合計に含まれます。";
+"Merges its coins into one and gives the extra KAS back." = "コインを1つにまとめ、余分な KAS を戻します。";
+"More than your %@." = "%@ の残高を超えています。";
+"Moves Kaspa from this address to your Chatting Address." = "このアドレスの Kaspa をチャットアドレスに移します。";
+"Moves kUSDT from this address to your Chatting Address." = "このアドレスの kUSDT をチャットアドレスに移します。";
+"No %@ Yet" = "%@ はまだありません";
+"No %@ activity yet." = "%@ のアクティビティはまだありません。";
+"No addresses with %@ found." = "%@ のあるアドレスは見つかりませんでした。";
+"No addresses with %@ yet" = "%@ のあるアドレスはまだありません";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "未確認：ネットワークから応答がありませんでした。まだ通る可能性があります。「再試行」は同じトランザクションを送るので、二重に支払われることはありません。";
+"Not independently audited yet. Hold only what you can afford to lose." = "まだ独立した監査を受けていません。失っても構わない額だけを保有してください。";
+"On %d of your addresses" = "あなたの %d 件のアドレスに";
+"On your %@" = "あなたの %@ に";
+"Only %@ on Kaspa, or KAS, can be sent here." = "ここに送れるのは Kaspa 上の %@ または KAS のみです。";
+"Only Kaspa can be sent here." = "ここには Kaspa しか送れません。";
+"Pending" = "保留中";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "どのアドレスから KAS を送るか選んで上にスワイプすると、ここに戻ります。";
+"Receive %@" = "%@ を受け取る";
+"Received %@" = "%@ を受け取りました";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "この一覧から外します。「%@ アドレスの表示」で再表示できます。";
+"Sample Data" = "サンプルデータ";
+"Send %@" = "%@ を送信";
+"Send to Chatting Address" = "チャットアドレスに送る";
+"Sends, receives and combines on this phone show here from now on." = "これ以降、この端末での送金・受取・まとめがここに表示されます。";
+"Swapped" = "スワップ済み";
+"Swipe up to Combine" = "上にスワイプしてまとめる";
+"Tap to Manage" = "タップして管理";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "その金額はこのアドレスの 3 枚を超える kUSDT コインに分かれています。今は少ない金額を送ってください。";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "手数料の KAS は同じアドレスから支払われるため、この送金がほかのアドレスと結び付くことはありません。";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "送った KAS はまだこのアドレスに届いていません。通常は数秒で届きます。";
+"The Trestly API address in Connection Settings isn't a valid https address." = "接続設定の Trestly API アドレスが有効な https アドレスではありません。";
+"The built transaction didn't match what you approved, so nothing was sent." = "作成されたトランザクションが承認した内容と一致しなかったため、何も送られていません。";
+"The transaction couldn't be built. Nothing was sent." = "トランザクションを作成できませんでした。何も送られていません。";
+"This address doesn't hold that much kUSDT." = "このアドレスにはそれほどの kUSDT がありません。";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "このアドレスには KAS がなかったため、ネットワーク手数料は kUSDT に付く KAS から支払われました。";
+"This address holds its kUSDT in one coin already." = "このアドレスの kUSDT はすでに1枚のコインです。";
+"This address needs a little KAS for the network fee." = "このアドレスにはネットワーク手数料用に少し KAS が必要です。";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "このアドレスには少し KAS が必要です：ネットワーク手数料と、お釣りのコイン（手元に残る kUSDT）用の 1.5 KAS。この 1.5 KAS はあなたのものです。";
+"This address on the Kaspa explorer." = "Kaspa エクスプローラーでこのアドレスを見る。";
+"This address's key isn't available on this phone." = "このアドレスの鍵はこの電話にありません。";
+"Total KAS" = "KAS 合計";
+"Trestly API URL" = "Trestly API の URL";
+"Trestly answered HTTP %d." = "Trestly が HTTP %d で応答しました。";
+"Trestly didn't answer." = "Trestly から応答がありません。";
+"Trestly's answer couldn't be read." = "Trestly の応答を読み取れませんでした。";
+"Up to %d coins combine at a time. Combine again for the rest." = "一度にまとめられるのは %d 枚までです。残りはもう一度まとめてください。";
+"Waiting for your KAS to arrive…" = "KAS の到着を待っています…";
+"What are you sending?" = "何を送りますか？";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "チャットアドレスには .kachat の名前と ID が表示されます：ここに支払う人にはあなただと分かります。";
+"kUSDT Address Visibility" = "kUSDT アドレスの表示";
+"kUSDT Balances" = "kUSDT 残高";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT は通常の Kaspa アドレスにしか送れません。";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT は Ethereum と BNB Chain の USDT で、Trestly の保管庫に 1:1 で保管され、Kaspa 上のトークンとして発行されます。Tether が発行するものではなく、USDT に戻せるのは Trestly だけです。";
+"kUSDT's transaction builder couldn't start." = "kUSDT のトランザクションビルダーを起動できませんでした。";
+"kUSDT's transaction builder gave no answer." = "kUSDT のトランザクションビルダーから応答がありません。";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "kUSDT のトランザクションビルダーが固定されたものではないため、実行しません。";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "KaPost の kUSDT テンプレートがないため、kUSDT を確認できません。";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "ネットワーク手数料が KaPost の安全上限を超えています。何も送られていません。";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "KaPost が、どのアドレスに kUSDT があるかを調べる先です。回答はすべて表示前に Kaspa ネットワークで確認されます。";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "新しいアドレスで受け取れます。KAS から kUSDT へのスワップは KaPay で。";
+"Swap kUSDT in KaPay." = "kUSDT のスワップは KaPay で。";
+"Release to Confirm" = "指を離して確定";
+"The transaction didn't go out." = "トランザクションは送信されませんでした。";
+"Fee %@" = "手数料 %@";
+"Push" = "プッシュ";
+"Trestly" = "Trestly";
+"Reading names from" = "名前の読み取り元";
+"Not live on this network" = "このネットワークでは未対応";
+"The chain" = "チェーン";
+"Indexer not usable right now" = "Indexerは現在使用できません";
+"Not set" = "未設定";
+"Use for chatting and acquiring .kachat domains." = "チャットと.kachatドメインの取得に使用します。";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "kUSDTのため表示";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "このアドレスはkUSDTのリストにあるため、ここに残ります。先に「kUSDT を管理」で非表示にしてください。";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "チップの通貨";
+"Ask Each Time" = "毎回確認";
+"What are you tipping in?" = "何でチップを送りますか?";
+"Not counted on the post" = "投稿には数えられません";
+"Set what Tip sends in Settings > KaPost > Tip In." = "チップで送るものは 設定 > KaPost > チップの通貨 で選べます。";
+"Tip asks whether to send Kaspa or kUSDT each time." = "チップを押すたびに Kaspa か kUSDT かを確認します。";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "チップは投稿者のチャットアドレスに kUSDT を送ります。kUSDT のチップは投稿には数えられません。";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "KaPay を入手";
+"None of your addresses holds %@ yet." = "%@ を持っているアドレスはまだありません。";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "アカウントが切り替わったため、送信されませんでした。";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "確認画面がしばらく開いていたため、取引を作り直しました。何も送信されていません。内容を確認して、もう一度スワイプしてください。";
+"Balance increased by %@" = "残高が %@ 増えました";
+"%d of your addresses" = "%d 件のアドレス";
+"Chatting address %@" = "チャットアドレス %@";
+"Spending address %@" = "支払い用アドレス %@";

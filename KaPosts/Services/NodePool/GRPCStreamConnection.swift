@@ -18,23 +18,6 @@ enum KaspaRequestType: Hashable {
     case getCurrentNetwork
     case getMempoolEntry
     case getFeeEstimate
-
-    /// The expected response type for this request
-    var responseCase: String {
-        switch self {
-        case .getInfo: return "getInfoResponse"
-        case .getUtxosByAddresses: return "getUtxosByAddressesResponse"
-        case .submitTransaction: return "submitTransactionResponse"
-        case .notifyUtxosChanged: return "notifyUtxosChangedResponse"
-        case .notifyBlockAdded: return "notifyBlockAddedResponse"
-        case .getPeerAddresses: return "getPeerAddressesResponse"
-        case .getConnectedPeerInfo: return "getConnectedPeerInfoResponse"
-        case .getBlockDagInfo: return "getBlockDagInfoResponse"
-        case .getCurrentNetwork: return "getCurrentNetworkResponse"
-        case .getMempoolEntry: return "getMempoolEntryResponse"
-        case .getFeeEstimate: return "getFeeEstimateResponse"
-        }
-    }
 }
 
 // MARK: - Pending Request
@@ -50,10 +33,6 @@ struct PendingRequest {
     let sentAt: Date
     let timeout: TimeInterval
     let timeoutTask: Task<Void, Never>
-
-    var isExpired: Bool {
-        Date().timeIntervalSince(sentAt) > timeout
-    }
 }
 
 // MARK: - Connection State
@@ -64,10 +43,6 @@ enum ConnectionState: Equatable {
     case connecting
     case connected
     case reconnecting
-
-    var isUsable: Bool {
-        self == .connected
-    }
 }
 
 // MARK: - Circuit Breaker
@@ -231,6 +206,13 @@ final class BlockScanRegistry: @unchecked Sendable {
     }
 }
 
+/// A request refused before it was written to the stream: the node never saw it. Carries the
+/// error `sendRequest` throws in its place.
+struct RequestNotSentError: Error {
+    let underlying: Error
+    init(_ underlying: Error) { self.underlying = underlying }
+}
+
 actor GRPCStreamConnection {
     // MARK: - Types
 
@@ -310,13 +292,6 @@ actor GRPCStreamConnection {
     /// Notification handlers
     private var notificationHandlers: [UUID: NotificationHandler] = [:]
 
-    /// Latency EWMA (for health tracking)
-    private var latencyEwma = EWMA()
-
-    /// Consecutive successes/failures
-    private var consecutiveSuccesses: Int = 0
-    private var consecutiveFailures: Int = 0
-
     /// Types whose last request timed out on this stream, with that request's id. A reply can
     /// still be on its way and nothing on the wire says whose it is, so a later request of the
     /// type would take it as its own answer (the other address's UTXOs, say). The type is refused
@@ -393,15 +368,6 @@ actor GRPCStreamConnection {
 
     var isConnected: Bool {
         state == .connected
-    }
-
-    var connectionDuration: TimeInterval? {
-        guard let connected = connectedAt else { return nil }
-        return Date().timeIntervalSince(connected)
-    }
-
-    var averageLatencyMs: Double? {
-        latencyEwma.value
     }
 
     var isCircuitOpen: Bool {
@@ -658,11 +624,6 @@ actor GRPCStreamConnection {
         AppLog.log("[GRPCStream] Disconnected from %@", endpoint.key)
     }
 
-    /// Check if connection should be attempted (circuit breaker)
-    func shouldAttempt() -> Bool {
-        circuitBreaker.checkState()
-    }
-
     // MARK: - Request/Response
 
     /// Send a request and wait for response with timeout
@@ -671,20 +632,36 @@ actor GRPCStreamConnection {
         type: KaspaRequestType,
         timeout: TimeInterval
     ) async throws -> Protowire_KaspadMessage {
+        do {
+            return try await sendRequestReportingNotSent(message, type: type, timeout: timeout)
+        } catch let notSent as RequestNotSentError {
+            throw notSent.underlying
+        }
+    }
+
+    /// `sendRequest`, except that a refusal before anything was written to the stream (not
+    /// connected, circuit breaker open, a late reply owed, cancelled while waiting for the slot)
+    /// throws `RequestNotSentError`, so a submit can tell "the node never saw it" from "the answer
+    /// was lost" (`NodePoolService.hedgedSubmit`).
+    func sendRequestReportingNotSent(
+        _ message: Protowire_KaspadMessage,
+        type: KaspaRequestType,
+        timeout: TimeInterval
+    ) async throws -> Protowire_KaspadMessage {
         // Check connection first
         guard stream != nil, state == .connected else {
             // Only check circuit breaker if not connected
             guard circuitBreaker.checkState() else {
-                throw KasiaError.networkError("Circuit breaker open for \(endpoint.key)")
+                throw RequestNotSentError(KasiaError.networkError("Circuit breaker open for \(endpoint.key)"))
             }
-            throw KasiaError.networkError("Not connected to \(endpoint.key)")
+            throw RequestNotSentError(KasiaError.networkError("Not connected to \(endpoint.key)"))
         }
 
         // If we're connected but circuit breaker is open, reset it, once the stream has shown
         // the node is responsive. A freshly made one proves nothing (`streamProvenAlive`).
         if !circuitBreaker.checkState() {
             guard streamProvenAlive else {
-                throw KasiaError.networkError("Circuit breaker open for \(endpoint.key)")
+                throw RequestNotSentError(KasiaError.networkError("Circuit breaker open for \(endpoint.key)"))
             }
             circuitBreaker.reset()
             AppLog.log("[GRPCStream] Reset circuit breaker for live connection %@", endpoint.key)
@@ -699,7 +676,7 @@ actor GRPCStreamConnection {
         if Task.isCancelled {
             reservedTypes.remove(type)
             releaseTypeSlot(type)
-            throw CancellationError()
+            throw RequestNotSentError(CancellationError())
         }
 
         // The connection can drop while this caller sat in the slot queue, and sending on a dead
@@ -709,14 +686,14 @@ actor GRPCStreamConnection {
         guard state == .connected, let stream = self.stream else {
             reservedTypes.remove(type)
             releaseTypeSlot(type)
-            throw KasiaError.networkError("Not connected to \(endpoint.key)")
+            throw RequestNotSentError(KasiaError.networkError("Not connected to \(endpoint.key)"))
         }
 
         // A timed-out request's reply may still arrive; sent now, this request would take it.
         guard lateReplyOwed[type] == nil else {
             reservedTypes.remove(type)
             releaseTypeSlot(type)
-            throw KasiaError.networkError("Waiting for a late reply on \(endpoint.key)")
+            throw RequestNotSentError(KasiaError.networkError("Waiting for a late reply on \(endpoint.key)"))
         }
 
         // Generate request ID
@@ -874,13 +851,7 @@ actor GRPCStreamConnection {
         // Cancel timeout task
         pending.timeoutTask.cancel()
 
-        // Calculate latency
-        let latencyMs = Date().timeIntervalSince(pending.sentAt) * 1000
-        latencyEwma.update(sample: latencyMs, alpha: 0.25)
-
         // Record success
-        consecutiveSuccesses += 1
-        consecutiveFailures = 0
         circuitBreaker.recordSuccess()
         lastActivityAt = Date()
 
@@ -916,8 +887,6 @@ actor GRPCStreamConnection {
         }
 
         // Record failure
-        consecutiveSuccesses = 0
-        consecutiveFailures += 1
         circuitBreaker.recordFailure()
 
         pending.continuation?.resume(throwing: KasiaError.networkError("Request timeout"))
@@ -956,8 +925,6 @@ actor GRPCStreamConnection {
         releaseTypeSlot(pending.type)
 
         // Record failure
-        consecutiveSuccesses = 0
-        consecutiveFailures += 1
         circuitBreaker.recordFailure()
 
         // Check if the error indicates the stream is dead (AlreadyComplete, closed, etc.)
@@ -1072,26 +1039,9 @@ actor GRPCStreamConnection {
 
     // MARK: - Health Metrics
 
-    /// Get current health metrics
-    func getHealthMetrics() -> (latencyMs: Double?, consecutiveSuccesses: Int, consecutiveFailures: Int) {
-        (latencyEwma.value, consecutiveSuccesses, consecutiveFailures)
-    }
-
-    /// Reset health metrics (e.g., on epoch change)
-    func resetHealthMetrics() {
-        latencyEwma.reset()
-        consecutiveSuccesses = 0
-        consecutiveFailures = 0
-    }
-
     /// Reset the circuit breaker (call after confirmed successful communication)
     func resetCircuitBreaker() {
         circuitBreaker.reset()
-    }
-
-    /// Check circuit breaker state without mutating
-    var circuitBreakerState: CircuitBreaker.State {
-        circuitBreaker.state
     }
 }
 
@@ -1271,20 +1221,9 @@ actor GRPCConnectionPool {
         connections.removeAll()
     }
 
-    /// Get all active connections
-    func allConnections() -> [GRPCStreamConnection] {
-        Array(connections.values)
-    }
-
     /// Get current connection count
     func connectionCount() -> Int {
         connections.count
-    }
-
-    /// Check if endpoint has an established connection
-    func hasActiveConnection(for endpoint: Endpoint) async -> Bool {
-        guard let conn = connections[endpoint.key] else { return false }
-        return await conn.isConnected
     }
 
     /// Get endpoints with active connections

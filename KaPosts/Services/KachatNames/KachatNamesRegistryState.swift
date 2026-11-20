@@ -1182,7 +1182,19 @@ extension KachatNames {
             let names: [String]?
             let profile: Profile?
 
-            var identity: Identity { Identity(address: address, label: label, names: names ?? [], profile: profile?.sanitized()) }
+            /// The indexer's word, checked for shape: only well-formed names are kept, and the label
+            /// only when it is one of them, so an answer can't put any other text beside an address.
+            /// Payment screens go further and confirm the label on the chain
+            /// (`KachatNamesRegistry.verifyLabel`).
+            var identity: Identity {
+                var held: [String] = []
+                for raw in names ?? [] {
+                    let name = Codec.normalize(raw)
+                    if Codec.isValid(name), !held.contains(name) { held.append(name) }
+                }
+                let checkedLabel = label.map(Codec.normalize).flatMap { held.contains($0) ? $0 : nil }
+                return Identity(address: address, label: checkedLabel, names: held, profile: profile?.sanitized())
+            }
         }
 
         struct StatusJSON: Decodable {

@@ -48,7 +48,6 @@ struct KaPostsApp: App {
                 .onAppear {
                     ChatService.shared.settingsViewModel = settingsViewModel
                     applyWindowAppearanceOverride()
-                    PrivacyCoverWindow.startObserving()
                 }
                 .onOpenURL { url in
                     handleIncomingURL(url)
@@ -167,9 +166,9 @@ struct KaPostsApp: App {
 
     /// Pre-initialize heavy components to avoid lag on first user interaction.
     private static func warmUp() async {
-        // Voice notes in public rooms record through this session.
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        // No audio session category here: the room recorder sets `.playAndRecord` only while it
+        // records, and voice playback sets `.playback` (`VoicePlaybackCoordinator`), each giving
+        // the session back when done, so other apps' audio isn't held at launch.
         // Warm up the crypto library with a dummy operation.
         let dummyKey = Data(repeating: 0x01, count: 32)
         _ = try? KasiaCipher.encrypt("warmup", recipientPublicKey: dummyKey)
@@ -367,6 +366,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         let threadIdentifier = response.notification.request.content.threadIdentifier
         let userInfo = response.notification.request.content.userInfo
 
+        // A "Received kUSDT" notification (`TokenWallet.postReceived`, local): that token's
+        // Manage screen (`KaPostsTabView` opens it).
+        if threadIdentifier == TokenWallet.notificationThread {
+            let token = userInfo["token"] as? String
+            Task { @MainActor in
+                TokenRoute.pending = token ?? WalletToken.kusdt.id
+                NotificationCenter.default.post(name: .openToken, object: nil)
+            }
+            completionHandler()
+            return
+        }
+
         // The scheduled-post reminder (local fallback): into KaPosts, which sends what is due
         // and shows the Scheduled screen.
         if threadIdentifier == "kaposts-scheduled" {
@@ -514,17 +525,30 @@ enum KaChatLinkRouter {
     }
 
     @MainActor
-    private static func openPublicChatRoom(channel: String) {
+    private static func openPublicChatRoom(channel: String, attemptsLeft: Int = 20) {
         // Re-validated here, the last gate before a name from a pasted link can create a row.
         guard let normalized = KaChatInternalLink.normalizeAndValidateChannel(channel) else { return }
+        let service = PublicChatService.shared
         // Curated rooms always exist, and one already on the list needs nothing. Anything else
         // joins the user's own list first, as if typed into "Join or Create a Channel", once
         // they say so: any app or post can hand over a link, and the name is whatever it likes.
-        let listed = PublicChatService.curatedChannels.contains(normalized)
-            || PublicChatService.shared.channels.contains { $0.channelName == normalized }
+        let curated = PublicChatService.curatedChannels.contains(normalized)
+        // On a cold start `channels` is empty until the account's store opens, so a room already
+        // joined would be offered again: wait for the store (up to 10 s, as `openRoomFromPush`).
+        if !curated, !service.isStoreReady, attemptsLeft > 0 {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                openPublicChatRoom(channel: normalized, attemptsLeft: attemptsLeft - 1)
+            }
+            return
+        }
+        let listed = curated || service.channels.contains { $0.channelName == normalized }
         guard listed else {
             confirmJoin(normalized) {
-                PublicChatService.shared.joinChannel(normalized)
+                // The store may have opened while the alert was up.
+                if !PublicChatService.shared.channels.contains(where: { $0.channelName == normalized }) {
+                    PublicChatService.shared.joinChannel(normalized)
+                }
                 navigateToPublicChatRoom(normalized)
             }
             return
@@ -601,66 +625,6 @@ extension Notification.Name {
     static let openKaPost = Notification.Name("openKaPost")
     static let openKaPostsProfile = Notification.Name("openKaPostsProfile")
     static let openPublicChat = Notification.Name("openBroadcast")
-}
-
-/// Puts `PrivacyCoverView` in a window of its own above the app. An overlay on the root view sat
-/// underneath presented sheets, which is where the 12 or 24 words and private keys are shown.
-@MainActor
-private enum PrivacyCoverWindow {
-    /// One per scene: on iPad each window of the app is its own scene, and a cover over only the
-    /// first left the others showing in the App Switcher.
-    private static var windows: [ObjectIdentifier: UIWindow] = [:]
-    private static var observers: [NSObjectProtocol] = []
-
-    /// Each scene by its own state. The app-level `scenePhase` stays `.active` while any window
-    /// is, so on iPad a window that left the front kept showing its contents.
-    static func startObserving() {
-        guard observers.isEmpty else { return }
-        observe(UIScene.willDeactivateNotification) { show(over: $0) }
-        observe(UIScene.didEnterBackgroundNotification) { show(over: $0) }
-        observe(UIScene.didActivateNotification) { hide(over: $0) }
-        observe(UIScene.didDisconnectNotification) { hide(over: $0) }
-    }
-
-    private static func observe(_ name: Notification.Name, _ action: @escaping @MainActor (UIWindowScene) -> Void) {
-        observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { notification in
-            guard let scene = notification.object as? UIWindowScene else { return }
-            MainActor.assumeIsolated { action(scene) }
-        })
-    }
-
-    private static func show(over scene: UIWindowScene) {
-        guard windows[ObjectIdentifier(scene)] == nil else { return }
-        let cover = UIWindow(windowScene: scene)
-        cover.windowLevel = .alert + 1
-        // the app's appearance (Settings' choice), which its own windows carry
-        cover.overrideUserInterfaceStyle = scene.windows.first?.overrideUserInterfaceStyle ?? .unspecified
-        cover.rootViewController = UIHostingController(rootView: PrivacyCoverView())
-        cover.isHidden = false
-        windows[ObjectIdentifier(scene)] = cover
-    }
-
-    private static func hide(over scene: UIWindowScene) {
-        windows.removeValue(forKey: ObjectIdentifier(scene))?.isHidden = true
-    }
-}
-
-/// What the App Switcher and a system prompt see instead of the app's contents: the app's own
-/// logo (the icon's art), shaped like its home-screen icon.
-private struct PrivacyCoverView: View {
-    var body: some View {
-        ZStack {
-            // Solid: large words can still be read through a light blur.
-            Color(.systemBackground)
-            Image("KaPostsLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
-        }
-        .ignoresSafeArea()
-    }
 }
 
 /// KaChat's burst rule for parts of a long voice note or a multi-part photo, for room pushes (KaChat CLAUDE.md, "Parts

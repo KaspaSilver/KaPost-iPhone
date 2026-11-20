@@ -216,7 +216,7 @@ final class BIP39 {
 
     /// True if `word` is an exact BIP39 English word.
     func isValidWord(_ word: String) -> Bool {
-        return wordList.contains(word.lowercased())
+        return wordIndex[word.lowercased()] != nil
     }
 
 }

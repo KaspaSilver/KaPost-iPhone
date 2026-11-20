@@ -62,21 +62,6 @@ extension KachatNames {
         /// registry with no predecessor, whose root and deadline are 0).
         var migration: Migration? = nil
 
-        /// `register` is refused while `now < migration.deadlineMs` (registry v5): the sponsor
-        /// imports every snapshot name first.
-        func registerOpen(atMs now: Int64) -> Bool { now >= (migration?.deadlineMs ?? 0) }
-
-        // MARK: Prices (registry v4: KachatGap.priceFor, KachatName.renewPrice)
-
-        func registerPrice(forLength n: Int) -> UInt64 { registerPrices[Codec.tier(n)] }
-        func renewPrice(forLength n: Int) -> UInt64 { renewPrices[Codec.tier(n)] }
-
-        /// What `register` charges for `years` periods: the first at the registration price,
-        /// every further one at the renewal price.
-        func registerCost(forLength n: Int, years: Int64) -> UInt64 {
-            registerPrice(forLength: n) + renewPrice(forLength: n) * UInt64(max(years - 1, 0))
-        }
-
         // MARK: The paid period (KACHAT_NAMES.md 4.1; ops.rs)
 
         /// The most periods `extend` can add now: a name (from `periodStart`) holds at most
@@ -93,11 +78,6 @@ extension KachatNames {
         /// When `renew` becomes valid: `expiresAt - renewWindowMs` (unix ms). The transaction is
         /// final once the network's past median time passes its lock time, which is at least this.
         func renewOpens(expiresAt: Int64) -> Int64 { KachatNames.clampedSum(expiresAt, -renewWindowMs) }
-
-        /// How close to expiry a name counts as "expires soon" (a buyer would have to renew it):
-        /// 30 days on a yearly clock, the renewal window on a short one (testnet's 2 hours),
-        /// where 30 days would cover every name.
-        var expiresSoonMs: Int64 { max(renewWindowMs, min(30 * 86_400_000, periodMs / 12)) }
     }
 
     /// Registry v5's `params.migration` (kachat-domains docs/REGISTRY_V5.md section 4): the old

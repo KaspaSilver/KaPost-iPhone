@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8">
+<!-- No network: only the app's own kusdt-core:// files load. The inline script is allowed by its hash
+     (recompute it if the script changes); eval is for wasm-bindgen's glue (new Function) and the WebAssembly. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' kusdt-core: 'sha256-PHQhvb6Hjwf81CDlIdRfWPAYj0Zc+0rnXgaRpAHRLG4=' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self' kusdt-core:; base-uri 'none'; form-action 'none'">
+<title>kUSDT core</title></head>
+<body>
+<script type="module">
+// Trestly's kUSDT builders (kaspador/kusdt-open bridge/packages/core/pkg-web), run offline inside
+// KaPay: loaded only from the app (kusdt-core://), never from the network. KaPay calls
+// window.kusdtCore.run(command, requestJSON) and gets the answer's JSON back.
+import init, { run, version } from './kusdt_wasm.js';
+window.kusdtCore = { ready: false };
+init().then(() => {
+  window.kusdtCore = { ready: true, run: (command, request) => run(command, request), version: () => version() };
+  window.webkit.messageHandlers.kusdtCore.postMessage({ ready: true, version: version() });
+}).catch((e) => {
+  window.webkit.messageHandlers.kusdtCore.postMessage({ error: String(e) });
+});
+</script>
+</body>
+</html>

@@ -100,8 +100,8 @@ extension ChatService {
     /// does a full `JSONEncoder` encode of every conversation's complete `lastMessage` (including a
     /// photo message's entire base64 payload) plus a `UserDefaults` write. Processing a burst of N
     /// new messages after resuming from background used to mean N of those encode+write cycles
-    /// back-to-back on the main thread - a real freeze right in the app-resume scenario. Mirrors
-    /// `scheduleBadgeUpdate()`'s debounce right next to it, which this was missing.
+    /// back-to-back on the main thread - a real freeze right in the app-resume scenario. Debounced
+    /// like the old badge update was, which this was missing.
     func scheduleChatListSnapshotPersist() {
         chatListSnapshotPersistTask?.cancel()
         chatListSnapshotPersistTask = Task { @MainActor in
@@ -221,18 +221,12 @@ extension ChatService {
         let allContactAddresses = Set(grouped.keys).union(meta.keys)
             .filter { !contactsManager.isAddressDeleted($0) }
         var contactsByAddress: [String: Contact] = [:]
-        var pendingReadBlockTimeByAddress: [String: Int64] = [:]
         for contactAddress in allContactAddresses {
             contactsByAddress[contactAddress] = contactsManager.getOrCreateContact(address: contactAddress)
-            // Also consider a just-recorded read still sitting in ReadStatusSyncManager's
-            // in-memory pending marker (cheap dictionary lookup, no Core Data query) - its actual
-            // CDReadMarker write is debounced up to 15s, so without this a read from moments ago
-            // can still look unread here and wrongly resurrect messages as "new".
-            pendingReadBlockTimeByAddress[contactAddress] = ReadStatusSyncManager.shared.pendingReadCursor(for: contactAddress)?.blockTime ?? 0
-            // Seed the in-memory read cursor from the persisted marker (+ any just-recorded pending
-            // read) so the initial re-sync's `addMessageToConversation` won't re-mark already-read
-            // history as unread. Never lower an existing seed.
-            let seededCursor = max(meta[contactAddress]?.lastReadBlockTime ?? 0, pendingReadBlockTimeByAddress[contactAddress] ?? 0)
+            // Seed the in-memory read cursor from the persisted marker so the initial re-sync's
+            // `addMessageToConversation` won't re-mark already-read history as unread. Never
+            // lower an existing seed.
+            let seededCursor = meta[contactAddress]?.lastReadBlockTime ?? 0
             readCursorByAddress[contactAddress] = max(readCursorByAddress[contactAddress] ?? 0, seededCursor)
         }
         let existingConversations = conversations
@@ -248,7 +242,6 @@ extension ChatService {
                 grouped: grouped,
                 meta: meta,
                 contactsByAddress: contactsByAddress,
-                pendingReadBlockTimeByAddress: pendingReadBlockTimeByAddress,
                 allContactAddresses: allContactAddresses,
                 existingConversations: existingConversations,
                 activeConversationAddress: currentActiveConversationAddress
@@ -304,7 +297,6 @@ extension ChatService {
         grouped: [String: [String: ChatMessage]],
         meta: [String: ConversationMeta],
         contactsByAddress: [String: Contact],
-        pendingReadBlockTimeByAddress: [String: Int64],
         allContactAddresses: Set<String>,
         existingConversations: [Conversation],
         activeConversationAddress: String?
@@ -320,8 +312,7 @@ extension ChatService {
 
             // Compute unread count from the persisted read cursor when there is one
             let convMeta = meta[contactAddress]
-            let pendingReadBlockTime = pendingReadBlockTimeByAddress[contactAddress] ?? 0
-            let lastReadBlockTime = max(convMeta?.lastReadBlockTime ?? 0, pendingReadBlockTime)
+            let lastReadBlockTime = convMeta?.lastReadBlockTime ?? 0
             let unreadCount: Int
             if lastReadBlockTime > 0 {
                 // Compute unread as messages with blockTime > lastReadBlockTime (incoming only)
@@ -364,8 +355,7 @@ extension ChatService {
                 // - If the store has a read cursor (lastReadBlockTime > 0), use computed count from loaded
                 // - Otherwise prefer in-memory value to prevent race conditions
                 let convMeta = meta[address]
-                let pendingReadBlockTime = pendingReadBlockTimeByAddress[address] ?? 0
-                let storedLastReadBlockTime = max(convMeta?.lastReadBlockTime ?? 0, pendingReadBlockTime)
+                let storedLastReadBlockTime = convMeta?.lastReadBlockTime ?? 0
                 let unreadCount: Int
                 if storedLastReadBlockTime > 0 {
                     // Stored read cursor - recompute unread from combined messages
@@ -505,8 +495,6 @@ extension ChatService {
     func resetOlderHistoryPaginationState<S: Sequence>(for contactAddresses: S) where S.Element == String {
         for address in contactAddresses {
             olderHistoryExhaustedContacts.remove(address)
-            olderHistoryPageTasks[address]?.cancel()
-            olderHistoryPageTasks[address] = nil
         }
     }
 
@@ -928,12 +916,6 @@ extension ChatService {
         return stored
     }
 
-    func clearSyncObjectCursors() {
-        syncObjectCursors = [:]
-        syncObjectCursorsDirty = false
-        userDefaults.removeObject(forKey: syncCursorsKey)
-    }
-
     func loadSyncObjectCursors() {
         guard let data = userDefaults.data(forKey: syncCursorsKey),
               let decoded = try? JSONDecoder().decode([String: SyncObjectCursor].self, from: data) else {
@@ -1135,28 +1117,8 @@ extension ChatService {
         userDefaults.set(Int(blockTime), forKey: lastPollTimeKey)
     }
 
-    func scheduleBadgeUpdate() {
-        badgeUpdateTask?.cancel()
-        badgeUpdateTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            updateAppBadge()
-        }
-    }
-
-    func updateAppBadge() {
-        // Message Requests and blocked chats don't count: an unaccepted sender must not be able
-        // to keep ringing the badge (NO_HANDSHAKE_MESSAGING.md).
-        let totalUnread = conversations.reduce(0) { total, conversation in
-            guard isConversationVisibleInChatList(conversation) else { return total }
-            return total + max(0, conversation.unreadCount)
-        }
-        SharedDataManager.setUnreadCount(totalUnread)
-        if #available(iOS 16.0, *) {
-            UNUserNotificationCenter.current().setBadgeCount(totalUnread)
-        } else {
-            UIApplication.shared.applicationIconBadgeNumber = totalUnread
-        }
-    }
+    // The app icon's badge is `AppIconBadge`'s (KaPost's notifications plus room unread): 1:1
+    // conversations don't count, since their screens are off and could never clear it.
 
     func beginSyncBlockTime() {
         if !isSyncInProgress { isSyncInProgress = true }
@@ -1292,20 +1254,6 @@ extension ChatService {
         }
     }
 
-    func popPendingOutgoing(contactAddress: String, messageType: ChatMessage.MessageType) -> String? {
-        guard var queue = pendingOutgoingQueue[contactAddress] else { return nil }
-        if let index = queue.firstIndex(where: { $0.messageType == messageType }) {
-            let ref = queue.remove(at: index)
-            if queue.isEmpty {
-                pendingOutgoingQueue.removeValue(forKey: contactAddress)
-            } else {
-                pendingOutgoingQueue[contactAddress] = queue
-            }
-            return ref.txId
-        }
-        return nil
-    }
-
     func updatePendingFromQueue(contactAddress: String, newTxId: String, messageType: ChatMessage.MessageType) -> Bool {
         guard let queue = pendingOutgoingQueue[contactAddress], !queue.isEmpty else {
             return false
@@ -1392,12 +1340,6 @@ extension ChatService {
         draftSaveTask?.cancel()
         draftSaveTask = nil
         saveMessageDrafts()
-    }
-
-    func clearDraft(for contactAddress: String) {
-        if messageDrafts.removeValue(forKey: contactAddress) != nil {
-            saveMessageDrafts()
-        }
     }
 
     // MARK: - Alias Storage
@@ -1703,11 +1645,6 @@ extension ChatService {
         }
     }
 
-    /// Check if a routing state exists for a contact
-    func hasRoutingState(for address: String) -> Bool {
-        routingStates[address] != nil
-    }
-
     func decodeAliasSetMap(from data: Data) -> [String: Set<String>]? {
         if let decoded = try? JSONDecoder().decode([String: [String]].self, from: data) {
             return decoded.mapValues { Set($0) }
@@ -1775,11 +1712,6 @@ extension ChatService {
         let list = Array(declinedContacts)
         guard let data = try? JSONEncoder().encode(list) else { return }
         userDefaults.set(data, forKey: declinedContactsKey)
-    }
-
-    func declineContact(_ address: String) {
-        declinedContacts.insert(address)
-        saveDeclinedContacts()
     }
 
     func clearDeclined(_ address: String) {

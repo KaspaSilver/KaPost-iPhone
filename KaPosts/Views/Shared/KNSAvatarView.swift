@@ -26,16 +26,17 @@ struct KNSAvatarView: View {
     @State private var loadedImage: UIImage?
     @State private var isLoading = false
     @State private var lastLoadedIdentity: String?
-    /// On testnet an address's avatar is its `.kachat` one (looked up from its profile's social
-    /// link on this device); the KNS URL the caller passes is not used for an address there.
-    @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
+    /// An address's avatar is its `.kachat` one (looked up from its profile's social link on this
+    /// device); the KNS URL the caller passes is not used for an address. Observes only identity
+    /// changes, so a registry refresh doesn't redraw every avatar on screen.
+    @ObservedObject private var identityChanges = KachatIdentityChanges.shared
     @ObservedObject private var socialImages = KachatSocialImageResolver.shared
 
     /// The URL this avatar shows: the caller's, except for an address on testnet, where it is
     /// the `.kachat` profile's avatar (or none).
     private var effectiveAvatarURLString: String? {
         guard KachatNamesService.isEnabled, let contactAddress else { return avatarURLString }
-        let link = kachatRegistry.cachedIdentity(for: contactAddress)?.profile?.avatar
+        let link = KachatNamesRegistry.shared.cachedIdentity(for: contactAddress)?.profile?.avatar
         return socialImages.profile(for: link)?.avatar
     }
     /// Decoded cache so a base64 backup photo is turned into a UIImage once, not on every

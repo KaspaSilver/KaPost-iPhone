@@ -260,8 +260,6 @@ struct KachatLiveDomainsTab: View {
     @ObservedObject private var registry = KachatNamesRegistry.shared
     @ObservedObject private var service = KachatNamesService.shared
     @State private var names: [KachatNames.NameInfo] = []
-    /// the offers this wallet made, kept only in the saved copy (`KachatOwnedNamesCache`)
-    @State private var myOffers: [KachatNames.OfferInfo] = []
     @State private var loaded = false
 
     var body: some View {
@@ -366,7 +364,6 @@ struct KachatLiveDomainsTab: View {
         guard !loaded, let cached = KachatOwnedNamesCache.load(walletAddress) else { return }
         let grace = registry.graceMs
         names = cached.names.filter { $0.status(graceMs: grace) != .lapsed }
-        myOffers = cached.offers
         loaded = true
     }
 
@@ -376,18 +373,16 @@ struct KachatLiveDomainsTab: View {
         // A lapsed name is no longer yours and leaves the list. Expired names in grace stay (they
         // are renewed in KaPay). Your own list (the chatting address's) holds the names on every
         // address of this wallet, on any device restored from the seed. Display only: offers are
-        // read for the saved copy but never acted on here - KaPay returns or withdraws them.
-        // Only an answer replaces what is shown (and the saved copy); a failed read keeps it.
+        // KaPay's, so none are read. Only an answer replaces what is shown (and the saved copy); a
+        // failed read keeps it.
         if walletAddress.lowercased() == KachatNamesActions.shared.myAddress {
-            if let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: true) {
-                names = own.names
-                myOffers = own.offers
-                KachatOwnedNamesCache.save(names: names, offers: myOffers, for: walletAddress)
+            if let own = try? await KachatNamesActions.shared.ownHeldNames() {
+                names = own
+                KachatOwnedNamesCache.save(names: names, for: walletAddress)
             }
         } else if let held = try? await registry.heldNames(owner: key) {
             names = held
-            myOffers = (try? await registry.myOffers(buyer: key)) ?? myOffers
-            KachatOwnedNamesCache.save(names: names, offers: myOffers, for: walletAddress)
+            KachatOwnedNamesCache.save(names: names, for: walletAddress)
         }
         loaded = true
     }

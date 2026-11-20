@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Search across KaPosts: posts by their text, and the people who wrote them.
 ///
@@ -37,6 +38,13 @@ struct KaPostsSearchView: View {
     @State private var scope: Scope = .posts
     /// Everything paged so far this session, newest first, deduped by id.
     @State private var scanned: [KaPostsView.DraftPost] = []
+    /// Each scanned post's text, lowercased once when it is read rather than on every search.
+    @State private var lowercasedText: [UUID: String] = [:]
+    /// The results for the current query, scope and scan, worked out once when one of them
+    /// changes (`recomputeResults`) instead of on every body pass.
+    @State private var matchingPosts: [KaPostsView.DraftPost] = []
+    @State private var matchingPeople: [Person] = []
+    @State private var recomputeScheduled = false
     @State private var cursor: String?
     @State private var hasMore = true
     @State private var isLoading = false
@@ -48,52 +56,96 @@ struct KaPostsSearchView: View {
 
     // MARK: - Results
 
-    private var matchingPosts: [KaPostsView.DraftPost] {
-        guard !trimmedQuery.isEmpty else { return [] }
-        return scanned.filter { post in
-            guard !moderationStore.isHidden(post.posterAddress) else { return false }
-            if post.text.lowercased().contains(trimmedQuery) { return true }
-            // A post also matches on WHO wrote it, so searching a name finds their posts without
-            // having to switch tabs to find them first.
-            return nameMatches(post.posterAddress)
+    struct Person {
+        let address: String
+        let postCount: Int
+    }
+
+    /// Fills the active scope's results for the current query. One pass: each author's name
+    /// is looked up once, not once per post and again inside the sort.
+    private func recomputeResults() {
+        let q = trimmedQuery
+        guard !q.isEmpty else {
+            if !matchingPosts.isEmpty { matchingPosts = [] }
+            if !matchingPeople.isEmpty { matchingPeople = [] }
+            return
+        }
+        var names: [String: String] = [:]
+        func name(_ address: String) -> String {
+            if let cached = names[address] { return cached }
+            let value = displayName(for: address)
+            names[address] = value
+            return value
+        }
+        var nameHits: [String: Bool] = [:]
+        func nameHit(_ address: String) -> Bool {
+            if let cached = nameHits[address] { return cached }
+            let value = nameMatches(address, query: q, shown: name(address))
+            nameHits[address] = value
+            return value
+        }
+        switch scope {
+        case .posts:
+            matchingPosts = scanned.filter { post in
+                guard !moderationStore.isHidden(post.posterAddress) else { return false }
+                let text = lowercasedText[post.id] ?? post.text.lowercased()
+                if text.contains(q) { return true }
+                // A post also matches on WHO wrote it, so searching a name finds their posts
+                // without having to switch tabs to find them first.
+                return nameHit(post.posterAddress)
+            }
+        case .people:
+            // One row per author, with how many of their scanned posts there are - so the list
+            // is ordered by who is actually active rather than by whoever posted most recently.
+            var counts: [String: Int] = [:]
+            for post in scanned where !post.posterAddress.isEmpty {
+                guard !moderationStore.isHidden(post.posterAddress) else { continue }
+                counts[post.posterAddress, default: 0] += 1
+            }
+            matchingPeople = counts
+                .filter { address, _ in nameHit(address) || address.lowercased().contains(q) }
+                .map { Person(address: $0.key, postCount: $0.value) }
+                .sorted { lhs, rhs in
+                    lhs.postCount == rhs.postCount
+                        ? name(lhs.address) < name(rhs.address)
+                        : lhs.postCount > rhs.postCount
+                }
         }
     }
 
     /// Whether the query finds this author by name. A `.kachat` name matches in either form,
     /// whatever Show .kachat Endings shows: its label ("alice") or written out ("alice.kachat").
     /// The ending on its own doesn't count, or "kachat" would find every named author.
-    private func nameMatches(_ address: String) -> Bool {
-        let shown = displayName(for: address)
+    private func nameMatches(_ address: String, query: String, shown: String) -> Bool {
         guard let rawLabel = kachatRegistry.cachedIdentity(for: address)?.label, !rawLabel.isEmpty else {
-            return shown.lowercased().contains(trimmedQuery)
+            return shown.lowercased().contains(query)
         }
         let label = rawLabel.lowercased()
-        if label.contains(trimmedQuery) { return true }
-        if trimmedQuery.contains("."), "\(label).kachat".contains(trimmedQuery) { return true }
+        if label.contains(query) { return true }
+        if query.contains("."), "\(label).kachat".contains(query) { return true }
         // A name given to the contact on this device is shown in its place, and searched too.
         guard shown != KachatNameLabel.display(rawLabel) else { return false }
-        return shown.lowercased().contains(trimmedQuery)
+        return shown.lowercased().contains(query)
     }
 
-    /// One row per author, with how many of their scanned posts matched - so the list is ordered
-    /// by who is actually active on this term rather than by whoever posted most recently.
-    private var matchingPeople: [(address: String, postCount: Int)] {
-        guard !trimmedQuery.isEmpty else { return [] }
-        var counts: [String: Int] = [:]
-        for post in scanned where !post.posterAddress.isEmpty {
-            guard !moderationStore.isHidden(post.posterAddress) else { continue }
-            counts[post.posterAddress, default: 0] += 1
+    /// Names, pictures and the hidden list landing change what matches. Built once, so every
+    /// body pass hands `onReceive` the same publisher.
+    private static let identityChanges: AnyPublisher<Void, Never> = Publishers.Merge3(
+        KachatNamesRegistry.shared.objectWillChange.map { _ in () },
+        KNSService.shared.objectWillChange.map { _ in () },
+        KaPostsModerationStore.shared.objectWillChange.map { _ in () }
+    )
+    .eraseToAnyPublisher()
+
+    /// A burst of names landing is one pass, a moment after the last change has been stored
+    /// (`objectWillChange` fires before it is).
+    private func scheduleRecompute() {
+        guard !recomputeScheduled else { return }
+        recomputeScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            recomputeScheduled = false
+            recomputeResults()
         }
-        return counts
-            .filter { address, _ in
-                nameMatches(address) || address.lowercased().contains(trimmedQuery)
-            }
-            .map { (address: $0.key, postCount: $0.value) }
-            .sorted { lhs, rhs in
-                lhs.postCount == rhs.postCount
-                    ? displayName(for: lhs.address) < displayName(for: rhs.address)
-                    : lhs.postCount > rhs.postCount
-            }
     }
 
     /// An author's K pubkey, from any of their scanned posts.
@@ -131,6 +183,10 @@ struct KaPostsSearchView: View {
                 // One page up front so the first search has something to answer with.
                 if scanned.isEmpty { await loadMore() }
             }
+            .onChange(of: trimmedQuery) { _ in recomputeResults() }
+            .onChange(of: scope) { _ in recomputeResults() }
+            .onChange(of: scanned.count) { _ in recomputeResults() }
+            .onReceive(Self.identityChanges) { _ in scheduleRecompute() }
         }
     }
 
@@ -309,6 +365,7 @@ struct KaPostsSearchView: View {
                     }
                 }
             )
+            for item in batch.items { lowercasedText[item.id] = item.text.lowercased() }
             scanned.append(contentsOf: batch.items)
             cursor = batch.cursor
             hasMore = batch.hasMore

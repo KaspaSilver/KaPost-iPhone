@@ -2,8 +2,8 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// The `.kachat` registry for the screens: lookups, an owner's names, listings, lapsed names,
-/// offers, history and identities, from one of two sources -
+/// The `.kachat` registry for the screens: lookups, an owner's names, lapsed names and
+/// identities, from one of two sources -
 ///
 /// - **the names indexer** (KACHAT_NAMES_INDEXER.md Part D) at `AppSettings.indexerURL`, used when
 ///   that field is set and `GET /names/status` answers 200 for this manifest's registry id;
@@ -16,6 +16,17 @@ import UserNotifications
 ///
 /// Records from either source are only read here; every action re-reads its UTXOs from a node
 /// (`KachatNamesService.liveRegistryUtxo`) before it builds anything. Testnet-10 only.
+/// The narrow change signal for views that only draw identities (avatars, the address card):
+/// bumped only when a cached identity, this wallet's own profile or a confirmed label really
+/// changes - never on a refresh's busy flags or timestamps, which redrew every avatar on screen.
+@MainActor
+final class KachatIdentityChanges: ObservableObject {
+    static let shared = KachatIdentityChanges()
+    private init() {}
+    @Published private(set) var revision = 0
+    func bump() { revision &+= 1 }
+}
+
 @MainActor
 final class KachatNamesRegistry: ObservableObject {
     static let shared = KachatNamesRegistry()
@@ -146,9 +157,12 @@ final class KachatNamesRegistry: ObservableObject {
         chainProfileCheckedAt = [:]
         ownProfiles = [:]
         ownProfileMisses = []
+        // confirmed on the other network's registry, or before a switch: checked again
+        verifiedLabels = [:]
         lastError = nil
         refreshedAt = nil
         revision += 1
+        KachatIdentityChanges.shared.bump()
     }
 
     var graceMs: Int64 { service.manifest?.params.graceMs ?? 864_000_000 }
@@ -228,7 +242,7 @@ final class KachatNamesRegistry: ObservableObject {
                 revision += 1
                 revisionBumpedAt = Date()
             }
-            // what changed for this wallet's names and offers, into the Profile bell
+            // reminders for names on this wallet's other addresses (once per launch or foreground)
             Task { await KachatNamesNotifier.shared.check() }
         } catch {
             let message = error.localizedDescription
@@ -611,40 +625,6 @@ final class KachatNamesRegistry: ObservableObject {
             .sorted { ($0.registeredAt ?? .max, $0.name) < ($1.registeredAt ?? .max, $1.name) }
     }
 
-    /// Open offers on a name. Without an indexer only the offers this device made are known.
-    func offers(for name: String) async throws -> [KachatNames.OfferInfo] {
-        try await prepare()
-        if case .indexer(let base) = source,
-           let j = try await fromIndexer(KachatNames.IndexerAPI.OffersJSON.self, base, "/names/\(name)/offers") {
-            return j.offers.compactMap { $0.info(name: name, keyOf: Self.keyOf) }.sorted { $0.amount > $1.amount }
-        }
-        let key = KachatNames.hex(KachatNames.Codec.key(name))
-        return try readChainState().offers.filter { $0.key == key }.map(KachatNames.RegistryState.info).sorted { $0.amount > $1.amount }
-    }
-
-    /// The offers `buyer` made that are still open.
-    func myOffers(buyer: Data) async throws -> [KachatNames.OfferInfo] {
-        try await prepare()
-        if case .indexer(let base) = source {
-            guard let address = Self.address(of: buyer) else { return [] }
-            if let j = try await fromIndexer(KachatNames.IndexerAPI.OffersJSON.self, base, "/offers/by-buyer/\(address)") {
-                return j.offers.compactMap { $0.info(name: nil, keyOf: Self.keyOf) }
-            }
-        }
-        let me = KachatNames.hex(buyer)
-        return try readChainState().offers.filter { $0.buyer == me }.map(KachatNames.RegistryState.info)
-    }
-
-    /// A name's history, newest first. The walker knows every registry transition it walked.
-    func history(name: String) async throws -> [KachatNames.Event] {
-        try await prepare()
-        if case .indexer(let base) = source,
-           let j = try await fromIndexer(KachatNames.IndexerAPI.EventsJSON.self, base, "/names/\(name)/history") {
-            return j.events.map(\.event)
-        }
-        return try readChainState().events.filter { $0.name == name }.reversed()
-    }
-
     // MARK: - Identity and profiles
 
     /// The label and profile of an address (KACHAT_NAMES.md section 7). Without an indexer the
@@ -657,7 +637,10 @@ final class KachatNamesRegistry: ObservableObject {
         try await prepare()
         if case .indexer(let base) = source,
            let j = try await fromIndexer(KachatNames.IndexerAPI.IdentityJSON.self, base, "/identity/\(address)") {
-            return j.identity
+            // filed under the address asked about, whatever address the answer names
+            var found = j.identity
+            found.address = address
+            return found
         }
         guard let key = Self.keyOf(address) else { return KachatNames.Identity(address: address, label: nil, names: [], profile: nil) }
         // held names: a name in grace still labels and resolves to its owner
@@ -864,6 +847,7 @@ final class KachatNamesRegistry: ObservableObject {
             objectWillChange.send()
             identities[key] = CachedIdentity(identity: found, revision: revision, at: Date())
             persistIdentities()
+            KachatIdentityChanges.shared.bump()
             return true
         }
         identities[key]?.revision = revision
@@ -886,7 +870,10 @@ final class KachatNamesRegistry: ObservableObject {
             do {
                 let answer: BatchJSON = try await Self.post(base, "/identity/batch", BatchBody(addresses: chunk))
                 for (address, identity) in answer.identities {
-                    out[address.lowercased()] = identity.identity
+                    let key = address.lowercased()
+                    var found = identity.identity
+                    found.address = key
+                    out[key] = found
                 }
             } catch {
                 if Self.indexerIsDown(error), indexerOutageConfirmed() { failOverToChain(after: error) }
@@ -1019,9 +1006,77 @@ final class KachatNamesRegistry: ObservableObject {
         identities = [:]
         identityMisses = [:]
         identityLookups = []
+        verifiedLabels = [:]
         KachatProfileCache.remove(Self.identitiesFile)
         revision += 1
+        KachatIdentityChanges.shared.bump()
         ContactsManager.shared.objectWillChange.send()
+    }
+
+    // MARK: Names confirmed on the chain (payment screens)
+
+    /// An address's label as payment screens may show it (`AddressResolutionCard`): checked the
+    /// way a typed name is (`NameServicesClient.resolveKachat`) - looked up, owned by this very
+    /// address, and its record live on the chain (`confirmOnChain`). `label` nil: no name.
+    private struct VerifiedLabel {
+        var label: String?
+        var at: Date
+    }
+    private var verifiedLabels: [String: VerifiedLabel] = [:]
+    private var labelChecks: [String: Task<String??, Never>] = [:]
+    private static let verifiedLabelMaxAge: TimeInterval = 600
+
+    /// The address's .kachat label once `verifyLabel` confirmed it on the chain (in the last ten
+    /// minutes), else nil. Callable from a view body; never starts a lookup.
+    func verifiedLabel(for address: String) -> String? {
+        guard let entry = verifiedLabels[address.lowercased()],
+              Date().timeIntervalSince(entry.at) < Self.verifiedLabelMaxAge else { return nil }
+        return entry.label
+    }
+
+    /// Confirms the address's label on the chain and keeps the answer for ten minutes; nil when it
+    /// has no name, or none that could be confirmed. A check that couldn't finish isn't kept.
+    @discardableResult
+    func verifyLabel(for address: String) async -> String? {
+        guard KachatNamesService.isLaunched, KachatNamesService.profilesEnabled else { return nil }
+        let key = address.lowercased()
+        guard NetworkType(address: key) != nil, NetworkType.isOnActiveNetwork(key) else { return nil }
+        if let entry = verifiedLabels[key], Date().timeIntervalSince(entry.at) < Self.verifiedLabelMaxAge { return entry.label }
+        let check: Task<String??, Never>
+        if let running = labelChecks[key] {
+            check = running
+        } else {
+            check = Task { @MainActor [weak self] () -> String?? in
+                guard let self else { return nil }
+                return await self.confirmedLabel(address: key)
+            }
+            labelChecks[key] = check
+        }
+        let answer = await check.value
+        labelChecks[key] = nil
+        guard let answer else { return nil }
+        if verifiedLabels[key]?.label != answer { KachatIdentityChanges.shared.bump() }
+        verifiedLabels[key] = VerifiedLabel(label: answer, at: Date())
+        return answer
+    }
+
+    /// nil: couldn't be checked. `.some(nil)`: no name confirmed for the address.
+    private func confirmedLabel(address key: String) async -> String?? {
+        guard let owner = Self.keyOf(key) else { return .some(nil) }
+        let fetched = try? await identity(address: key)
+        guard let candidate = (fetched ?? identities[key]?.identity)?.label else {
+            return fetched == nil ? nil : .some(nil)
+        }
+        do {
+            guard case .registered(let n) = try await lookup(candidate),
+                  n.name == candidate, n.owner == owner,
+                  n.status(graceMs: graceMs) != .lapsed else { return .some(nil) }
+            try await confirmOnChain(n)
+            return .some(candidate)
+        } catch {
+            AppLog.log("[KachatNames] a label couldn't be confirmed on the chain: %@", error.localizedDescription)
+            return nil
+        }
     }
 
     /// The profile record this device last wrote for `address`.
@@ -1048,6 +1103,7 @@ final class KachatNamesRegistry: ObservableObject {
             Self.writeFile(Self.profileFile(record.address), data, network: Self.profileNetwork(record.address))
         }
         revision += 1
+        KachatIdentityChanges.shared.bump()
     }
 
     /// Brings this device's copy of its own profile up to date with the chain, so a profile saved
@@ -1509,181 +1565,60 @@ final class KachatSocialImageResolver: ObservableObject {
     }
 }
 
-// MARK: - The Profile bell: what happened to your names and offers
+// MARK: - Reminders for names on this wallet's other addresses
 
-/// Turns registry changes into Profile-bell rows (`GlobalNotificationCenter`, source `.kachat`),
-/// so a missed push still leaves a trace: an offer on one of your names, a name sold or
-/// reclaimed, its renewal window opening, its expiry and lapse, and what became of your own
-/// offers (accepted, declined, expired and returned). It compares what the registry says now
-/// with what it saw on the last check (persisted per wallet), after every registry refresh.
-/// The first check of a wallet only records where things stand.
+/// Keeps `KachatNameReminders` in step with the names this wallet holds on addresses other than
+/// the chatting one (whose renewal and expiry pushes come from the indexer). Asked after every
+/// registry refresh, it reads the registry only once per launch and once each time the app
+/// comes back to the front (or when another wallet signs in): reminders follow expiry dates,
+/// which rarely move. Names only - no offers or history are read.
 @MainActor
 final class KachatNamesNotifier {
     static let shared = KachatNamesNotifier()
-    private init() {}
-
-    private struct Snapshot: Codable {
-        struct Name: Codable {
-            var expiresAt: Int64
-            var renewNoted = false
-            var graceNoted = false
-            var lapsedNoted = false
-        }
-        /// the names this wallet owned at the last check
-        var names: [String: Name] = [:]
-        /// open offers on those names, by id
-        var offersOnMine: Set<String> = []
-        /// this wallet's own open offers: id -> name
-        var myOffers: [String: String] = [:]
-    }
 
     private var checking = false
-    private func key(_ wallet: String) -> String { "kachatNamesNotifier.\(wallet)" }
+    /// The wallet the last finished check was for; nil means a check is due.
+    private var checkedWallet: String?
+    private var foregroundObserver: NSObjectProtocol?
+
+    private init() {
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in KachatNamesNotifier.shared.checkedWallet = nil }
+        }
+    }
 
     func check() async {
         guard KachatNamesService.isLaunched, !checking,
               let me = KachatNamesActions.shared.myKey, let wallet = KachatNamesActions.shared.myAddress,
+              checkedWallet != wallet,
               let p = KachatNamesService.shared.manifest?.params else { return }
         checking = true
         defer { checking = false }
-        let registry = KachatNamesRegistry.shared
-        let startedOnIndexer = registry.source?.isIndexer == true
-        // every address of this wallet, not only the chatting one: a name claimed with Buy From
-        // gets its notices too (IOS-085 / XP-024)
-        guard let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: false) else { return }
-        let owned = own.names
-        let myOpenOffers = own.offers
-        let ownKeys = KachatNamesActions.shared.allOwnKeys
-        var offersOnMine: [KachatNames.OfferInfo] = []
-        for n in owned where n.status(graceMs: p.graceMs) == .active {
-            // a failed read isn't "no offers": comparing it would announce them all gone, then new
-            guard let offers = try? await registry.offers(for: n.name) else { return }
-            offersOnMine += offers.filter { ownKeys.contains($0.seller) }
+        let actions = KachatNamesActions.shared
+        // only the other addresses: the chatting address's reminders are the indexer's pushes
+        let others = await actions.ownNameKeys().filter { $0 != me }
+        let held: [KachatNames.NameInfo]
+        if others.isEmpty {
+            held = []
+        } else {
+            // a failed read isn't "no names": the reminders stay as they are until the next check
+            guard let found = try? await actions.heldNames(of: others) else { return }
+            held = found
         }
-        // The indexer pushes name reminders only to the chatting address: for a name on another
-        // address of this wallet the phone schedules its own (XP-024).
         // a different wallet signed in meanwhile: this answer isn't its
-        guard KachatNamesActions.shared.myAddress == wallet else { return }
-        await KachatNameReminders.schedule(for: owned.filter { $0.owner != me }, params: p, wallet: wallet)
-        // A chain copy holds only the offers this device tracked, so an offer missing from it
-        // says nothing. Asked before and after, as a failover can land between the reads.
-        let offersAreComplete = startedOnIndexer && registry.source?.isIndexer == true
-
-        let old: Snapshot? = UserDefaults.standard.data(forKey: key(wallet)).flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) }
-        let quiet = old == nil // the first check only records where things stand
-        var new = Snapshot()
-        let now = KachatNames.nowMs()
-
-        func post(_ id: String, _ name: String, _ title: String, _ body: String) {
-            guard !quiet else { return }
-            _ = (id, name, title, body, now)
-        }
-        func S(_ key: String, _ args: CVarArg...) -> String {
-            KaspaUnit.label(String(format: AppLocalization.string(key), locale: AppLocalization.locale, arguments: args))
-        }
-
-        // Your names: renewal open, expired (grace), lapsed - once per paid period.
-        for n in owned {
-            let display = KachatNameLabel.display(n.name)
-            var s = old?.names[n.name].flatMap { $0.expiresAt == n.expiresAt ? $0 : nil } ?? Snapshot.Name(expiresAt: n.expiresAt)
-            switch n.status(graceMs: p.graceMs, nowMs: now) {
-            case .active:
-                if n.renewOpen(p, nowMs: now), !s.renewNoted {
-                    post("renew-\(n.name)-\(n.expiresAt)", n.name, S("Renew %@", display),
-                         S("Renewal is open: renew it before %@ to keep it.", KachatNamesActions.dayString(n.expiresAt)))
-                    s.renewNoted = true
-                }
-            case .grace:
-                s.renewNoted = true
-                if !s.graceNoted {
-                    post("grace-\(n.name)-\(n.expiresAt)", n.name, S("%@ has expired", display),
-                         S("Renew it before %@ or anyone can claim it.", KachatNamesActions.dayString(KachatNames.clampedSum(n.expiresAt, p.graceMs))))
-                    s.graceNoted = true
-                }
-            case .lapsed:
-                s.renewNoted = true
-                s.graceNoted = true
-                if !s.lapsedNoted {
-                    post("lapsed-\(n.name)-\(n.expiresAt)", n.name, S("%@ is no longer yours", display),
-                         AppLocalization.string("It expired and wasn't renewed, so it's now available to anyone in KaPay. Your bond comes back to you when someone claims it."))
-                    s.lapsedNoted = true
-                }
-            }
-            new.names[n.name] = s
-        }
-
-        // Names that left this wallet: sold, bought through an offer, or reclaimed by someone.
-        // A transfer or release is your own doing and needs no notice.
-        for name in old.map({ Array($0.names.keys) }) ?? [] where new.names[name] == nil {
-            guard let history = try? await registry.history(name: name) else {
-                // a failed read isn't "nothing happened": the name is looked at again next check
-                new.names[name] = old?.names[name]
-                continue
-            }
-            // signed out during the fetch: nothing here belongs to who is signed in now
-            guard KachatNamesActions.shared.myAddress == wallet else { return }
-            guard let last = history.first(where: { ["sale", "offer_accepted", "offer_accept", "transfer", "release", "reclaim"].contains($0.op) }) else { continue }
-            let display = KachatNameLabel.display(name)
-            switch last.op {
-            case "sale":
-                post("sold-\(last.txId)", name, S("%@ sold", display),
-                     last.price.map { S("%@ KAS was paid to you.", KaspaUnit.plain($0)) } ?? AppLocalization.string("Your listing was bought."))
-            case "offer_accepted", "offer_accept":
-                post("sold-\(last.txId)", name, S("%@ sold", display), AppLocalization.string("You accepted an offer for it."))
-            case "reclaim":
-                post("reclaimed-\(last.txId)", name, S("%@ was freed", display),
-                     AppLocalization.string("It expired and was cleared from the registry. Your bond is back with you."))
-            default:
-                break
-            }
-        }
-
-        // Offers on your names.
-        for o in offersOnMine {
-            new.offersOnMine.insert(o.id)
-            guard old?.offersOnMine.contains(o.id) != true, let name = o.name else { continue }
-            post("offer-\(o.id)", name, S("New offer on %@", KachatNameLabel.display(name)), S("%@ KAS offered for it.", KaspaUnit.plain(o.amount)))
-        }
-        // Kept while the indexer is away, or they'd all read as new when it returns.
-        if !offersAreComplete { new.offersOnMine.formUnion(old?.offersOnMine ?? []) }
-
-        // Your offers: accepted, or back with you.
-        for o in myOpenOffers { new.myOffers[o.id] = o.name ?? "" }
-        // Kept while the indexer is away: judged once it's back, so a false "KAS is back with you"
-        // can't go out, and can't use up the row id of the real notice.
-        if !offersAreComplete { new.myOffers.merge(old?.myOffers ?? [:]) { current, _ in current } }
-        let offersBefore = offersAreComplete ? (old?.myOffers ?? [:]) : [:]
-        for (id, name) in offersBefore where new.myOffers[id] == nil && !name.isEmpty {
-            let display = KachatNameLabel.display(name)
-            if owned.contains(where: { $0.name == name }) {
-                post("myoffer-\(id)", name, AppLocalization.string("Offer accepted"), S("%@ is yours now.", display))
-                continue
-            }
-            guard let history = try? await registry.history(name: name) else {
-                // a failed read isn't an answer: the offer is looked at again next check
-                new.myOffers[id] = name
-                continue
-            }
-            guard KachatNamesActions.shared.myAddress == wallet else { return }
-            switch history.first(where: { ["offer_decline", "offer_refund", "offer_withdraw"].contains($0.op) })?.op {
-            case "offer_decline":
-                post("myoffer-\(id)", name, S("Offer on %@ declined", display), AppLocalization.string("The owner declined it. The KAS is back with you."))
-            case "offer_refund":
-                post("myoffer-\(id)", name, S("Offer on %@ expired", display), AppLocalization.string("Nobody accepted it in time. The KAS is back with you."))
-            default:
-                post("myoffer-\(id)", name, S("Offer on %@ returned", display), AppLocalization.string("It can no longer be accepted. The KAS is back with you."))
-            }
-        }
-
-        if let data = try? JSONEncoder().encode(new) { UserDefaults.standard.set(data, forKey: key(wallet)) }
+        guard actions.myAddress == wallet else { return }
+        await KachatNameReminders.schedule(for: held, params: p, wallet: wallet)
+        checkedWallet = wallet
     }
 }
 
 /// Local reminders for .kachat names held by one of this wallet's spending addresses (Buy From):
 /// the indexer's renewal and expiry pushes reach only the chatting address, so the phone
 /// schedules its own - renewal opens, the name expired, and a day before grace ends - from each
-/// name's expiry (XP-024). Nothing leaves the phone. Rescheduled on every notifier check: a
-/// renewed name moves its reminders, a name that left the wallet loses them. They use the thread
+/// name's expiry (XP-024). Nothing leaves the phone. Rescheduled on each notifier check (once per
+/// launch and foreground): a renewed name moves its reminders, a name that left the wallet loses them. They use the thread
 /// "kachat-names", like the pushes.
 @MainActor
 enum KachatNameReminders {

@@ -27,11 +27,11 @@ struct KNSDomainsListView: View {
     @State private var kachatCount: Int?
 
     var body: some View {
-        // One square card per name ending, KaChat's own first: .kachat, KNS (.kas), dotk (.k),
-        // Kaspa Names (.kaspa) - one square tile each. Each card pushes that
-        // service's own screen (these used to be tabs on this screen).
+        // One card per name ending, KaChat's own first: .kachat, KNS (.kas), dotk (.k),
+        // Kaspa Names (.kaspa), drawn like Connection Settings' cards (KaPay's, 2026-11-20). Each
+        // card pushes that service's own screen.
         ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+            VStack(spacing: 12) {
                 ForEach(NameServiceTLD.allCases) { tld in
                     NavigationLink {
                         domainsScreen(tld)
@@ -41,8 +41,7 @@ struct KNSDomainsListView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding()
         }
         .task(id: walletAddress) {
             await nameServices.refresh(for: walletAddress)
@@ -82,8 +81,8 @@ struct KNSDomainsListView: View {
         }
         if kachatRegistry.refreshedAt == nil { await kachatRegistry.refresh() }
         if walletAddress.lowercased() == KachatNamesActions.shared.myAddress,
-           let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: true) {
-            kachatCount = own.names.count
+           let own = try? await KachatNamesActions.shared.ownHeldNames() {
+            kachatCount = own.count
         } else if let key = KachatNamesRegistry.keyOf(walletAddress) {
             kachatCount = (try? await kachatRegistry.heldNames(owner: key))?.count
         } else {
@@ -113,66 +112,51 @@ struct KNSDomainsListView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// A square tile: the name ending big in the brand style, who runs it under it.
+    /// A card like Connection Settings' (`ConnectionSettingsView.connectionCard`): the icon in its
+    /// circle, the name ending with who runs it under it, how many you have there (0 included, a
+    /// dash until the answer is in), and the chevron.
     private func serviceCard(_ tld: NameServiceTLD) -> some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .overlay {
-                VStack(spacing: 8) {
-                    Text(verbatim: tld.suffix)
-                        .font(.system(.title2, design: .rounded).weight(.heavy))
-                        .foregroundStyle(Color.accentColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    Text(verbatim: tld.serviceName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    // How many you have there, 0 included; a dash until the answer is in.
-                    Text(verbatim: ownedCount(tld).map(String.init) ?? "\u{2013}")
-                        .font(.caption.weight(.bold))
-                        .foregroundColor(.accentColor)
-                        .padding(.horizontal, 10)
-                        .frame(minWidth: 28, minHeight: 22)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                        .padding(.top, 2)
-                }
-                .padding(.horizontal, 8)
+        HStack(spacing: 14) {
+            Image(systemName: "at")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.accentColor)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color.accentColor.opacity(0.15)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: tld.suffix)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Text(verbatim: tld.serviceName)
+                    .font(.caption.monospaced())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
             }
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Spacer(minLength: 8)
+            Text(verbatim: ownedCount(tld).map(String.init) ?? "\u{2013}")
+                .font(.caption.weight(.bold))
+                .foregroundColor(.accentColor)
+                .padding(.horizontal, 10)
+                .frame(minWidth: 28, minHeight: 22)
+                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 18))
     }
 
-    /// "Get a .kas domain at knsdomains.org" - the pinned button under each outside service's
-    /// tab, opening that service's own site: KaPost registers no names, the other services'
-    /// names are registered with them. A glass capsule with a teal outline (not the accent fill:
-    /// the cards above are accent-filled).
-    @ViewBuilder
-    private func getNameButton(_ tld: NameServiceTLD) -> some View {
-        if let url = tld.websiteURL, let site = tld.websiteName {
-            Link(destination: url) {
-                Text("Get a \(tld.suffix) domain at \(site)")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .foregroundColor(.accentColor)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Capsule().fill(.regularMaterial))
-                    .overlay(Capsule().stroke(Color.accentColor, lineWidth: 1.5))
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 16)
-        }
-    }
+    // No "Get a .kas domain at …" button: like KaPay, KaPost doesn't send you to the outside name
+    // services.
 
     // MARK: .kas (KNS)
 
@@ -208,9 +192,6 @@ struct KNSDomainsListView: View {
         }
         .refreshable {
             await onRefresh()
-        }
-        .safeAreaInset(edge: .bottom) {
-            getNameButton(.kas)
         }
     }
 
@@ -249,9 +230,6 @@ struct KNSDomainsListView: View {
         }
         .refreshable {
             await nameServices.refresh(for: walletAddress)
-        }
-        .safeAreaInset(edge: .bottom) {
-            getNameButton(tld)
         }
     }
 
@@ -931,16 +909,6 @@ struct ProfileHelpView: View {
     }
 }
 
-
-// MARK: - Claim Testnet Kaspa (Profile, testnet only)
-
-/// "Claim Testnet Kaspa", above the addresses card on testnet. The official TN10 faucet sits
-/// behind a Cloudflare check, so it can't be claimed from in the background: the button copies
-/// the chatting address (`kaspatest:` form) and opens the faucet in the in-app browser, with a
-/// strip saying it's copied, where you paste it, pass the
-/// check and claim the most it offers. The faucet allows one claim a day, so once the address's
-/// balance goes up after a visit the button locks for 24 hours (kept per address).
-
 /// KaPay's Wallet tab below Send and Receive, on KaPost's Wallet: the Manage Addresses and
 /// Chatting Address squares, then Your Domains and Help. Every app has KaPay's full wallet
 /// (owner's call, 2026-11-07), except Contacts, which lives in KaChat and KaPay (owner's call, the
@@ -952,7 +920,6 @@ struct WalletAccountSections: View {
     let onMessage: (String) -> Void
 
     @EnvironmentObject private var walletManager: WalletManager
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ObservedObject private var nameServices = NameServicesClient.shared
     @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
 
@@ -964,7 +931,7 @@ struct WalletAccountSections: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            addressSquares
+            chattingAddressRow
             yourDomainsRow
         }
         .task(id: wallet.publicAddress) {
@@ -981,57 +948,14 @@ struct WalletAccountSections: View {
         }
     }
 
-    // MARK: Address squares
+    // MARK: Chatting Address
 
-    private var addressSquares: some View {
-        HStack(spacing: 14) {
-            NavigationLink {
-                ManageAddressesView()
-            } label: {
-                addressSquare(icon: "list.bullet.rectangle", title: "Manage Addresses")
-            }
-            .buttonStyle(.plain)
-            NavigationLink {
-                ChattingAddressQRView(address: wallet.publicAddress, balanceSompi: wallet.balanceSompi)
-            } label: {
-                addressSquare(icon: "qrcode", title: "Chatting Address")
-            }
-            .buttonStyle(.plain)
+    /// The Chatting Address's QR page, as a row like Your Domains, as on KaPay's Wallet tab
+    /// (owner's call, 2026-11-20). Manage Addresses opens from the balance card's Tap to Manage.
+    private var chattingAddressRow: some View {
+        linkRow(title: "Chatting Address", icon: "qrcode") {
+            ChattingAddressQRView(address: wallet.publicAddress, balanceSompi: wallet.balanceSompi)
         }
-    }
-
-    /// Square on a phone. As wide as half an iPad, a square would fill most of the screen with
-    /// nothing, so there it keeps the width and a set height.
-    @ViewBuilder
-    private var addressSquareShape: some View {
-        if horizontalSizeClass == .regular {
-            Color.clear.frame(height: 170)
-        } else {
-            Color.clear.aspectRatio(1, contentMode: .fit)
-        }
-    }
-
-    private func addressSquare(icon: String, title: LocalizedStringKey) -> some View {
-        addressSquareShape
-            .frame(maxWidth: .infinity)
-            .overlay {
-                VStack(spacing: 8) {
-                    Image(systemName: icon)
-                        .font(.scaled(size: 22, weight: .medium))
-                        .foregroundColor(.accentColor)
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(.regularMaterial))
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
-                }
-                .padding(.horizontal, 10)
-            }
-            .background(glassBackground(cornerRadius: 18))
-            .contentShape(RoundedRectangle(cornerRadius: 18))
     }
 
     // MARK: Your Domains
@@ -1213,15 +1137,22 @@ struct ReceiveKaspaQRView: View {
     @EnvironmentObject private var walletManager: WalletManager
     @State private var address: String?
     @State private var resolving = true
-    @State private var balanceSompi: UInt64?
 
     var body: some View {
         Group {
             if let address {
-                ChattingAddressQRView(
+                // the shared receive screen (KaPay's design, 2026-11-19, from kUSDT's): a fresh
+                // REGULAR address, so it takes kUSDT as well as Kaspa
+                AddressReceiveView(
+                    title: AppLocalization.string("Receive Kaspa"),
                     address: address,
-                    balanceSompi: balanceSompi,
-                    subtitle: "A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names."
+                    addressLabel: walletManager.ownAddressLabel(for: address),
+                    privacyNote: ReceiveNotes.freshAddress,
+                    notes: [
+                        ReceiveNotes.kaspaAndKusdt,
+                        ReceiveNote(kind: .info, text: AppLocalization.string("It lands in this account and shows in your spending total. Use it for everything except .kachat names.")),
+                    ],
+                    icon: { KaspaLogoIcon() }
                 )
             } else if resolving {
                 ProgressView("Preparing a fresh address")
@@ -1252,11 +1183,6 @@ struct ReceiveKaspaQRView: View {
             if resolved != address { address = resolved }
             ReceiveAddressWarmCache.store(resolved, for: account)
             resolving = false
-            guard let resolved else { return }
-            // A failed lookup leaves the balance unknown (nothing shown) rather than 0 KAS.
-            if let utxos = try? await NodePoolService.shared.getUtxosByAddresses([resolved]) {
-                balanceSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
-            }
         }
     }
 }

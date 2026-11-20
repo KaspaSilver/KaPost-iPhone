@@ -494,8 +494,8 @@ struct PaymentRequestSummary: View {
 
             if let creator = request.creator {
                 // Who made it. The signature in the link was checked when it was opened, but it
-                // covers the address only: the name on the card comes from the indexer or the KNS
-                // API, so no green check sits over it.
+                // covers the address only. The card shows a .kachat name only once it's confirmed
+                // on chain as this address's (`KachatNamesRegistry.verifiedLabel`).
                 Text("Requested by")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.secondary)
@@ -624,6 +624,16 @@ enum KaPayHandoff {
             inApp()
             return
         }
+        UIApplication.shared.open(url) { opened in
+            if !opened { UIApplication.shared.open(appStoreURL) }
+        }
+    }
+
+    /// Get KaPay (where kUSDT is bought): switches to KaPay when it's on the phone, else opens the
+    /// install page.
+    @MainActor
+    static func openOrInstall() {
+        guard let url = URL(string: "\(scheme)://open") else { return }
         UIApplication.shared.open(url) { opened in
             if !opened { UIApplication.shared.open(appStoreURL) }
         }

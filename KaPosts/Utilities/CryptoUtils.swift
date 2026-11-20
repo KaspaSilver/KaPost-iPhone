@@ -4,15 +4,13 @@ import CryptoKit
 struct CryptoUtils {
     // MARK: - Hex Encoding/Decoding
 
-    static func dataToHex(_ data: Data) -> String {
-        return data.map { String(format: "%02x", $0) }.joined()
-    }
-
     static func hexToData(_ hex: String) -> Data? {
         var data = Data()
         var temp = ""
 
         let cleanHex = hex.lowercased().replacingOccurrences(of: " ", with: "")
+        // A trailing half byte is a damaged value, not one to silently shorten.
+        guard cleanHex.count.isMultiple(of: 2) else { return nil }
 
         for char in cleanHex {
             temp += String(char)
@@ -41,19 +39,6 @@ struct CryptoUtils {
         return sha256(data)
     }
 
-    // MARK: - Key Derivation
-
-    static func deriveKey(from password: String, salt: Data, iterations: Int = 100_000) -> SymmetricKey {
-        let passwordData = password.data(using: .utf8) ?? Data()
-        var key = passwordData + salt
-
-        for _ in 0..<iterations {
-            key = sha256(key)
-        }
-
-        return SymmetricKey(data: key.prefix(32))
-    }
-
     // MARK: - Encryption/Decryption
 
     static func encrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
@@ -67,35 +52,6 @@ struct CryptoUtils {
     static func decrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
         let sealedBox = try AES.GCM.SealedBox(combined: data)
         return try AES.GCM.open(sealedBox, using: key)
-    }
-
-    // MARK: - Address Generation
-
-    // MARK: - Validation
-
-    static func isValidKaspaAddress(_ address: String) -> Bool {
-        // Check prefix
-        guard address.hasPrefix("kaspa:") || address.hasPrefix("kaspatest:") else {
-            return false
-        }
-
-        // Extract the address part
-        let parts = address.split(separator: ":")
-        guard parts.count == 2 else { return false }
-
-        let addressPart = String(parts[1])
-
-        // Check type prefix (qr, qp, qz)
-        guard addressPart.hasPrefix("qr") || addressPart.hasPrefix("qp") || addressPart.hasPrefix("qz") else {
-            return false
-        }
-
-        // Check length (2 char prefix + 40 char hex = 42)
-        guard addressPart.count >= 42 else {
-            return false
-        }
-
-        return true
     }
 }
 

@@ -94,11 +94,11 @@ final class PublicChatService: ObservableObject {
     /// every row on every pass. Set before `messagesByChannel`, which is what redraws.
     private(set) var voiceNotesByChannel: [String: PublicChatVoiceParts.Result] = [:]
     /// This wallet's public chat reactions, keyed by channel then by targetTxId - mirrors
-    /// KaChat's `GroupChatService.reactionsByGroupId`'s shape (and reuses `GroupStore.ReactionSnapshot`,
+    /// KaChat's `GroupChatService.reactionsByGroupId`'s shape (as `PublicChatReactionSnapshot`,
     /// see `PublicChatStore.fetchReactions`). Loaded per channel on open (`acquire`) and kept
     /// live afterward by `sendPublicChatReaction` / the incoming-reaction interception in
     /// `processPublicChatHits` and `fetchFromIndexerAndMerge`.
-    @Published private(set) var reactionsByChannel: [String: [String: [GroupStore.ReactionSnapshot]]] = [:]
+    @Published private(set) var reactionsByChannel: [String: [String: [PublicChatReactionSnapshot]]] = [:]
     /// The newest edit per message txId, per room - see `MessageEditCodec`.
     @Published private(set) var editsByChannel: [String: [String: MessageEditSnapshot]] = [:]
     /// The room message whose text the composer is editing (the user's own) - see `sendPublicChatEdit`.
@@ -199,6 +199,9 @@ final class PublicChatService: ObservableObject {
             deepBackfillResume = [:]
             deepBackfillFloor = [:]
             indexerFetchedChannels = []
+            // "Load earlier messages" widened the other account's rooms, not this one's.
+            windowSizeByChannel = [:]
+            windowExhausted = []
         }
         // A room can already be on screen when the wallet lands: a cold launch from a room's
         // notification routes into it during loadWallet's awaits, before this ran. That room is
@@ -1112,6 +1115,11 @@ final class PublicChatService: ObservableObject {
             markChannelRead(normalized)
             liveViewRefCounts.removeValue(forKey: normalized)
             stopIndexerPolling(channel: normalized)
+            // Closed: back to its summary (`summaryWindowSize`), and "Load earlier messages"
+            // starts over next time, so every room ever opened doesn't keep 400+ rows all session.
+            windowSizeByChannel.removeValue(forKey: normalized)
+            windowExhausted.remove(normalized)
+            if messagesByChannel[normalized] != nil { loadMessages(for: normalized) }
         } else {
             liveViewRefCounts[normalized] = count - 1
         }
@@ -1143,7 +1151,7 @@ final class PublicChatService: ObservableObject {
     /// Aggregated reactions for a channel, keyed by the reacted-to message's txId. Reactions on
     /// a long voice note's hidden parts (sent by a client that shows parts one by one) are
     /// shown on the note's bubble, keyed by its anchor.
-    func reactions(forChannel name: String) -> [String: [GroupStore.ReactionSnapshot]] {
+    func reactions(forChannel name: String) -> [String: [PublicChatReactionSnapshot]] {
         let channel = PublicChatChannelName.normalize(name)
         let byTarget = reactionsByChannel[channel] ?? [:]
         guard let anchors = voiceNotesByChannel[channel]?.anchorIdByPartId, !anchors.isEmpty else { return byTarget }
@@ -1282,6 +1290,9 @@ final class PublicChatService: ObservableObject {
     /// day; "Load earlier messages" at the top of the room widens it. The chess arena has no
     /// window: its reducer replays the whole room.
     static let roomWindowSize = 400
+    /// A room that isn't open keeps only its newest rows: enough for the list's last message and
+    /// an unread count up to "99+".
+    static let summaryWindowSize = 100
     private var windowSizeByChannel: [String: Int] = [:]
     /// Rooms whose last read came back shorter than the window: nothing older to load.
     private var windowExhausted: Set<String> = []
@@ -1289,7 +1300,9 @@ final class PublicChatService: ObservableObject {
     private var messageLoadGeneration: [String: Int] = [:]
 
     private func windowSize(for channel: String) -> Int? {
-        Self.serviceChannels.contains(channel) ? nil : (windowSizeByChannel[channel] ?? Self.roomWindowSize)
+        if Self.serviceChannels.contains(channel) { return nil }
+        guard isViewing(channel: channel) else { return Self.summaryWindowSize }
+        return windowSizeByChannel[channel] ?? Self.roomWindowSize
     }
 
     /// Whether the room may hold messages older than what is loaded.
@@ -1325,7 +1338,8 @@ final class PublicChatService: ObservableObject {
         let rows = await store.messages(forChannel: channel, newestLimit: limit)
         // A read of the store the account had before a switch is not this account's room.
         guard messageLoadGeneration[channel] == generation, isCurrentWallet(walletAtStart) else { return }
-        if let limit {
+        // Only an open room's read says whether older history is left (a summary read is short).
+        if let limit, isViewing(channel: channel) {
             if rows.count < limit { windowExhausted.insert(channel) } else { windowExhausted.remove(channel) }
         }
         // Reaction envelopes are never rendered as message rows - drop any that made it into

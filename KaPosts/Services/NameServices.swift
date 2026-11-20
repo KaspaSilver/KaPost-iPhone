@@ -307,26 +307,6 @@ final class NameServicesClient: ObservableObject {
         return result
     }
 
-    /// `ownedNames(of:)` for many addresses, a few lookups at a time rather than one burst of
-    /// two requests per address against services that rate-limit.
-    func ownedNames(of addresses: [String], concurrency: Int = 6) async -> [String: [OwnedServiceName]] {
-        var result: [String: [OwnedServiceName]] = [:]
-        var start = 0
-        while start < addresses.count {
-            let slice = addresses[start..<min(start + concurrency, addresses.count)]
-            await withTaskGroup(of: (String, [OwnedServiceName]).self) { group in
-                for address in slice {
-                    group.addTask { (address, await self.ownedNames(of: address)) }
-                }
-                for await (address, names) in group where !names.isEmpty {
-                    result[address] = names
-                }
-            }
-            start += concurrency
-        }
-        return result
-    }
-
     /// Whether `address` owns a name on any service KaChat reads - .kas, .k and .kaspa, and
     /// .kachat where it is live (testnet). Account discovery asks this so an address that holds
     /// only a name, and no KAS, is still found.

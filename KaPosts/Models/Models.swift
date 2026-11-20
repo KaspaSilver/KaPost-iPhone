@@ -2220,6 +2220,10 @@ enum AppCurrency: String, Codable, CaseIterable {
     /// this casing. Not every case is a real ISO 4217 code (see `.bitcoin`).
     var code: String { rawValue.uppercased() }
 
+    /// Decimals an amount in this currency is shown and typed with: 8 for bitcoin (a KAS is worth
+    /// well under a cent of it, so 2 would always read 0.00), 2 for every fiat currency.
+    var fractionDigits: Int { self == .bitcoin ? 8 : 2 }
+
     var name: String {
         switch self {
         case .usDollar: return "US Dollar"
@@ -2348,10 +2352,24 @@ enum KachatNameLabel {
 
 // MARK: - Settings Models
 
+/// What KaPost's Tip sends (KaPost > Settings > Tip In, owner's call 2026-11-20).
+enum KaPostsTipAsset: String, Codable, CaseIterable {
+    case kaspa
+    case kusdt
+}
+
+extension KeyedDecodingContainer {
+    /// A value that is missing, or stored but no longer decodable (a removed enum case, a changed
+    /// type), comes back as nil, so one bad field falls back to its default instead of failing the
+    /// whole decode.
+    func decodeLossy<T: Decodable>(_ type: T.Type, forKey key: Key) -> T? {
+        try? decodeIfPresent(type, forKey: key)
+    }
+}
+
 struct AppSettings: Codable {
     var messageRetention: MessageRetention
     var networkType: NetworkType
-    var autoAddContacts: Bool
     var notificationMode: NotificationMode
     var notificationPermissionRequested: Bool
     var incomingNotificationSoundEnabled: Bool
@@ -2376,12 +2394,7 @@ struct AppSettings: Codable {
     /// It is - but a busy account can be mentioned constantly, and "always about you" is a
     /// reason to make the choice available, not a reason to make it for them.
     var kaPostsNotifyMentions: Bool
-    var messagePollInterval: TimeInterval
-    var liveUpdatesEnabled: Bool
     var requirePhotoApprovalForNewContacts: Bool
-    /// Chats > Higher quality photos: on-chain photos use the largest size one transaction
-    /// carries (`ImagePrep.highQualityChatTargetBytes`) instead of the default, for a higher fee.
-    var higherQualityPhotos: Bool
     var showFeeEstimate: Bool
     /// KaPosts > Settings: the tip a tap on "Tip" sends at once, in sompi. nil = ask every time.
     var kaPostsDefaultTipSompi: UInt64?
@@ -2391,6 +2404,9 @@ struct AppSettings: Codable {
     var kaPostsDefaultTipFiat: Double?
     /// The currency `kaPostsDefaultTipFiat` is in (the app's currency when it was set).
     var kaPostsDefaultTipFiatCurrency: AppCurrency?
+    /// KaPost > Settings > Tip In: what a tap on Tip sends. nil = ask each time (Kaspa or kUSDT),
+    /// except that an instant tip amount (always Kaspa) makes it Kaspa; see `kaPostsTipAssetInUse`.
+    var kaPostsTipAsset: KaPostsTipAsset?
     /// The device-wide Tips From this used to be: read once to seed each account's own
     /// (`KaPostsTipSourceStore`), and not written any more.
     var kaPostsDefaultTipSourceIndex: Int?
@@ -2399,11 +2415,8 @@ struct AppSettings: Codable {
     /// they go at once. Off by default, so actions go at once unless someone turns it on (owner's
     /// call, 2026-11-18).
     var kaPostsCooldownEnabled: Bool
-    /// Optional (unlike most fields here) - this struct has no custom `init(from:)`, so a newly
-    /// added *required* field would fail this whole struct's decode for anyone with a
-    /// pre-existing settings blob saved before it existed, silently resetting every other setting
-    /// back to `.default` (see `AppSettings.load()`'s `try?`). Nil/wrong-count means "never
-    /// customized" - read via `effectiveQuickReactionEmojis`, never this raw property directly.
+    /// Nil/wrong-count means "never customized" - read via `effectiveQuickReactionEmojis`, never
+    /// this raw property directly.
     var quickReactionEmojis: [String]?
 
     // Customization
@@ -2412,12 +2425,6 @@ struct AppSettings: Codable {
     var currency: AppCurrency
 
     // Security
-    /// Simple Mode (Settings > Security): while on, the app is strictly Chats, Group Chats,
-    /// Portfolio and Cold Storage - Swaps, KaPosts and Public Chats are removed from every access
-    /// point (dock, Ecosystem, deep links, notifications, push registration). Turning it
-    /// OFF is validated against the salted password hash in the Keychain (see ChildModeService) -
-    /// this flag alone is just the fast-path gate the UI reads.
-    var childModeEnabled: Bool
     var biometricSeedPhraseEnabled: Bool
     var biometricAccountLoginEnabled: Bool
     /// Gates the "Export" button on a spending address's own screen (Manage Addresses > tap an
@@ -2426,9 +2433,6 @@ struct AppSettings: Codable {
     /// enough that some users will want it gated independently rather than always tied 1:1 to
     /// the seed-phrase toggle.
     var biometricSpendingKeyEnabled: Bool
-
-    // Swap (ChangeNOW)
-    var swapDisclaimerAgreed: Bool
 
     // Diagnostics
     /// Settings > Diagnostics > "Verbose API Logging" (default OFF): restores the per-request
@@ -2465,6 +2469,9 @@ struct AppSettings: Codable {
     var knsBaseURL: String { Self.defaultKNSURL(for: networkType) }
 
     var kaspaRestAPIURL: String
+    /// Trestly's API (kusdt-open's coordinator): where kUSDT balances are looked up
+    /// (`/tokens?owner=`), each answer checked on the node. Kept per network; https only.
+    var trestlyAPIURL: String
     var kaspaExplorer: KaspaExplorer
     /// A user-pinned "host:port" gRPC node - when non-blank, NodePoolService stops discovery
     /// (DNS seeds/peer-gossip/scoring) entirely and only ever connects to this address,
@@ -2482,11 +2489,10 @@ struct AppSettings: Codable {
     /// starts from `ConnectionProfile.defaults(for:)`.
     var connectionProfiles: [String: ConnectionProfile] = [:]
 
-    // gRPC endpoint pool settings
+    /// The node pool's old saved endpoints, read once by `NodePoolService` to move them to its
+    /// registry. Nothing writes it any more.
     var grpcEndpointPool: [GrpcEndpoint]
-    var discoverNewPeers: Bool           // Enable peer discovery from hot pool nodes
-    var grpcPoolNetworkType: NetworkType?
-    var lastPoolPersistDate: Date?       // Track when pool was last saved
+
 
     // Default URLs per network
     /// KaChat's own indexer: chat, KaPosts, public chats, push, translation and `.kachat` names.
@@ -2547,6 +2553,11 @@ struct AppSettings: Codable {
     /// instead) - TLS-secured, hence the `grpcs://` scheme (see Endpoint.secure/Endpoint(url:)).
     static let defaultTrustedNodeAddress = "grpcs://toccata.kaspium.io"
 
+    /// Trestly's own deployments (kusdt-open `wallet/extension/src/config/defaults.ts`), as KaPay.
+    static func defaultTrestlyAPIURL(for network: NetworkType) -> String {
+        network == .mainnet ? "https://api.trestly.io/api/v1" : "https://testnet.trestly.io/api/v1"
+    }
+
     /// Fixed tapback-style default set - matches Android's `QUICK_REACTION_EMOJIS`'s default.
     static let defaultQuickReactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
@@ -2571,7 +2582,8 @@ struct AppSettings: Codable {
             translationServiceURL: translationServiceURL,
             kaspaRestAPIURL: kaspaRestAPIURL,
             trustedNodeAddress: trustedNodeAddress,
-            savedNodeAddresses: savedNodeAddresses
+            savedNodeAddresses: savedNodeAddresses,
+            trestlyAPIURL: trestlyAPIURL
         )
     }
 
@@ -2591,6 +2603,7 @@ struct AppSettings: Codable {
         kaspaRestAPIURL = next.kaspaRestAPIURL
         trustedNodeAddress = next.trustedNodeAddress
         savedNodeAddresses = next.savedNodeAddresses
+        trestlyAPIURL = next.trestlyAPIURL ?? Self.defaultTrestlyAPIURL(for: network)
         networkType = network
     }
 
@@ -2606,7 +2619,6 @@ struct AppSettings: Codable {
         AppSettings(
             messageRetention: .forever,
             networkType: .mainnet,
-            autoAddContacts: true,
             notificationMode: .remotePush,
             notificationPermissionRequested: false,
             incomingNotificationSoundEnabled: true,
@@ -2618,8 +2630,6 @@ struct AppSettings: Codable {
             kaPostsNotifyDislikes: true,
             kaPostsNotifyComments: true,
             kaPostsNotifyMentions: true,
-            messagePollInterval: 10.0,
-            liveUpdatesEnabled: false,
             requirePhotoApprovalForNewContacts: true,
             showFeeEstimate: true,
             kaPostsDefaultTipSompi: nil,
@@ -2627,12 +2637,10 @@ struct AppSettings: Codable {
             appearance: .system,
             language: .system,
             currency: .usDollar,
-            childModeEnabled: false,
             biometricSeedPhraseEnabled: true,
             // Asked when signing back in to a saved account: off by default, the same as KaChat.
             biometricAccountLoginEnabled: false,
             biometricSpendingKeyEnabled: true,
-            swapDisclaimerAgreed: false,
             indexerURL: defaultIndexerURL,
             kaPostIndexerURL: defaultKaPostIndexerURL,
             publicChatIndexerURL: defaultPublicChatIndexerURL,
@@ -2641,18 +2649,13 @@ struct AppSettings: Codable {
             kaspaRestAPIURL: defaultKaspaMainnetURL,
             kaspaExplorer: .default,
             trustedNodeAddress: defaultTrustedNodeAddress,
-            savedNodeAddresses: [],
-            grpcEndpointPool: [],
-            discoverNewPeers: true,
-            grpcPoolNetworkType: nil,
-            lastPoolPersistDate: nil
+            savedNodeAddresses: []
         )
     }
 
     enum CodingKeys: String, CodingKey {
         case messageRetention
         case networkType
-        case autoAddContacts
         case notificationMode
         case notificationPermissionRequested
         case incomingNotificationSoundEnabled
@@ -2664,14 +2667,12 @@ struct AppSettings: Codable {
         case kaPostsNotifyDislikes
         case kaPostsNotifyComments
         case kaPostsNotifyMentions
-        case messagePollInterval
-        case liveUpdatesEnabled
         case requirePhotoApprovalForNewContacts
-        case higherQualityPhotos
         case showFeeEstimate
         case kaPostsDefaultTipSompi
         case kaPostsDefaultTipFiat
         case kaPostsDefaultTipFiatCurrency
+        case kaPostsTipAsset
         case kaPostsDefaultTipSourceIndex
         /// Saved under a new name since 2026-11-18: the cooldown went off by default, and the owner
         /// turned it off once for existing installs too, so a value saved under the old name
@@ -2681,11 +2682,9 @@ struct AppSettings: Codable {
         case appearance
         case language
         case currency
-        case childModeEnabled
         case biometricSeedPhraseEnabled
         case biometricAccountLoginEnabled
         case biometricSpendingKeyEnabled
-        case swapDisclaimerAgreed
         case verboseAPILogging
         case indexerURL
         case kaPostIndexerURL
@@ -2693,20 +2692,14 @@ struct AppSettings: Codable {
         case pushIndexerURL
         case translationServiceURL
         case kaspaRestAPIURL
+        case trestlyAPIURL
         case kaspaExplorer
         case trustedNodeAddress
         case savedNodeAddresses
         case connectionProfiles
         case grpcEndpointPool
-        case discoverNewPeers
-        case grpcPoolNetworkType
-        case lastPoolPersistDate
         // Legacy keys for migration
         case customIndexerURL
-        case wrpcEndpointPool  // Legacy, ignored on load
-        case autoRefreshWrpcPool  // Legacy, ignored on load
-        case autoRefreshGrpcPool  // Legacy, migrate to discoverNewPeers
-        case preferGrpc  // Legacy, ignored on load
         case notificationsEnabled  // Legacy, migrate to notificationMode
         case backgroundFetchEnabled  // Legacy, migrate to notificationMode
         case pushNotificationsEnabled  // Legacy, migrate to notificationMode
@@ -2715,7 +2708,6 @@ struct AppSettings: Codable {
     init(
         messageRetention: MessageRetention,
         networkType: NetworkType,
-        autoAddContacts: Bool,
         notificationMode: NotificationMode,
         notificationPermissionRequested: Bool = false,
         incomingNotificationSoundEnabled: Bool = true,
@@ -2727,25 +2719,21 @@ struct AppSettings: Codable {
         kaPostsNotifyDislikes: Bool = true,
         kaPostsNotifyComments: Bool = true,
         kaPostsNotifyMentions: Bool = true,
-        messagePollInterval: TimeInterval,
-        liveUpdatesEnabled: Bool,
         requirePhotoApprovalForNewContacts: Bool = true,
-        higherQualityPhotos: Bool = false,
         showFeeEstimate: Bool = true,
         kaPostsDefaultTipSompi: UInt64? = nil,
         kaPostsDefaultTipFiat: Double? = nil,
         kaPostsDefaultTipFiatCurrency: AppCurrency? = nil,
+        kaPostsTipAsset: KaPostsTipAsset? = nil,
         kaPostsDefaultTipSourceIndex: Int? = nil,
         kaPostsCooldownEnabled: Bool = false,
         quickReactionEmojis: [String]? = nil,
         appearance: AppAppearance = .system,
         language: AppLanguage = .system,
         currency: AppCurrency = .usDollar,
-        childModeEnabled: Bool = false,
         biometricSeedPhraseEnabled: Bool = true,
         biometricAccountLoginEnabled: Bool = false,
         biometricSpendingKeyEnabled: Bool = true,
-        swapDisclaimerAgreed: Bool = false,
         verboseAPILogging: Bool = false,
         indexerURL: String,
         kaPostIndexerURL: String = AppSettings.defaultKaPostIndexerURL,
@@ -2753,18 +2741,14 @@ struct AppSettings: Codable {
         pushIndexerURL: String,
         translationServiceURL: String = AppSettings.defaultTranslationServiceURL,
         kaspaRestAPIURL: String,
+        trestlyAPIURL: String? = nil,
         kaspaExplorer: KaspaExplorer = .default,
         trustedNodeAddress: String = AppSettings.defaultTrustedNodeAddress,
         savedNodeAddresses: [SavedNodeAddress] = [],
-        grpcEndpointPool: [GrpcEndpoint] = [],
-        discoverNewPeers: Bool = true,
-        grpcPoolNetworkType: NetworkType? = nil,
-        lastPoolPersistDate: Date? = nil
+        grpcEndpointPool: [GrpcEndpoint] = []
     ) {
         self.messageRetention = messageRetention
         self.networkType = networkType
-        // Auto-add contacts is always enabled.
-        self.autoAddContacts = true
         self.notificationMode = notificationMode
         self.notificationPermissionRequested = notificationPermissionRequested
         self.incomingNotificationSoundEnabled = incomingNotificationSoundEnabled
@@ -2776,25 +2760,21 @@ struct AppSettings: Codable {
         self.kaPostsNotifyDislikes = kaPostsNotifyDislikes
         self.kaPostsNotifyComments = kaPostsNotifyComments
         self.kaPostsNotifyMentions = kaPostsNotifyMentions
-        self.messagePollInterval = messagePollInterval
-        self.liveUpdatesEnabled = liveUpdatesEnabled
         self.requirePhotoApprovalForNewContacts = requirePhotoApprovalForNewContacts
-        self.higherQualityPhotos = higherQualityPhotos
         self.showFeeEstimate = showFeeEstimate
         self.kaPostsDefaultTipSompi = kaPostsDefaultTipSompi
         self.kaPostsDefaultTipFiat = kaPostsDefaultTipFiat
         self.kaPostsDefaultTipFiatCurrency = kaPostsDefaultTipFiatCurrency
+        self.kaPostsTipAsset = kaPostsTipAsset
         self.kaPostsDefaultTipSourceIndex = kaPostsDefaultTipSourceIndex
         self.kaPostsCooldownEnabled = kaPostsCooldownEnabled
         self.quickReactionEmojis = quickReactionEmojis
         self.appearance = appearance
         self.language = language
         self.currency = currency
-        self.childModeEnabled = childModeEnabled
         self.biometricSeedPhraseEnabled = biometricSeedPhraseEnabled
         self.biometricAccountLoginEnabled = biometricAccountLoginEnabled
         self.biometricSpendingKeyEnabled = biometricSpendingKeyEnabled
-        self.swapDisclaimerAgreed = swapDisclaimerAgreed
         self.verboseAPILogging = verboseAPILogging
         self.indexerURL = indexerURL
         self.kaPostIndexerURL = kaPostIndexerURL
@@ -2802,24 +2782,20 @@ struct AppSettings: Codable {
         self.pushIndexerURL = pushIndexerURL
         self.translationServiceURL = translationServiceURL
         self.kaspaRestAPIURL = kaspaRestAPIURL
+        self.trestlyAPIURL = trestlyAPIURL ?? Self.defaultTrestlyAPIURL(for: networkType)
         self.kaspaExplorer = kaspaExplorer
         self.trustedNodeAddress = trustedNodeAddress
         self.savedNodeAddresses = savedNodeAddresses
         self.grpcEndpointPool = grpcEndpointPool
-        self.discoverNewPeers = discoverNewPeers
-        self.grpcPoolNetworkType = grpcPoolNetworkType
-        self.lastPoolPersistDate = lastPoolPersistDate
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        messageRetention = try container.decodeIfPresent(MessageRetention.self, forKey: .messageRetention) ?? .forever
+        messageRetention = container.decodeLossy(MessageRetention.self, forKey: .messageRetention) ?? .forever
         // Settings > Connection Settings > Testnet (5.2) makes testnet selectable again; it had
         // been forced to mainnet since August 2026.
-        networkType = try container.decodeIfPresent(NetworkType.self, forKey: .networkType) ?? .mainnet
-        // Ignore persisted value and keep this feature always enabled.
-        autoAddContacts = true
-        if let storedModeRaw = try container.decodeIfPresent(String.self, forKey: .notificationMode) {
+        networkType = container.decodeLossy(NetworkType.self, forKey: .networkType) ?? .mainnet
+        if let storedModeRaw = container.decodeLossy(String.self, forKey: .notificationMode) {
             switch storedModeRaw {
             case NotificationMode.disabled.rawValue:
                 notificationMode = .disabled
@@ -2829,9 +2805,9 @@ struct AppSettings: Codable {
                 notificationMode = .remotePush
             }
         } else {
-            let legacyNotifications = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
-            let legacyBackgroundFetch = try container.decodeIfPresent(Bool.self, forKey: .backgroundFetchEnabled) ?? false
-            let legacyPush = try container.decodeIfPresent(Bool.self, forKey: .pushNotificationsEnabled) ?? false
+            let legacyNotifications = container.decodeLossy(Bool.self, forKey: .notificationsEnabled) ?? true
+            let legacyBackgroundFetch = container.decodeLossy(Bool.self, forKey: .backgroundFetchEnabled) ?? false
+            let legacyPush = container.decodeLossy(Bool.self, forKey: .pushNotificationsEnabled) ?? false
 
             if legacyPush {
                 notificationMode = .remotePush
@@ -2841,63 +2817,59 @@ struct AppSettings: Codable {
                 notificationMode = .disabled
             }
         }
-        notificationPermissionRequested = try container.decodeIfPresent(Bool.self, forKey: .notificationPermissionRequested) ?? false
-        incomingNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .incomingNotificationSoundEnabled) ?? true
-        incomingNotificationVibrationEnabled = try container.decodeIfPresent(Bool.self, forKey: .incomingNotificationVibrationEnabled) ?? true
-        addressActivityNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .addressActivityNotificationsEnabled) ?? true
-        kaPostsNotifyLikes = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyLikes) ?? true
-        kaPostsNotifyReposts = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyReposts) ?? true
-        kaPostsNotifyFollows = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyFollows) ?? true
-        kaPostsNotifyDislikes = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyDislikes) ?? true
-        kaPostsNotifyComments = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyComments) ?? true
+        notificationPermissionRequested = container.decodeLossy(Bool.self, forKey: .notificationPermissionRequested) ?? false
+        incomingNotificationSoundEnabled = container.decodeLossy(Bool.self, forKey: .incomingNotificationSoundEnabled) ?? true
+        incomingNotificationVibrationEnabled = container.decodeLossy(Bool.self, forKey: .incomingNotificationVibrationEnabled) ?? true
+        addressActivityNotificationsEnabled = container.decodeLossy(Bool.self, forKey: .addressActivityNotificationsEnabled) ?? true
+        kaPostsNotifyLikes = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyLikes) ?? true
+        kaPostsNotifyReposts = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyReposts) ?? true
+        kaPostsNotifyFollows = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyFollows) ?? true
+        kaPostsNotifyDislikes = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyDislikes) ?? true
+        kaPostsNotifyComments = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyComments) ?? true
         // Defaults ON, and an older settings file with no such key decodes as ON - a switch
         // appearing for the first time must not silently mute anything.
-        kaPostsNotifyMentions = try container.decodeIfPresent(Bool.self, forKey: .kaPostsNotifyMentions) ?? true
-        messagePollInterval = try container.decodeIfPresent(TimeInterval.self, forKey: .messagePollInterval) ?? 10.0
-        liveUpdatesEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveUpdatesEnabled) ?? false
-        requirePhotoApprovalForNewContacts = try container.decodeIfPresent(Bool.self, forKey: .requirePhotoApprovalForNewContacts) ?? true
-        higherQualityPhotos = try container.decodeIfPresent(Bool.self, forKey: .higherQualityPhotos) ?? false
-        showFeeEstimate = try container.decodeIfPresent(Bool.self, forKey: .showFeeEstimate) ?? true
-        kaPostsDefaultTipSompi = try container.decodeIfPresent(UInt64.self, forKey: .kaPostsDefaultTipSompi)
-        kaPostsDefaultTipFiat = try container.decodeIfPresent(Double.self, forKey: .kaPostsDefaultTipFiat)
-        kaPostsDefaultTipFiatCurrency = try? container.decodeIfPresent(AppCurrency.self, forKey: .kaPostsDefaultTipFiatCurrency)
-        kaPostsDefaultTipSourceIndex = try? container.decodeIfPresent(Int.self, forKey: .kaPostsDefaultTipSourceIndex)
-        kaPostsCooldownEnabled = try container.decodeIfPresent(Bool.self, forKey: .kaPostsCooldownEnabled) ?? false
-        quickReactionEmojis = try container.decodeIfPresent([String].self, forKey: .quickReactionEmojis)
-        appearance = try container.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system
-        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
-        currency = try container.decodeIfPresent(AppCurrency.self, forKey: .currency) ?? .usDollar
+        kaPostsNotifyMentions = container.decodeLossy(Bool.self, forKey: .kaPostsNotifyMentions) ?? true
+        requirePhotoApprovalForNewContacts = container.decodeLossy(Bool.self, forKey: .requirePhotoApprovalForNewContacts) ?? true
+        showFeeEstimate = container.decodeLossy(Bool.self, forKey: .showFeeEstimate) ?? true
+        kaPostsDefaultTipSompi = container.decodeLossy(UInt64.self, forKey: .kaPostsDefaultTipSompi)
+        kaPostsDefaultTipFiat = container.decodeLossy(Double.self, forKey: .kaPostsDefaultTipFiat)
+        kaPostsDefaultTipFiatCurrency = container.decodeLossy(AppCurrency.self, forKey: .kaPostsDefaultTipFiatCurrency)
+        kaPostsTipAsset = container.decodeLossy(KaPostsTipAsset.self, forKey: .kaPostsTipAsset)
+        kaPostsDefaultTipSourceIndex = container.decodeLossy(Int.self, forKey: .kaPostsDefaultTipSourceIndex)
+        kaPostsCooldownEnabled = container.decodeLossy(Bool.self, forKey: .kaPostsCooldownEnabled) ?? false
+        quickReactionEmojis = container.decodeLossy([String].self, forKey: .quickReactionEmojis)
+        appearance = container.decodeLossy(AppAppearance.self, forKey: .appearance) ?? .system
+        language = container.decodeLossy(AppLanguage.self, forKey: .language) ?? .system
+        currency = container.decodeLossy(AppCurrency.self, forKey: .currency) ?? .usDollar
         // KaChat's dock fields (hide*Tab, tabOrder, dockTabs, hubTabs) may still be in a saved
         // blob; they are not read, and are dropped on the next save.
-        childModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .childModeEnabled) ?? false
-        biometricSeedPhraseEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricSeedPhraseEnabled) ?? true
-        biometricAccountLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricAccountLoginEnabled) ?? false
-        biometricSpendingKeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricSpendingKeyEnabled) ?? true
-        swapDisclaimerAgreed = try container.decodeIfPresent(Bool.self, forKey: .swapDisclaimerAgreed) ?? false
-        verboseAPILogging = try container.decodeIfPresent(Bool.self, forKey: .verboseAPILogging) ?? false
+        biometricSeedPhraseEnabled = container.decodeLossy(Bool.self, forKey: .biometricSeedPhraseEnabled) ?? true
+        biometricAccountLoginEnabled = container.decodeLossy(Bool.self, forKey: .biometricAccountLoginEnabled) ?? false
+        biometricSpendingKeyEnabled = container.decodeLossy(Bool.self, forKey: .biometricSpendingKeyEnabled) ?? true
+        verboseAPILogging = container.decodeLossy(Bool.self, forKey: .verboseAPILogging) ?? false
 
         // Handle migration from old settings
-        if let customIndexer = try container.decodeIfPresent(String.self, forKey: .customIndexerURL), !customIndexer.isEmpty {
+        if let customIndexer = container.decodeLossy(String.self, forKey: .customIndexerURL), !customIndexer.isEmpty {
             indexerURL = customIndexer
         } else {
-            indexerURL = try container.decodeIfPresent(String.self, forKey: .indexerURL) ?? AppSettings.defaultIndexerURL
+            indexerURL = container.decodeLossy(String.self, forKey: .indexerURL) ?? AppSettings.defaultIndexerURL
         }
         // Old-default migration: stored values pointing at superseded default hosts follow the
         // default forward; custom URLs are untouched.
-        let storedKaPostIndexer = try container.decodeIfPresent(String.self, forKey: .kaPostIndexerURL) ?? AppSettings.defaultKaPostIndexerURL
+        let storedKaPostIndexer = container.decodeLossy(String.self, forKey: .kaPostIndexerURL) ?? AppSettings.defaultKaPostIndexerURL
         let supersededIndexerDefaults = ["https://kaposts.duckdns.org", "https://mainnet.kaspatalk.net"]
         kaPostIndexerURL = supersededIndexerDefaults.contains(storedKaPostIndexer)
             ? AppSettings.defaultKaPostIndexerURL : storedKaPostIndexer
-        let storedPublicChatIndexer = try container.decodeIfPresent(String.self, forKey: .publicChatIndexerURL) ?? ""
+        let storedPublicChatIndexer = container.decodeLossy(String.self, forKey: .publicChatIndexerURL) ?? ""
         publicChatIndexerURL = storedPublicChatIndexer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || storedPublicChatIndexer == "https://kaposts.duckdns.org"
             ? AppSettings.defaultPublicChatIndexerURL : storedPublicChatIndexer
 
-        let storedTranslation = try container.decodeIfPresent(String.self, forKey: .translationServiceURL) ?? ""
+        let storedTranslation = container.decodeLossy(String.self, forKey: .translationServiceURL) ?? ""
         translationServiceURL = storedTranslation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? AppSettings.defaultTranslationServiceURL : storedTranslation
 
-        if let customPushIndexer = try container.decodeIfPresent(String.self, forKey: .pushIndexerURL),
+        if let customPushIndexer = container.decodeLossy(String.self, forKey: .pushIndexerURL),
            !customPushIndexer.isEmpty,
            customPushIndexer != "https://indexer.kasia.wtf" {
             // Stored custom URLs are honored; the superseded kasia.wtf default migrates
@@ -2909,8 +2881,12 @@ struct AppSettings: Codable {
 
         // knsBaseURL is computed from networkType now, so any value in an existing blob - including
         // the empty string that broke it - is simply ignored.
-        kaspaRestAPIURL = try container.decodeIfPresent(String.self, forKey: .kaspaRestAPIURL) ?? AppSettings.defaultKaspaRestURL(for: networkType)
-        connectionProfiles = try container.decodeIfPresent([String: ConnectionProfile].self, forKey: .connectionProfiles) ?? [:]
+        kaspaRestAPIURL = container.decodeLossy(String.self, forKey: .kaspaRestAPIURL) ?? AppSettings.defaultKaspaRestURL(for: networkType)
+        // blank or missing (settings saved before kUSDT): the network's default
+        let storedTrestly = (container.decodeLossy(String.self, forKey: .trestlyAPIURL) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        trestlyAPIURL = storedTrestly.isEmpty ? AppSettings.defaultTrestlyAPIURL(for: networkType) : storedTrestly
+        connectionProfiles = container.decodeLossy([String: ConnectionProfile].self, forKey: .connectionProfiles) ?? [:]
         // Testnet moved from the retired testnet-11 to testnet-10: carry the old default forward,
         // both live and in the stashed testnet profile. A custom URL is left alone.
         if kaspaRestAPIURL == AppSettings.legacyDefaultKaspaTestnetURL {
@@ -2922,14 +2898,14 @@ struct AppSettings: Codable {
         if networkType == .testnet {
             // The mainnet migrations above substitute mainnet hosts for a blank; on testnet a
             // blank means no indexer, and so does the retired testnet host. Custom URLs are kept.
-            func testnetIndexer(_ key: CodingKeys) throws -> String {
-                AppSettings.withoutRetiredTestnetIndexer(try container.decodeIfPresent(String.self, forKey: key) ?? "")
+            func testnetIndexer(_ key: CodingKeys) -> String {
+                AppSettings.withoutRetiredTestnetIndexer(container.decodeLossy(String.self, forKey: key) ?? "")
             }
-            indexerURL = try testnetIndexer(.indexerURL)
-            kaPostIndexerURL = try testnetIndexer(.kaPostIndexerURL)
-            publicChatIndexerURL = try testnetIndexer(.publicChatIndexerURL)
-            pushIndexerURL = try testnetIndexer(.pushIndexerURL)
-            translationServiceURL = try container.decodeIfPresent(String.self, forKey: .translationServiceURL) ?? ""
+            indexerURL = testnetIndexer(.indexerURL)
+            kaPostIndexerURL = testnetIndexer(.kaPostIndexerURL)
+            publicChatIndexerURL = testnetIndexer(.publicChatIndexerURL)
+            pushIndexerURL = testnetIndexer(.pushIndexerURL)
+            translationServiceURL = container.decodeLossy(String.self, forKey: .translationServiceURL) ?? ""
         }
         // The same for the stashed testnet profile, used when switching back to testnet.
         if var stashed = connectionProfiles[NetworkType.testnet.rawValue] {
@@ -2957,31 +2933,18 @@ struct AppSettings: Codable {
             profile.translationServiceURL = movedFromDuckDNS(profile.translationServiceURL)
             connectionProfiles[network] = profile
         }
-        kaspaExplorer = try container.decodeIfPresent(KaspaExplorer.self, forKey: .kaspaExplorer) ?? .default
-        trustedNodeAddress = try container.decodeIfPresent(String.self, forKey: .trustedNodeAddress) ?? AppSettings.defaultTrustedNodeAddress
-        savedNodeAddresses = try container.decodeIfPresent([SavedNodeAddress].self, forKey: .savedNodeAddresses) ?? []
+        kaspaExplorer = container.decodeLossy(KaspaExplorer.self, forKey: .kaspaExplorer) ?? .default
+        trustedNodeAddress = container.decodeLossy(String.self, forKey: .trustedNodeAddress) ?? AppSettings.defaultTrustedNodeAddress
+        savedNodeAddresses = container.decodeLossy([SavedNodeAddress].self, forKey: .savedNodeAddresses) ?? []
 
         // gRPC pool settings
-        grpcEndpointPool = try container.decodeIfPresent([GrpcEndpoint].self, forKey: .grpcEndpointPool) ?? []
-        grpcPoolNetworkType = try container.decodeIfPresent(NetworkType.self, forKey: .grpcPoolNetworkType)
-        lastPoolPersistDate = try container.decodeIfPresent(Date.self, forKey: .lastPoolPersistDate)
-
-        // Migrate from legacy autoRefreshGrpcPool to discoverNewPeers
-        if let newValue = try container.decodeIfPresent(Bool.self, forKey: .discoverNewPeers) {
-            discoverNewPeers = newValue
-        } else if let legacyValue = try container.decodeIfPresent(Bool.self, forKey: .autoRefreshGrpcPool) {
-            discoverNewPeers = legacyValue
-        } else {
-            discoverNewPeers = true
-        }
+        grpcEndpointPool = container.decodeLossy([GrpcEndpoint].self, forKey: .grpcEndpointPool) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(messageRetention, forKey: .messageRetention)
         try container.encode(networkType, forKey: .networkType)
-        // Persist as enabled for forward/backward compatibility.
-        try container.encode(true, forKey: .autoAddContacts)
         try container.encode(notificationMode, forKey: .notificationMode)
         try container.encode(notificationPermissionRequested, forKey: .notificationPermissionRequested)
         try container.encode(incomingNotificationSoundEnabled, forKey: .incomingNotificationSoundEnabled)
@@ -2993,39 +2956,34 @@ struct AppSettings: Codable {
         try container.encode(kaPostsNotifyDislikes, forKey: .kaPostsNotifyDislikes)
         try container.encode(kaPostsNotifyComments, forKey: .kaPostsNotifyComments)
         try container.encode(kaPostsNotifyMentions, forKey: .kaPostsNotifyMentions)
-        try container.encode(messagePollInterval, forKey: .messagePollInterval)
-        try container.encode(liveUpdatesEnabled, forKey: .liveUpdatesEnabled)
         try container.encode(requirePhotoApprovalForNewContacts, forKey: .requirePhotoApprovalForNewContacts)
-        try container.encode(higherQualityPhotos, forKey: .higherQualityPhotos)
         try container.encode(showFeeEstimate, forKey: .showFeeEstimate)
         try container.encodeIfPresent(kaPostsDefaultTipSompi, forKey: .kaPostsDefaultTipSompi)
         try container.encodeIfPresent(kaPostsDefaultTipFiat, forKey: .kaPostsDefaultTipFiat)
         try container.encodeIfPresent(kaPostsDefaultTipFiatCurrency, forKey: .kaPostsDefaultTipFiatCurrency)
+        try container.encodeIfPresent(kaPostsTipAsset, forKey: .kaPostsTipAsset)
         try container.encodeIfPresent(kaPostsDefaultTipSourceIndex, forKey: .kaPostsDefaultTipSourceIndex)
         try container.encode(kaPostsCooldownEnabled, forKey: .kaPostsCooldownEnabled)
         try container.encodeIfPresent(quickReactionEmojis, forKey: .quickReactionEmojis)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(language, forKey: .language)
         try container.encode(currency, forKey: .currency)
-        try container.encode(childModeEnabled, forKey: .childModeEnabled)
         try container.encode(biometricSeedPhraseEnabled, forKey: .biometricSeedPhraseEnabled)
         try container.encode(biometricAccountLoginEnabled, forKey: .biometricAccountLoginEnabled)
         try container.encode(biometricSpendingKeyEnabled, forKey: .biometricSpendingKeyEnabled)
-        try container.encode(swapDisclaimerAgreed, forKey: .swapDisclaimerAgreed)
         try container.encode(verboseAPILogging, forKey: .verboseAPILogging)
         try container.encode(indexerURL, forKey: .indexerURL)
         try container.encode(kaPostIndexerURL, forKey: .kaPostIndexerURL)
         try container.encode(publicChatIndexerURL, forKey: .publicChatIndexerURL)
         try container.encode(pushIndexerURL, forKey: .pushIndexerURL)
+        try container.encode(translationServiceURL, forKey: .translationServiceURL)
         try container.encode(kaspaRestAPIURL, forKey: .kaspaRestAPIURL)
+        try container.encode(trestlyAPIURL, forKey: .trestlyAPIURL)
         try container.encode(kaspaExplorer, forKey: .kaspaExplorer)
         try container.encode(trustedNodeAddress, forKey: .trustedNodeAddress)
         try container.encode(savedNodeAddresses, forKey: .savedNodeAddresses)
         try container.encode(connectionProfiles, forKey: .connectionProfiles)
         try container.encode(grpcEndpointPool, forKey: .grpcEndpointPool)
-        try container.encode(discoverNewPeers, forKey: .discoverNewPeers)
-        try container.encodeIfPresent(grpcPoolNetworkType, forKey: .grpcPoolNetworkType)
-        try container.encodeIfPresent(lastPoolPersistDate, forKey: .lastPoolPersistDate)
     }
 
     var defaultIncomingNotificationMode: ContactNotificationMode {
@@ -3064,11 +3022,6 @@ struct AppSettings: Codable {
         case "mention": return kaPostsNotifyMentions
         default: return true
         }
-    }
-
-    var backgroundFetchEnabled: Bool {
-        get { false }
-        set { }
     }
 
     var pushNotificationsEnabled: Bool {
@@ -3260,6 +3213,8 @@ struct ConnectionProfile: Codable, Equatable {
     var kaspaRestAPIURL: String
     var trustedNodeAddress: String
     var savedNodeAddresses: [SavedNodeAddress]
+    /// Optional, so profiles stashed by builds before kUSDT still decode (nil = the default).
+    var trestlyAPIURL: String? = nil
 
     /// What a network starts with. Testnet: the public testnet REST API, automatic node
     /// discovery, and no indexer (chat, push, KaPosts and public chats are off there).
@@ -3274,7 +3229,8 @@ struct ConnectionProfile: Codable, Equatable {
                 translationServiceURL: AppSettings.defaultTranslationServiceURL,
                 kaspaRestAPIURL: AppSettings.defaultKaspaMainnetURL,
                 trustedNodeAddress: AppSettings.defaultTrustedNodeAddress,
-                savedNodeAddresses: []
+                savedNodeAddresses: [],
+                trestlyAPIURL: AppSettings.defaultTrestlyAPIURL(for: .mainnet)
             )
         case .testnet:
             return ConnectionProfile(
@@ -3285,7 +3241,8 @@ struct ConnectionProfile: Codable, Equatable {
                 translationServiceURL: AppSettings.defaultTranslationServiceURL,
                 kaspaRestAPIURL: AppSettings.defaultKaspaTestnetURL,
                 trustedNodeAddress: "",
-                savedNodeAddresses: []
+                savedNodeAddresses: [],
+                trestlyAPIURL: AppSettings.defaultTrestlyAPIURL(for: .testnet)
             )
         }
     }
@@ -3468,8 +3425,7 @@ struct GrpcEndpoint: Codable, Identifiable, Equatable {
 // MARK: - Group Chat Models
 //
 // Single-admin, epoch-based group messaging - see GroupCipher.swift for the crypto and
-// GroupChatService for the orchestration layer. Secret key material (GroupBag) lives in
-// Keychain only (never synced anywhere); non-secret roster/message metadata lives in
+// GroupChatService for the orchestration layer. Non-secret roster/message metadata lives in
 // GroupStore's local-only Core Data store (mirrors PublicChatStore's pattern).
 
 /// A member of a group chat.
@@ -3486,114 +3442,6 @@ struct GroupMember: Codable, Identifiable, Equatable, Hashable {
     /// incoming gcomm messages to a roster entry.
     var senderIdHex: String {
         GroupCipher.deriveSenderId(senderAddress: address).hexString
-    }
-}
-
-/// Local secret+state bag for a group, persisted in Keychain (device-specific, SE-wrapped,
-/// never synced anywhere) - mirrors the reference implementation's `GroupBag` schema.
-struct GroupBag: Codable, Sendable {
-    let groupId: String              // hex
-    var groupSeed: String?           // hex, admin-only, nil for non-admin members
-    var groupRootEpoch: String       // hex, current epoch's root key
-    var blindingKey: String          // hex
-    var currentEpoch: UInt64
-    var deviceId: String             // hex, 16 bytes
-    var msgCounter: UInt64           // monotonic per (group_id, epoch, device_id)
-    /// Epoch for which this admin has published its self-addressed recovery invite (nil = none
-    /// yet). Drives the backfill so pre-existing admin groups become seed-recoverable.
-    var selfInviteEpoch: UInt64? = nil
-    /// Roots for epochs this group has already left, keyed by the epoch's decimal string.
-    ///
-    /// Without these a NON-ADMIN member loses the whole thread the moment membership changes.
-    /// `groupRootEpoch` only ever held the current epoch, and the fallback that re-derives an
-    /// older root needs `groupSeed`, which only the admin has - so on every other device an epoch
-    /// rotation made every earlier message undecryptable, and the thread rendered as empty. The
-    /// ciphertext was never lost; the key to read it was being thrown away.
-    var previousRoots: [String: String]? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case groupId, groupSeed, groupRootEpoch, blindingKey
-        case currentEpoch, deviceId, msgCounter, selfInviteEpoch, previousRoots
-    }
-
-    init(
-        groupId: String,
-        groupSeed: String?,
-        groupRootEpoch: String,
-        blindingKey: String,
-        currentEpoch: UInt64,
-        deviceId: String,
-        msgCounter: UInt64,
-        selfInviteEpoch: UInt64? = nil,
-        previousRoots: [String: String]? = nil
-    ) {
-        self.groupId = groupId
-        self.groupSeed = groupSeed
-        self.groupRootEpoch = groupRootEpoch
-        self.blindingKey = blindingKey
-        self.currentEpoch = currentEpoch
-        self.deviceId = deviceId
-        self.msgCounter = msgCounter
-        self.selfInviteEpoch = selfInviteEpoch
-        self.previousRoots = previousRoots
-    }
-
-    /// Hand-written so `previousRoots` can NEVER fail the whole bag.
-    ///
-    /// This field has now broken group chat twice. First as a non-optional with a default, which
-    /// Swift's synthesized decoder does not honour - a missing key threw `keyNotFound` and every
-    /// bag written before it existed became unreadable. Then as `[UInt64: String]`, which
-    /// JSONEncoder writes as an alternating `[key, value, ...]` ARRAY rather than an object, so
-    /// bags written by that build failed to decode as a dictionary: "The data couldn't be read
-    /// because it isn't in the correct format", and with the bag unreadable the group showed no
-    /// history, no refresh and no sending.
-    ///
-    /// A key bag is the difference between a readable conversation and a lost one. The rest of it
-    /// is decoded strictly, because a bag missing its root or blinding key is genuinely unusable
-    /// - but this one field degrades to nil instead of taking everything else down with it, and
-    /// it reads BOTH shapes so archived roots written by the intermediate build are recovered
-    /// rather than discarded.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        groupId = try container.decode(String.self, forKey: .groupId)
-        groupSeed = try container.decodeIfPresent(String.self, forKey: .groupSeed)
-        groupRootEpoch = try container.decode(String.self, forKey: .groupRootEpoch)
-        blindingKey = try container.decode(String.self, forKey: .blindingKey)
-        currentEpoch = try container.decode(UInt64.self, forKey: .currentEpoch)
-        deviceId = try container.decode(String.self, forKey: .deviceId)
-        msgCounter = try container.decode(UInt64.self, forKey: .msgCounter)
-        selfInviteEpoch = try container.decodeIfPresent(UInt64.self, forKey: .selfInviteEpoch)
-        previousRoots = Self.decodeEpochRoots(from: container)
-    }
-
-    /// Reads the object form, then the alternating-array form, then gives up quietly.
-    private static func decodeEpochRoots(from container: KeyedDecodingContainer<CodingKeys>) -> [String: String]? {
-        if let object = try? container.decodeIfPresent([String: String].self, forKey: .previousRoots) {
-            return object
-        }
-        if let flat = ((try? container.decodeIfPresent([JSONScalar].self, forKey: .previousRoots)) ?? nil) {
-            var recovered: [String: String] = [:]
-            var index = 0
-            while index + 1 < flat.count {
-                if let epoch = flat[index].number, let root = flat[index + 1].text {
-                    recovered[String(epoch)] = root
-                }
-                index += 2
-            }
-            return recovered.isEmpty ? nil : recovered
-        }
-        return nil
-    }
-
-    /// One element of the legacy alternating array - an epoch or a root, and never both.
-    private struct JSONScalar: Decodable {
-        let number: UInt64?
-        let text: String?
-        init(from decoder: Decoder) throws {
-            let value = try decoder.singleValueContainer()
-            number = try? value.decode(UInt64.self)
-            text = try? value.decode(String.self)
-        }
     }
 }
 
@@ -3624,4 +3472,14 @@ struct GroupMessage: Identifiable, Equatable, Sendable {
     let blockTime: Int64
     let isOutgoing: Bool
     var deliveryStatus: ChatMessage.DeliveryStatus
+}
+
+extension AppSettings {
+    /// What a tap on Tip sends: the Tip In choice, or Kaspa when an instant tip amount is set
+    /// (those are always Kaspa, and were set before Tip In existed); nil = ask each time.
+    var kaPostsTipAssetInUse: KaPostsTipAsset? {
+        if let kaPostsTipAsset { return kaPostsTipAsset }
+        if (kaPostsDefaultTipSompi ?? 0) > 0 || (kaPostsDefaultTipFiat ?? 0) > 0 { return .kaspa }
+        return nil
+    }
 }

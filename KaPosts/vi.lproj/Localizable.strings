@@ -266,7 +266,6 @@
 "None yet" = "Chưa có";
 ".kachat Name" = "Tên .kachat";
 ".kachat names are coming" = "Tên .kachat sắp ra mắt";
-"Get a %@ domain at %@" = "Nhận tên miền %1$@ tại %2$@";
 "No %@ names yet." = "Chưa có tên %@.";
 "Couldn't reach %@. Pull down to try again." = "Không thể kết nối %@. Kéo xuống để thử lại.";
 "Settling" = "Đang xác nhận";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost chưa khả dụng trên Testnet";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "Chưa có trình lập chỉ mục KaPost cho testnet. Tắt Testnet trong Cài đặt > Kết nối để đọc và đăng trên mainnet.";
-"Offer accepted" = "Đã chấp nhận đề nghị";
 "Expired" = "Đã hết hạn";
 "Keep" = "Giữ lại";
 "Cancelled." = "Đã hủy.";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "Chuyển giữa Kaspa và tiền tệ của bạn";
 "Opens this transaction in the block explorer." = "Mở giao dịch này trong trình khám phá khối.";
 "New Public Chat" = "Phòng chat công khai mới";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "Địa chỉ này chỉ dành cho trò chuyện và tên miền. 1 Kaspa đủ cho khoảng 500 lượt tương tác trong ứng dụng. Tên miền có giá từ 35 đến 4.000 Kaspa tùy theo tên.";
 "Unpinned" = "Đã bỏ ghim";
 "Coin Control" = "Kiểm soát coin";
 "Automatic" = "Tự động";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "Đã mở gia hạn: gia hạn trước %@ để giữ tên.";
 "%@ has expired" = "%@ đã hết hạn";
 "Renew it before %@ or anyone can claim it." = "Gia hạn trước %@ nếu không ai cũng có thể lấy.";
-"%@ sold" = "%@ đã bán";
-"%@ KAS was paid to you." = "Bạn đã nhận %@ KAS.";
-"Your listing was bought." = "Tên bạn rao bán đã được mua.";
-"You accepted an offer for it." = "Bạn đã chấp nhận một đề nghị cho tên này.";
-"New offer on %@" = "Đề nghị mới cho %@";
-"%@ KAS offered for it." = "Có người đề nghị %@ KAS cho tên này.";
-"%@ is yours now." = "%@ giờ là của bạn.";
-"Offer on %@ declined" = "Đề nghị cho %@ bị từ chối";
-"The owner declined it. The KAS is back with you." = "Chủ đã từ chối. KAS đã trở về với bạn.";
-"Offer on %@ expired" = "Đề nghị cho %@ đã hết hạn";
-"Nobody accepted it in time. The KAS is back with you." = "Không ai chấp nhận kịp. KAS đã trở về với bạn.";
-"Offer on %@ returned" = "Đề nghị cho %@ đã được trả lại";
-"It can no longer be accepted. The KAS is back with you." = "Không thể chấp nhận nữa. KAS đã trở về với bạn.";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "%@ đã được giải phóng";
-"It expired and was cleared from the registry. Your bond is back with you." = "Tên đã hết hạn và được xóa khỏi sổ đăng ký. Tiền đặt cọc đã trở lại với bạn.";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ không còn là của bạn";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "Địa chỉ này không có khóa công khai.";
 "This address holds funds, so this looks like the right account." = "Địa chỉ này có tiền, nên đây có vẻ là đúng tài khoản.";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "Thẻ này đã có một bản sao lưu. Lưu sẽ thay thế nó sau khi bản mới được xác nhận.";
-"This file is no longer shared" = "Tệp này không còn được chia sẻ";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "iPhone này có tài khoản của bạn nhưng không có khóa. Điều này xảy ra sau khi khôi phục điện thoại từ bản sao lưu, vì khóa của KaPost gắn với thiết bị đã tạo ra chúng. Nhập 12 hoặc 24 từ của bạn để mở khóa tại đây. Tin nhắn của bạn trên thiết bị này được giữ lại.";
 "This is more than the address you're sending from holds." = "Số này nhiều hơn số dư của địa chỉ bạn gửi từ đó.";
 "This is much more than the network needs." = "Mức này cao hơn nhiều so với mạng cần.";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "Mọi thứ ở đây được tải xuống hoặc tạo lại khi cần, nên xóa chỉ tốn một chút dữ liệu và không có gì khác.";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "Mọi thứ bạn đã bật bên dưới đều có thể đến với bạn, kể cả khi ứng dụng đã đóng. Tắt mục này sẽ làm tất cả im lặng.";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "Xuất thông tin ứng dụng/thiết bị, cài đặt kết nối, số tin nhắn cục bộ và nhật ký ứng dụng gần đây thành tệp zip - để khắc phục sự cố cùng bộ phận hỗ trợ. Không bao gồm khóa riêng, 12 hoặc 24 từ, hay nội dung tin nhắn đã giải mã.";
-"FILE" = "TỆP";
 "Failed to edit: %@" = "Chỉnh sửa thất bại: %@";
 "Failed to send voice message: %@" = "Gửi tin nhắn thoại thất bại: %@";
 "Failed to send: %@" = "Gửi thất bại: %@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "Gửi ngay khoản tip mặc định";
 "Sends this message again." = "Gửi lại tin nhắn này.";
 "Share this room" = "Chia sẻ phòng này";
-"Shared File" = "Tệp được chia sẻ";
 "Shares it to your followers as-is." = "Chia sẻ nguyên trạng cho những người theo dõi bạn.";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "Chia sẻ sẽ gửi một liên kết mở phòng này trong KaPost, và một liên kết web cho ai chưa có ứng dụng. Việc ẩn áp dụng theo từng phòng: người bị ẩn ở đây vẫn hiện ở mọi phòng khác.";
 "Show %@ new posts" = "Hiện %@ bài đăng mới";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "Nhấn để mở phòng trò chuyện công khai này.";
 "Tap to open your chat." = "Nhấn để mở cuộc trò chuyện của bạn.";
 "Terms of Use" = "Điều khoản sử dụng";
-"Testnet (testnet-10)" = "Testnet (testnet-10)";
 "The catch" = "Điểm cần lưu ý";
 "The key that spends this address. Never share it." = "Khóa dùng để chi tiêu từ địa chỉ này. Không bao giờ chia sẻ.";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "Những tên duy nhất KaPost tra cứu, ở mọi nơi bạn có thể nhập địa chỉ. Hãy chạy bộ lập chỉ mục tên của riêng bạn và điền địa chỉ của nó ở đây, hoặc để trống để dùng mặc định. Khi bộ lập chỉ mục không trả lời hoặc bị chậm, tên được đọc thẳng từ chuỗi.";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "Hiện chưa thể tạo các địa chỉ này. Hãy quay lại một trang hoặc mở lại màn hình này để thử lại.";
 "When a spending address receives Kaspa from someone else." = "Khi một địa chỉ chi tiêu nhận Kaspa từ người khác.";
 "Your Domains" = "Tên miền của bạn";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "Một địa chỉ mới, chưa từng dùng. Kaspa gửi tới đây vào tài khoản này và tính vào số dư chi tiêu. Dùng cho mọi thứ trừ tên .kachat.";
 "Address hidden. Re-enable it in Address Visibility." = "Đã ẩn địa chỉ. Bật lại trong Hiển thị địa chỉ.";
 "Check off every address you want on the list, in one sitting." = "Đánh dấu mọi địa chỉ bạn muốn có trong danh sách, trong một lần.";
 "Full screen, for scanning with another device." = "Toàn màn hình, để quét bằng thiết bị khác.";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "Mở KaPay để thanh toán.";
 "Puts the full address on the clipboard." = "Sao chép toàn bộ địa chỉ vào bộ nhớ tạm.";
 "Removes it from this list. Re-enable it in Address Visibility." = "Gỡ khỏi danh sách này. Bật lại trong Hiển thị địa chỉ.";
-"Reveals the next unused address in this wallet." = "Hiện địa chỉ chưa dùng tiếp theo của ví này.";
 "This address can't be hidden." = "Không thể ẩn địa chỉ này.";
 "Unlock to view this address's private key" = "Mở khóa để xem khóa riêng của địa chỉ này";
 "Tips From" = "Tiền tip từ";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "Địa chỉ #%@ đã sẵn sàng.";
 "One send wasn't confirmed. Check that address before trying again." = "Một lần gửi chưa được xác nhận. Hãy kiểm tra địa chỉ đó trước khi thử lại.";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "%@ lần gửi chưa được xác nhận. Hãy kiểm tra các địa chỉ đó trước khi thử lại.";
+"%@ Actions" = "Thao tác %@";
+"%@ Address Visibility" = "Hiển thị địa chỉ %@";
+"%@ Balance" = "Số dư %@";
+"%@ History" = "Lịch sử %@";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ chỉ có thể gửi đến địa chỉ Kaspa thông thường, không phải địa chỉ an toàn lượng tử hay địa chỉ script khác.";
+"%@ held with it" = "%@ giữ kèm";
+"%d Addresses" = "%d địa chỉ";
+"%d coins into 1" = "%d đồng thành 1";
+"%d found so far" = "Đã tìm thấy %d";
+"%d hidden: they still count in the total." = "Đã ẩn %d: vẫn được tính vào tổng.";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "Một địa chỉ hoàn toàn mới của bạn, chưa từng dùng hay chia sẻ: khoản thanh toán này không thể gắn với tên bạn.";
+"A quantum-resistant address: its key stays hidden until it spends." = "Địa chỉ chống lượng tử: khóa của nó được giữ kín cho đến khi chi tiêu.";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "Một địa chỉ thường, như Nhận cung cấp. Dùng được cho mọi thứ, kể cả kUSDT.";
+"A spending address of yours: a payment here isn't tied to your name." = "Một địa chỉ chi tiêu của bạn: khoản thanh toán vào đây không gắn với tên bạn.";
+"About %@" = "Về %@";
+"Add %@ More" = "Thêm %@ nữa";
+"Add %@ for Fee and Change Coin" = "Thêm %@ cho phí và đồng tiền thối";
+"Add %@ for the Network Fee" = "Thêm %@ cho phí mạng";
+"Address #%lld is ready." = "Địa chỉ #%lld đã sẵn sàng.";
+"Adds a brand-new regular address of yours to this list." = "Thêm vào danh sách này một địa chỉ thường hoàn toàn mới của bạn.";
+"Amount (%@)" = "Số tiền (%@)";
+"Available: %@" = "Khả dụng: %@";
+"Back to This Address" = "Trả về địa chỉ này";
+"Bridged In" = "Nhận qua cầu nối";
+"Bridged USDT" = "USDT qua cầu nối";
+"Bridged by %@" = "Cầu nối bởi %@";
+"Broadcasting to the Kaspa BlockDAG..." = "Đang phát lên BlockDAG của Kaspa...";
+"Building the transaction…" = "Đang tạo giao dịch…";
+"Check Again" = "Kiểm tra lại";
+"Check off which addresses holding kUSDT are on the list." = "Đánh dấu những địa chỉ có kUSDT hiện trong danh sách.";
+"Checking address #%d" = "Đang kiểm tra địa chỉ #%d";
+"Checking your %@..." = "Đang kiểm tra %@ của bạn…";
+"Coins Combined" = "Đã gộp đồng";
+"Combine Coins" = "Gộp đồng";
+"Combined" = "Đã gộp";
+"Combined Coins" = "Đã gộp đồng";
+"Couldn't check %@ just now: %@ Pull down to try again." = "Chưa kiểm tra được %1$@: %2$@ Kéo xuống để thử lại.";
+"Discover kUSDT Addresses" = "Tìm địa chỉ kUSDT";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "Đừng gửi USDT từ Ethereum, BNB Chain hay sàn giao dịch đến địa chỉ này: sẽ bị mất. Hãy chuyển cầu sang Kaspa trên Trestly trước.";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "Đừng gửi kUSDT đến đây: không giao dịch được từ địa chỉ chống lượng tử. Dùng Nhận để lấy địa chỉ thường.";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "Mỗi đồng %@ giữ %@. Gộp chúng thành một đồng sẽ trả phần KAS dư về địa chỉ này dưới dạng KAS thường, trừ phí mạng. Số %@ của bạn không đổi.";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "Mỗi đồng %@ giữ %@. Số KAS này đi cùng %@ đến người nhận, nên không bị mất.";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "Mỗi đồng kUSDT giữ 1.5 KAS. Số KAS này đi cùng kUSDT khi bạn gửi.";
+"Finds your addresses holding kUSDT." = "Tìm các địa chỉ của bạn đang giữ kUSDT.";
+"Found %d addresses with %@." = "Đã tìm thấy %d địa chỉ có %@.";
+"Generate Non-Quantum Address" = "Tạo địa chỉ không lượng tử";
+"Generate Quantum-Resistant Address" = "Tạo địa chỉ chống lượng tử";
+"Goes With It" = "Đi kèm";
+"Held On" = "Lưu giữ tại";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "Tiền vào tài khoản này và tính vào tổng chi tiêu. Dùng cho mọi thứ trừ tên .kachat.";
+"KAS Held With It" = "KAS đi kèm";
+"KAS Paid From" = "KAS trả từ";
+"KAS for a %@ send" = "KAS cho một lần gửi %@";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "Có thể gửi Kaspa, và kUSDT trên Kaspa, đến đây.";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "Giữ kín khóa cho đến khi chi tiêu. Chỉ dành cho Kaspa: không giao dịch kUSDT từ địa chỉ này được.";
+"Manage %@" = "Quản lý %@";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "Quản lý %1$@ bắt đầu lại chỉ với địa chỉ trò chuyện của bạn. Không mất gì: đưa bất kỳ địa chỉ nào trở lại tại đây, và %2$@ của nó vẫn được tính vào tổng.";
+"Merges its coins into one and gives the extra KAS back." = "Gộp các đồng của nó thành một và trả lại phần KAS dư.";
+"More than your %@." = "Vượt quá số dư %@ của bạn.";
+"Moves Kaspa from this address to your Chatting Address." = "Chuyển Kaspa từ địa chỉ này sang địa chỉ trò chuyện của bạn.";
+"Moves kUSDT from this address to your Chatting Address." = "Chuyển kUSDT từ địa chỉ này sang địa chỉ trò chuyện của bạn.";
+"No %@ Yet" = "Chưa có %@";
+"No %@ activity yet." = "Chưa có hoạt động %@.";
+"No addresses with %@ found." = "Không tìm thấy địa chỉ nào có %@.";
+"No addresses with %@ yet" = "Chưa có địa chỉ nào có %@";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "Chưa xác nhận: mạng không trả lời. Giao dịch vẫn có thể thành công. Thử lại sẽ gửi đúng giao dịch đó, nên không thể trả hai lần.";
+"Not independently audited yet. Hold only what you can afford to lose." = "Chưa được kiểm toán độc lập. Chỉ giữ số tiền bạn chấp nhận mất.";
+"On %d of your addresses" = "Vào %d địa chỉ của bạn";
+"On your %@" = "Vào %@ của bạn";
+"Only %@ on Kaspa, or KAS, can be sent here." = "Chỉ có thể gửi %@ trên Kaspa, hoặc KAS, đến đây.";
+"Only Kaspa can be sent here." = "Chỉ có thể gửi Kaspa đến đây.";
+"Pending" = "Đang chờ";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "Chọn địa chỉ của bạn gửi KAS, vuốt lên, rồi bạn quay lại đây.";
+"Receive %@" = "Nhận %@";
+"Received %@" = "Đã nhận %@";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "Gỡ khỏi danh sách này. Bật lại trong Hiển thị địa chỉ %@.";
+"Sample Data" = "Dữ liệu mẫu";
+"Send %@" = "Gửi %@";
+"Send to Chatting Address" = "Gửi đến địa chỉ trò chuyện";
+"Sends, receives and combines on this phone show here from now on." = "Từ giờ, các lần gửi, nhận và gộp trên điện thoại này sẽ hiện ở đây.";
+"Swapped" = "Đã hoán đổi";
+"Swipe up to Combine" = "Vuốt lên để gộp";
+"Tap to Manage" = "Chạm để quản lý";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "Số tiền đó nằm rải rác trên hơn 3 đồng kUSDT ở địa chỉ này. Tạm thời hãy gửi số nhỏ hơn.";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "KAS trả phí lấy từ cùng địa chỉ, nên lần gửi không liên kết nó với các địa chỉ khác của bạn.";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "KAS bạn gửi chưa xuất hiện ở địa chỉ này. Thường chỉ mất vài giây.";
+"The Trestly API address in Connection Settings isn't a valid https address." = "Địa chỉ API Trestly trong Cài đặt kết nối không phải địa chỉ https hợp lệ.";
+"The built transaction didn't match what you approved, so nothing was sent." = "Giao dịch được tạo không khớp với điều bạn đã duyệt, nên không có gì được gửi.";
+"The transaction couldn't be built. Nothing was sent." = "Không tạo được giao dịch. Không có gì được gửi.";
+"This address doesn't hold that much kUSDT." = "Địa chỉ này không giữ nhiều kUSDT như vậy.";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "Địa chỉ này không có KAS, nên phí mạng được lấy từ KAS đi kèm kUSDT.";
+"This address holds its kUSDT in one coin already." = "Địa chỉ này đã giữ kUSDT trong một đồng.";
+"This address needs a little KAS for the network fee." = "Địa chỉ này cần một ít KAS cho phí mạng.";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "Địa chỉ này cần một ít KAS: phí mạng, cộng 1,5 KAS cho đồng tiền thối của bạn (phần kUSDT bạn giữ lại). 1,5 KAS đó vẫn là của bạn.";
+"This address on the Kaspa explorer." = "Địa chỉ này trên trình khám phá Kaspa.";
+"This address's key isn't available on this phone." = "Khóa của địa chỉ này không có trên điện thoại này.";
+"Total KAS" = "Tổng KAS";
+"Trestly API URL" = "URL API Trestly";
+"Trestly answered HTTP %d." = "Trestly trả lời HTTP %d.";
+"Trestly didn't answer." = "Trestly không trả lời.";
+"Trestly's answer couldn't be read." = "Không đọc được câu trả lời của Trestly.";
+"Up to %d coins combine at a time. Combine again for the rest." = "Mỗi lần gộp tối đa %d đồng. Gộp lại lần nữa cho phần còn lại.";
+"Waiting for your KAS to arrive…" = "Đang chờ KAS của bạn đến…";
+"What are you sending?" = "Bạn đang gửi gì?";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "Địa chỉ trò chuyện của bạn hiển thị tên .kachat và danh tính: ai trả tiền vào đây đều thấy đó là bạn.";
+"kUSDT Address Visibility" = "Hiển thị địa chỉ kUSDT";
+"kUSDT Balances" = "Số dư kUSDT";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT chỉ có thể gửi đến địa chỉ Kaspa thường.";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT là USDT từ Ethereum và BNB Chain, được giữ 1:1 trong kho của Trestly và phát hành dưới dạng token trên Kaspa. kUSDT không do Tether phát hành, và chỉ Trestly mới có thể đổi lại thành USDT.";
+"kUSDT's transaction builder couldn't start." = "Trình tạo giao dịch kUSDT không khởi động được.";
+"kUSDT's transaction builder gave no answer." = "Trình tạo giao dịch kUSDT không trả lời.";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "Trình tạo giao dịch kUSDT không phải bản đã ghim, nên sẽ không chạy.";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "Thiếu mẫu kUSDT của KaPost, nên không kiểm tra được kUSDT.";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "Phí mạng vượt giới hạn an toàn của KaPost. Không có gì được gửi.";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "Nơi KaPost tra những địa chỉ nào của bạn đang giữ kUSDT. Mỗi câu trả lời đều được đối chiếu với mạng Kaspa trước khi hiển thị.";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "Nhận nó vào một địa chỉ mới. Đổi KAS sang kUSDT trong KaPay.";
+"Swap kUSDT in KaPay." = "Đổi kUSDT trong KaPay.";
+"Release to Confirm" = "Thả để xác nhận";
+"The transaction didn't go out." = "Giao dịch chưa được gửi đi.";
+"Fee %@" = "Phí %@";
+"Push" = "Thông báo";
+"Trestly" = "Trestly";
+"Reading names from" = "Đọc tên từ";
+"Not live on this network" = "Chưa hoạt động trên mạng này";
+"The chain" = "Chuỗi";
+"Indexer not usable right now" = "Hiện không dùng được bộ lập chỉ mục";
+"Not set" = "Chưa đặt";
+"Use for chatting and acquiring .kachat domains." = "Dùng để trò chuyện và nhận tên miền .kachat.";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "Hiển thị vì kUSDT";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "Địa chỉ này nằm trong danh sách kUSDT của bạn nên vẫn ở đây. Hãy ẩn nó trong Quản lý kUSDT trước.";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "Tip bằng";
+"Ask Each Time" = "Hỏi mỗi lần";
+"What are you tipping in?" = "Bạn tip bằng gì?";
+"Not counted on the post" = "Không được tính trên bài đăng";
+"Set what Tip sends in Settings > KaPost > Tip In." = "Chọn thứ mà Tip gửi trong Cài đặt > KaPost > Tip bằng.";
+"Tip asks whether to send Kaspa or kUSDT each time." = "Tip hỏi mỗi lần nên gửi Kaspa hay kUSDT.";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "Tip gửi kUSDT đến địa chỉ trò chuyện của người đăng. Tiền tip bằng kUSDT không được tính trên bài đăng.";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "Tải KaPay";
+"None of your addresses holds %@ yet." = "Chưa có địa chỉ nào của bạn giữ %@.";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "Tài khoản đã đổi, nên mục này chưa được gửi.";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "Màn xem lại đã mở khá lâu, nên giao dịch được tạo lại. Chưa có gì được gửi: hãy kiểm tra và vuốt lại.";
+"Balance increased by %@" = "Số dư tăng thêm %@";
+"%d of your addresses" = "%d địa chỉ của bạn";
+"Chatting address %@" = "Địa chỉ trò chuyện %@";
+"Spending address %@" = "Địa chỉ chi tiêu %@";

@@ -644,10 +644,14 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
         }
 
         do {
-            try setPlaybackSession()
             player = try makePlayer(data: data, mimeType: mimeType)
             player?.delegate = self
             player?.prepareToPlay()
+            // One note at a time: the one playing before stops here.
+            guard VoicePlaybackCoordinator.shared.willStart(self, stop: { [weak self] in self?.stop() }) else {
+                stop()
+                return
+            }
             if player?.play() != true {
                 stop()
                 return
@@ -671,6 +675,7 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
         progressTimer = nil
         player?.stop()
         player = nil
+        VoicePlaybackCoordinator.shared.didStop(self)
         if let url = tempPlaybackURL {
             try? FileManager.default.removeItem(at: url)
             tempPlaybackURL = nil
@@ -698,6 +703,7 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
             self.progressTimer?.invalidate()
             self.progressTimer = nil
             self.isPlaying = false
+            VoicePlaybackCoordinator.shared.didStop(self)
             self.progress = 0
             if let url = self.tempPlaybackURL {
                 try? FileManager.default.removeItem(at: url)
@@ -715,12 +721,6 @@ private final class AudioPlaybackHelper: NSObject, ObservableObject, AVAudioPlay
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%02d:%02d", minutes, seconds)
-    }
-
-    private func setPlaybackSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default)
-        try session.setActive(true)
     }
 
     private func makePlayer(data: Data, mimeType: String) throws -> AVAudioPlayer {
@@ -1011,6 +1011,64 @@ struct WebMOpusDecoder {
         let channels: Int
         let preSkip: Int
         let sampleRate: Double
+    }
+
+    /// A voice message's length without decoding it: the samples its Opus packets carry (read from
+    /// each packet's TOC byte), less the pre-skip, which is what `decodeToPCMFile` would report.
+    /// Nil when the file doesn't parse. Cheap enough for a bubble to call as it appears.
+    static func duration(of data: Data) -> TimeInterval? {
+        guard let parsed = try? parseWebM(data), !parsed.packets.isEmpty,
+              let head = try? parseOpusHead(parsed.opusHead) else { return nil }
+        let samples = parsed.packets.reduce(0) { $0 + opusPacketSamples48k($1) }
+        let frames = max(0, samples - head.preSkip)
+        return min(Double(frames) / 48_000.0, ComposerMediaLimits.nextcloudVoiceSeconds)
+    }
+
+    /// A long voice note's length without decoding it, as `decodePartsToPCMFile` would report it:
+    /// each part's packet samples less its pre-skip, cut to its Info Duration, summed. Nil when
+    /// no part parses.
+    static func duration(ofParts parts: [Data]) -> TimeInterval? {
+        var total: TimeInterval = 0
+        var counted = 0
+        for part in parts.prefix(VoicePartTag.maxParts) {
+            guard let parsed = try? parseWebM(part), !parsed.packets.isEmpty,
+                  let head = try? parseOpusHead(parsed.opusHead) else { continue }
+            let samples = parsed.packets.reduce(0) { $0 + opusPacketSamples48k($1) }
+            var seconds = Double(max(0, samples - head.preSkip)) / 48_000.0
+            if let durationMs = parsed.durationMs, durationMs.isFinite, durationMs > 0 {
+                seconds = min(seconds, durationMs / 1000.0)
+            }
+            seconds = min(seconds, VoicePartTag.maxPartSeconds + 1)
+            guard seconds > 0 else { continue }
+            total += seconds
+            counted += 1
+        }
+        return counted > 0 ? total : nil
+    }
+
+    /// How many 48 kHz samples one Opus packet decodes to, from its TOC byte (RFC 6716 3.1).
+    /// 0 for an empty or malformed packet.
+    private static func opusPacketSamples48k(_ packet: Data) -> Int {
+        guard let toc = packet.first else { return 0 }
+        let config = Int(toc >> 3)
+        let frameSize: Int
+        if config < 12 {
+            frameSize = [480, 960, 1920, 2880][config & 3]      // SILK: 10, 20, 40, 60 ms
+        } else if config < 16 {
+            frameSize = [480, 960][config & 1]                  // Hybrid: 10, 20 ms
+        } else {
+            frameSize = [120, 240, 480, 960][config & 3]        // CELT: 2.5, 5, 10, 20 ms
+        }
+        let frames: Int
+        switch toc & 0x03 {
+        case 0: frames = 1
+        case 1, 2: frames = 2
+        default:
+            guard packet.count >= 2 else { return 0 }
+            frames = Int(packet[packet.index(after: packet.startIndex)] & 0x3F)
+        }
+        // A packet holds at most 120 ms.
+        return min(frames * frameSize, 5_760)
     }
 
     private struct ParsedWebM {
@@ -1459,6 +1517,10 @@ struct WebMOpusDecoder {
     static func decodePartsToPCMFile(parts: [Data], waveformBars: Int = 40) throws -> DecodedParts {
         throw WebMOpusDecodeError.unsupportedPlatform
     }
+
+    static func duration(of data: Data) -> TimeInterval? { nil }
+
+    static func duration(ofParts parts: [Data]) -> TimeInterval? { nil }
 }
 
 private struct OggOpusDecoder {
@@ -1533,27 +1595,6 @@ struct ZoomableImageView: UIViewRepresentable {
         }
     }
 }
-
-/// Small, non-interactive board render for the in-chat live game card. The full-screen
-/// `ChessGameView` has its own interactive board renderer (tap-to-select, highlights) rather than
-/// reusing this - different enough concerns (static thumbnail vs. tappable squares) that sharing
-/// the layout code wasn't worth the added complexity.
-private extension View {
-    /// Long-press "View in Explorer" for any chess bubble (invite/live card/log entry) - mirrors
-    /// `messageTextBubble`'s own long-press sheet, scoped down to just the one action since a
-    /// chess envelope's own JSON isn't meaningful to offer as "Copy Message".
-    func chessExplorerMenu(txId: String, settingsViewModel: SettingsViewModel, onRetry: (() -> Void)? = nil) -> some View {
-        messageActions(title: "Chess") {
-            var actions: [MessageAction] = []
-            if let onRetry { actions.append(.retry(onRetry)) }
-            if let url = settingsViewModel.settings.kaspaExplorer.txURL(for: txId) {
-                actions.append(.explorer(url))
-            }
-            return actions
-        }
-    }
-}
-
 
 /// A voice note that was sent through Nextcloud: the same play button, waveform and duration
 /// as an on-chain voice note, fetched from the share's `/download` endpoint on first sight and

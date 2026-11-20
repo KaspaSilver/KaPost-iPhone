@@ -1,6 +1,6 @@
 import Foundation
 
-/// Your Domains' .kachat names and offers, kept on the device per wallet address and network so
+/// Your Domains' .kachat names, kept on the device per wallet address and network so
 /// the list shows at once instead of waiting on the registry every time. They rarely change, so
 /// the screen shows this copy first and the registry read runs behind it, replacing the copy
 /// only when it answers - a new name, a sale, a transfer or a lapse lands then; a failed read
@@ -8,7 +8,6 @@ import Foundation
 enum KachatOwnedNamesCache {
     struct Entry: Codable {
         var names: [KachatNames.NameInfo]
-        var offers: [KachatNames.OfferInfo]
         var savedAt: Date
     }
 
@@ -22,8 +21,8 @@ enum KachatOwnedNamesCache {
         return try? JSONDecoder().decode(Entry.self, from: data)
     }
 
-    static func save(names: [KachatNames.NameInfo], offers: [KachatNames.OfferInfo], for address: String) {
-        let entry = Entry(names: names, offers: offers, savedAt: Date())
+    static func save(names: [KachatNames.NameInfo], for address: String) {
+        let entry = Entry(names: names, savedAt: Date())
         guard let data = try? JSONEncoder().encode(entry) else { return }
         UserDefaults.standard.set(data, forKey: key(address))
     }

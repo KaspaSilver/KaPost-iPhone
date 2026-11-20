@@ -1,10 +1,10 @@
 import SwiftUI
 import UIKit
 
-/// Profile > Wallet, KaChat's and KaPay's Wallet tab in KaPost: the total up top, split into the
-/// chatting and spending addresses, then Send, Receive and Request, then the sections from KaPay's
-/// Wallet tab (`WalletAccountSections`). An address's own actions (Compound UTXOs, its keys) are in
-/// Manage Addresses.
+/// Profile > Wallet, KaChat's and KaPay's Wallet tab in KaPost: the balance card up top (Kaspa's
+/// total, split into the chatting and spending addresses, swiping to a page per token, kUSDT), then
+/// Send, Receive and Request, then the sections from KaPay's Wallet tab (`WalletAccountSections`).
+/// An address's own actions (Compound UTXOs, its keys) are in Manage Addresses.
 /// Pushed, so the dock stays under it.
 struct KaPostWalletView: View {
     @EnvironmentObject private var walletManager: WalletManager
@@ -20,6 +20,14 @@ struct KaPostWalletView: View {
     @State private var showBackupHygiene = false
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
+    /// The balance card's Kaspa page, tapped: Manage Addresses, pushed.
+    @State private var showManageAddresses = false
+    /// A token's page of the balance card, tapped: Manage kUSDT (`TokenManageView`), pushed.
+    @State private var openToken: WalletToken?
+    /// The balance card's page: 0 is Kaspa, then one per token (`TokenWallet.tokens`).
+    @State private var balancePage = 0
+    /// The tallest page, so the swipeable card is as tall as its content.
+    @State private var balanceCardHeight: CGFloat = 196
 
     /// What the screen last showed for an account, so coming back to it (a fresh view each push)
     /// shows it at once, and asks the network again only once it's 30 s old.
@@ -40,26 +48,31 @@ struct KaPostWalletView: View {
                 content(wallet)
             }
         }
-        .refreshable { await refresh(force: true) }
+        .refreshable { await pullToRefresh() }
         .kaPostsFixedTitle("Wallet")
         .background(Color(UIColor.systemBackground).ignoresSafeArea())
         .navigationTitle("Wallet")
         .navigationBarTitleDisplayMode(.inline)
         .kaPostsStatusChrome()
         .toast(message: toastMessage)
+        .navigationDestination(isPresented: $showManageAddresses) {
+            ManageAddressesView()
+        }
+        .navigationDestination(isPresented: Binding(get: { openToken != nil }, set: { if !$0 { openToken = nil } })) {
+            if let openToken { TokenManageView(token: openToken) }
+        }
         .sheet(item: $action) { action in
             switch action {
             case .send:
-                if let wallet = walletManager.currentWallet {
-                    WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi) {
-                        scheduleRefresh()
-                    }
+                // "What are you sending?" first: Kaspa or a token, as in KaPay
+                SendAssetChooser(spendingSompi: spendingTotalSompi) {
+                    scheduleRefresh()
                 }
             case .receive:
-                // A fresh address, never used before, as in KaPay.
+                // A fresh regular address, never used before, as in KaPay (the shared receive
+                // screen draws its own "Receive Kaspa" title).
                 NavigationStack {
                     ReceiveKaspaQRView()
-                        .navigationTitle("Receive Kaspa")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
@@ -103,13 +116,13 @@ struct KaPostWalletView: View {
     }
 
     private func content(_ wallet: Wallet) -> some View {
-        VStack(spacing: 20) {
-            balanceCard(wallet)
+        VStack(spacing: 16) {
+            balancePager(wallet)
             actionsRow
             if backupStatus.isHygieneDue(wallet.publicAddress) {
                 BackupHygieneCard { showBackupHygiene = true }
             }
-            // KaPay's Wallet tab: addresses, domains, contacts and help.
+            // KaPay's Wallet tab: the Chatting Address and Your Domains rows.
             WalletAccountSections(wallet: wallet, onMessage: showToast)
         }
         .padding(.horizontal, 16)
@@ -118,6 +131,42 @@ struct KaPostWalletView: View {
     }
 
     // MARK: - Balance
+
+    /// Total Balance, then a page per token (kUSDT), swiped between, with the "Kaspa"/"kUSDT" pills
+    /// under it (KaPay's design, 2026-11-19). Each card says "Tap to Manage": Total Balance opens
+    /// Manage Addresses, a token's page opens its screen. Plain taps, not NavigationLinks: those
+    /// hold the touch a moment before a swipe can have it.
+    private func balancePager(_ wallet: Wallet) -> some View {
+        let tokens = TokenWallet.shared.tokens
+        return VStack(spacing: 10) {
+            SlidingCardPager(pages: [
+                AnyView(
+                    balanceCard(wallet)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(BalanceCardHeightReader())
+                        .onTapGesture {
+                            Haptics.impact(.light)
+                            showManageAddresses = true
+                        }
+                )
+            ] + tokens.map { token in
+                AnyView(
+                    TokenBalanceCard(token: token)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(BalanceCardHeightReader())
+                        .onTapGesture {
+                            Haptics.impact(.light)
+                            openToken = token
+                        }
+                )
+            }, page: $balancePage)
+            .frame(height: balanceCardHeight)
+            .onPreferenceChange(BalanceCardHeightKey.self) { height in
+                if height > 0 { balanceCardHeight = height }
+            }
+            BalancePagePills(titles: [AppLocalization.string("Kaspa")] + tokens.map(\.symbol), selected: $balancePage)
+        }
+    }
 
     private func balanceCard(_ wallet: Wallet) -> some View {
         let chatting = wallet.balanceSompi
@@ -128,23 +177,20 @@ struct KaPostWalletView: View {
         }()
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Total Balance")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                Button {
-                    guard let total else { return }
-                    UIPasteboard.general.string = KaspaUnit.plain(total)
-                    Haptics.success()
-                    showToast(AppLocalization.string("Balance copied to clipboard."))
-                } label: {
-                    Text(verbatim: total.map(KaspaUnit.amount) ?? "--")
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundColor(.primary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
+                HStack(spacing: 8) {
+                    Text("Total Balance")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer(minLength: 0)
+                    TapToManageLabel()
                 }
-                .buttonStyle(.plain)
+                // the whole card opens Manage Addresses (no copy-the-balance tap, as in KaPay)
+                Text(verbatim: total.map(KaspaUnit.groupedAmount) ?? "--")
+                    .font(.largeTitle.weight(.bold))
+                    .foregroundColor(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 if let fiat = fiatText(total) {
                     Text(verbatim: fiat)
                         .font(.subheadline)
@@ -173,6 +219,7 @@ struct KaPostWalletView: View {
                         .stroke(Color.accentColor.opacity(0.35), lineWidth: 0.8)
                 )
         )
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private func balancePart(title: LocalizedStringKey, sompi: UInt64?) -> some View {
@@ -180,7 +227,7 @@ struct KaPostWalletView: View {
             Text(title)
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Text(verbatim: sompi.map(KaspaUnit.amount) ?? "--")
+            Text(verbatim: sompi.map(KaspaUnit.groupedAmount) ?? "--")
                 .font(.footnote.weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1)
@@ -246,6 +293,18 @@ struct KaPostWalletView: View {
         Self.snapshots[address] = Snapshot(spendingTotalSompi: spendingTotalSompi, loadedAt: Date())
     }
 
+    /// Pull to refresh always scans every address for balances (owner's call, 2026-11-20): the
+    /// known balances first, so the card updates at once, then the full sweeps Discover runs in
+    /// Manage Addresses (Kaspa, from address 1, revealing any it finds past the list) and in Manage
+    /// kUSDT (the Chatting Address and every spending address to 20 past the last), one after the
+    /// other, since both may reveal addresses. Then the totals once more, with what they found.
+    private func pullToRefresh() async {
+        await refresh(force: true)
+        await walletManager.discoverSpendingAddresses()
+        _ = await TokenWallet.shared.discoverHoldings(of: .kusdt) { _, _ in }
+        await refresh(force: true)
+    }
+
     private func loadSpendingTotal() async {
         // A read that finishes after an account switch belongs to the old account: dropped.
         let account = walletManager.currentWallet?.publicAddress
@@ -277,6 +336,20 @@ struct KaPostWalletView: View {
                     toastMessage = nil
                 }
             }
+        }
+    }
+}
+
+/// The balance card pages' heights: the swipeable card takes the tallest.
+private struct BalanceCardHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct BalanceCardHeightReader: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(key: BalanceCardHeightKey.self, value: proxy.size.height)
         }
     }
 }

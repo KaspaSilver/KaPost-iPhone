@@ -1,8 +1,7 @@
 import Foundation
 
 /// The `.kachat` actions KaPost still takes: saving the address profile (`kchat:1:profile:`) and
-/// following that transaction until it shows, plus reading which names and offers this wallet
-/// holds. Claiming, renewing, selling, transferring, buying and offers are KaPay's (owner's
+/// following that transaction until it shows, plus reading which names this wallet holds. Claiming, renewing, selling, transferring, buying and offers are KaPay's (owner's
 /// call, 2026-11-18), so nothing here signs a registry transaction.
 @MainActor
 final class KachatNamesActions: ObservableObject {
@@ -56,66 +55,27 @@ final class KachatNamesActions: ObservableObject {
         return Signer(address: address, privateKey: key, me: me)
     }
 
-    // MARK: - Addresses an earlier build bought with
-
-    private var marketAddressesKey: String? {
-        myAddress.map { "kachat_market_addresses.\($0)" }
-    }
-
-    /// Spending addresses an earlier build bought with (the retired Buy From picker), per wallet:
-    /// Your Domains still lists the names they hold next to the chatting address's. Nothing adds
-    /// to it any more.
-    var marketAddresses: [String] {
-        guard let key = marketAddressesKey else { return [] }
-        return UserDefaults.standard.stringArray(forKey: key) ?? []
-    }
-
     // MARK: - This wallet's keys (IOS-085 / XP-024)
-
-    private var ownKeyCache: (key: String, keys: Set<Data>)?
-
-    /// The chatting key and every revealed spending address's key: a name or an offer on any of
-    /// them is this wallet's, on every device restored from the seed - not only on the one that
-    /// bought it. Worked out once per account and address count, so a view body may ask.
-    var allOwnKeys: Set<Data> {
-        guard let wallet = myAddress else { return [] }
-        let manager = WalletManager.shared
-        let cacheKey = "\(wallet)|\(manager.maxSpendingAddressIndex)|\(marketAddresses.count)"
-        if let cached = ownKeyCache, cached.key == cacheKey { return cached.keys }
-        var keys: Set<Data> = []
-        if let me = myKey { keys.insert(me) }
-        for (_, address) in manager.spendingAddresses(inRange: 0..<(max(0, manager.maxSpendingAddressIndex) + 1)) {
-            if let key = KachatNamesRegistry.keyOf(address) { keys.insert(key) }
-        }
-        for address in marketAddresses {
-            if let key = KachatNamesRegistry.keyOf(address) { keys.insert(key) }
-        }
-        ownKeyCache = (cacheKey, keys)
-        return keys
-    }
 
     private var nameKeysCache: (key: String, at: Date, keys: [Data])?
 
     /// The keys worth asking the registry about (one lookup each): the chatting key, then every
-    /// revealed spending address that has ever been used - a name or an offer needs KAS on its
-    /// address - and the addresses Buy From was set to. The used/unused answers are cached (used
-    /// is for good), so after the first time this costs no requests; the list itself is kept
-    /// ten minutes.
+    /// revealed spending address that has ever been used - a name needs KAS on its address. The
+    /// used/unused answers are cached (used is for good), so after the first time this costs no
+    /// requests; the list itself is kept ten minutes.
     func ownNameKeys() async -> [Data] {
         guard let wallet = myAddress, let me = myKey else { return [] }
         let manager = WalletManager.shared
-        let cacheKey = "\(wallet)|\(manager.maxSpendingAddressIndex)|\(marketAddresses.count)"
+        let cacheKey = "\(wallet)|\(manager.maxSpendingAddressIndex)"
         if let cached = nameKeysCache, cached.key == cacheKey, Date().timeIntervalSince(cached.at) < 600 {
             return cached.keys
         }
         let spending = manager.spendingAddresses(inRange: 0..<(max(0, manager.maxSpendingAddressIndex) + 1))
             .sorted { $0.key < $1.key }.map(\.value)
-        let hints = Set(marketAddresses)
         let chat = ChatService.shared
         var used: [String: Bool] = [:]
         var toProbe: [String] = []
         for address in spending {
-            if hints.contains(address.lowercased()) { used[address] = true; continue }
             if let known = chat.cachedSpendingAddressUsedState(address) { used[address] = known } else { toProbe.append(address) }
         }
         var pending = toProbe.makeIterator()
@@ -135,39 +95,36 @@ final class KachatNamesActions: ObservableObject {
         for address in spending where used[address] == true {
             if let key = KachatNamesRegistry.keyOf(address), !keys.contains(key) { keys.append(key) }
         }
-        for address in marketAddresses {
-            if let key = KachatNamesRegistry.keyOf(address), !keys.contains(key) { keys.append(key) }
-        }
         guard myAddress == wallet else { return [] }
         nameKeysCache = (cacheKey, Date(), keys)
         return keys
     }
 
-    /// Every name (`includeInactive`) or held name, and every open offer, on this wallet's keys
-    /// (`ownNameKeys`), asked a few at a time.
-    func ownNamesAndOffers(heldOnly: Bool) async throws -> (names: [KachatNames.NameInfo], offers: [KachatNames.OfferInfo]) {
-        let keys = await ownNameKeys()
+    /// The names held (active or in grace) on this wallet's keys (`ownNameKeys`). KaPost shows
+    /// names only, so no offers are read.
+    func ownHeldNames() async throws -> [KachatNames.NameInfo] {
+        try await heldNames(of: await ownNameKeys())
+    }
+
+    /// The names held on `keys`, asked a few at a time.
+    func heldNames(of keys: [Data]) async throws -> [KachatNames.NameInfo] {
         let registry = KachatNamesRegistry.shared
         var names: [KachatNames.NameInfo] = []
-        var offers: [KachatNames.OfferInfo] = []
-        let lookUp: @MainActor (Data) async throws -> ([KachatNames.NameInfo], [KachatNames.OfferInfo]) = { key in
-            let n = heldOnly ? try await registry.heldNames(owner: key) : try await registry.names(owner: key, includeInactive: true)
-            let o = try await registry.myOffers(buyer: key)
-            return (n, o)
+        let lookUp: @MainActor (Data) async throws -> [KachatNames.NameInfo] = { key in
+            try await registry.heldNames(owner: key)
         }
-        try await withThrowingTaskGroup(of: ([KachatNames.NameInfo], [KachatNames.OfferInfo]).self) { group in
+        try await withThrowingTaskGroup(of: [KachatNames.NameInfo].self) { group in
             var it = keys.makeIterator()
             for _ in 0..<4 {
                 guard let key = it.next() else { break }
                 group.addTask { try await lookUp(key) }
             }
-            while let (n, o) = try await group.next() {
+            while let n = try await group.next() {
                 names += n
-                offers += o
                 if let key = it.next() { group.addTask { try await lookUp(key) } }
             }
         }
-        return (names, offers)
+        return names
     }
 
     /// The current wallet's x-only key, without touching the private key.

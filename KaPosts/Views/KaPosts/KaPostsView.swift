@@ -238,8 +238,8 @@ struct KaPostsView: View {
         var likedByMe = false
         var dislikedByMe = false
         var repostedByMe = false
-        /// In-memory only, like the posts themselves - bookmark persistence lands with post
-        /// wiring (a bookmark id is meaningless across launches while posts are session-only).
+        /// From `KaPostsBookmarkStore` (per account, kept on the phone) for anything on chain;
+        /// a post not on chain yet keeps it in memory only.
         var bookmarkedByMe = false
         /// On-chain delivery state, mirroring chat messages: pending while the K transaction is
         /// submitting, sent once it's on the network, failed -> Retry. Remote-fetched posts are
@@ -533,6 +533,7 @@ struct KaPostsView: View {
     @ObservedObject private var scheduledStore = KaPostsScheduledStore.shared
     @ObservedObject private var knsService = KNSService.shared
     @ObservedObject private var followStore = KaPostsFollowStore.shared
+    @ObservedObject private var bookmarkStore = KaPostsBookmarkStore.shared
     @ObservedObject private var moderationStore = KaPostsModerationStore.shared
     @EnvironmentObject private var walletManager: WalletManager
     @EnvironmentObject private var settingsViewModel: SettingsViewModel
@@ -749,8 +750,8 @@ struct KaPostsView: View {
             )
         }
         .sheet(item: $tipTarget) { target in
-            KaPostTipSheet(address: target.address, displayName: posterDisplayName(target.address), tip: target.tip,
-                           initialError: target.failure, onTipped: { countTip(target.tip) })
+            KaPostTipFlow(address: target.address, displayName: posterDisplayName(target.address), tip: target.tip,
+                          initialError: target.failure, asset: target.asset, onTipped: { countTip(target.tip) })
         }
         .alert("KaPost", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             if unconfirmedThreadId != nil {
@@ -919,6 +920,18 @@ struct KaPostsView: View {
         }
         .onReceive(KaPostsLiveChainFeed.shared.$posts) { mergeLivePosts($0) }
         .onReceive(KaPostsLiveChainFeed.shared.$amendments) { applyLiveAmendments($0) }
+        // Bookmarks and reposts are shared by every KaPostsView (Feed and Profile): a change
+        // made in one shows on every copy of the post in the others.
+        .onReceive(KaPostsBookmarkStore.shared.changes) { change in
+            mutatePosts(remoteId: change.postId) { $0.bookmarkedByMe = change.isOn }
+        }
+        .onReceive(KaPostsRepostStore.shared.changes) { change in
+            mutatePosts(remoteId: change.postId) { post in
+                guard post.repostedByMe != change.isOn else { return }
+                post.repostedByMe = change.isOn
+                post.reposts = max(0, post.reposts + (change.isOn ? 1 : -1))
+            }
+        }
         // The indexer's back: the real feed, with counts and everything it missed.
         .onReceive(NotificationCenter.default.publisher(for: .kaPostsIndexerAvailabilityChanged)) { _ in
             guard !indexerHealth.isDown else { return }
@@ -1307,6 +1320,9 @@ struct KaPostsView: View {
         guard source == loadedFeedSource else { return }
         let known = Set(remotePosts.compactMap(\.remoteId))
         guard !known.isEmpty else { return }
+        // A refresh, tab switch or account change while this is out bumps the epoch: what this
+        // check found belongs to a feed that is gone.
+        let epoch = feedPage.epoch
 
         do {
             let page: (posts: [KaPostsAPIClient.KPost], pagination: KaPostsAPIClient.KPagination?)
@@ -1317,7 +1333,7 @@ struct KaPostsView: View {
                 page = try await KaPostsAPIClient.shared.fetchGlobalFeed(limit: KaPostsPaginator.pageSize, before: nil)
             }
             // The feed may have been refreshed or switched while this was in flight.
-            guard source == loadedFeedSource, !feedPage.isLoading else { return }
+            guard feedPage.epoch == epoch, source == loadedFeedSource, !feedPage.isLoading else { return }
             let fresh = page.posts
                 .filter { !known.contains($0.id) }
                 .compactMap { Self.mapRemotePost($0) }
@@ -1901,6 +1917,10 @@ struct KaPostsView: View {
         mapped.tips = post.tipsCount ?? 0
         mapped.likedByMe = post.isUpvoted ?? false
         mapped.dislikedByMe = post.isDownvoted ?? false
+        // The indexer says nothing about our own reposts, and bookmarks never leave the phone:
+        // both come from this account's stores, so a refresh doesn't forget them.
+        mapped.repostedByMe = KaPostsRepostStore.shared.contains(post.id)
+        mapped.bookmarkedByMe = KaPostsBookmarkStore.shared.contains(post.id)
         mapped.editedAt = post.editedAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
         if let poll = post.poll {
             let options = poll.decodedOptions
@@ -2256,9 +2276,18 @@ struct KaPostsView: View {
     /// made inside an open thread landed on the twin and the thread kept rendering the
     /// untouched node until it was closed and reopened.
     private func mutatePost(id: UUID, _ transform: (inout DraftPost) -> Void) {
+        mutatePosts(where: { $0.id == id }, transform)
+    }
+
+    /// Every node carrying this transaction id, local cards included (they keep their own ids).
+    private func mutatePosts(remoteId: String, _ transform: (inout DraftPost) -> Void) {
+        mutatePosts(where: { $0.remoteId == remoteId }, transform)
+    }
+
+    private func mutatePosts(where matches: (DraftPost) -> Bool, _ transform: (inout DraftPost) -> Void) {
         func mutate(_ list: inout [DraftPost]) {
             for index in list.indices {
-                if list[index].id == id {
+                if matches(list[index]) {
                     transform(&list[index])
                 }
                 mutate(&list[index].comments)
@@ -2475,8 +2504,7 @@ struct KaPostsView: View {
         return results.first { $0.tld == .kas && $0.address != nil }?.address
     }
 
-    /// The @mention tokens in `text`, each with the ending it was typed with (unlike
-    /// `mentionDomains`, which drops ".kas").
+    /// The @mention tokens in `text`, each with the ending it was typed with (".kas" kept).
     static func mentionTokens(in text: String) -> [String] {
         let ns = text as NSString
         guard let regex = try? NSRegularExpression(
@@ -2489,23 +2517,6 @@ struct KaPostsView: View {
             guard let match = match, match.numberOfRanges >= 3 else { return }
             let token = ns.substring(with: match.range(at: 2)).lowercased()
             if !token.isEmpty, seen.insert(token).inserted { out.append(token) }
-        }
-        return out
-    }
-
-    static func mentionDomains(in text: String) -> [String] {
-        let ns = text as NSString
-        guard let regex = try? NSRegularExpression(
-            pattern: "(^|[\\s(\\[{<\"'])@([a-z0-9-]+(?:\\.[a-z0-9-]+)*)",
-            options: [.caseInsensitive]
-        ) else { return [] }
-        var seen = Set<String>()
-        var out: [String] = []
-        regex.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges >= 3 else { return }
-            var domain = ns.substring(with: match.range(at: 2)).lowercased()
-            if domain.hasSuffix(".kas") { domain = String(domain.dropLast(4)) }
-            if !domain.isEmpty, seen.insert(domain).inserted { out.append(domain) }
         }
         return out
     }
@@ -2615,16 +2626,18 @@ struct KaPostsView: View {
     private func continueThread(localId: UUID) {
         guard threadRemainders[localId] != nil else { return }
         mutatePost(id: localId) { $0.deliveryStatus = .pending }
-        // The account that wrote the thread: after a switch, the rest would be signed by another.
-        let owner = WalletManager.shared.currentWallet?.publicAddress
+        // The account that wrote the thread (its root card's author, so a Retry after a switch
+        // can't sign it as the next account): after a switch, the rest would be signed by another.
+        let owner = findPost(id: localId)?.posterAddress ?? WalletManager.shared.currentWallet?.publicAddress ?? ""
         func stillOwner() -> Bool { WalletManager.shared.currentWallet?.publicAddress == owner }
         Task {
             do {
                 let myPubkey = try? KaPostsAPIClient.shared.requesterPubkey()
                 if let rootText = threadRemainders[localId]?.rootText {
-                    let rootTxId = try await submitWithUtxoRetry {
+                    let rootTxId = try await submitWithUtxoRetry(owner: owner) {
                         try await KaPostsAPIClient.shared.submitPost(
-                            text: rootText, mentionedPubkeys: await mentionedPubkeys(in: rootText)
+                            text: rootText, mentionedPubkeys: await mentionedPubkeys(in: rootText),
+                            expectedOwner: owner
                         )
                     }
                     mutatePost(id: localId) { $0.remoteId = rootTxId }
@@ -2642,10 +2655,10 @@ struct KaPostsView: View {
                         return
                     }
                     let segmentMentions = await mentionedPubkeys(in: segment)
-                    let txId = try await submitWithUtxoRetry {
+                    let txId = try await submitWithUtxoRetry(owner: owner) {
                         try await KaPostsAPIClient.shared.submitReply(
                             text: segment, postId: parentTxId, parentAuthorPubkey: myPubkey,
-                            mentionedPubkeys: segmentMentions
+                            mentionedPubkeys: segmentMentions, expectedOwner: owner
                         )
                     }
                     threadRemainders[localId]?.segments.removeFirst()
@@ -2707,7 +2720,13 @@ struct KaPostsView: View {
     /// and a thread's root is often probed before its second part is indexed. Kept for good, that
     /// answer hid "View thread" until 2,048 newer claims pushed it out. It now expires
     /// (`noThreadAnswerLifetime`), soon for a new post, after a day at most.
+    ///
+    /// One box for the whole app: the Feed and Profile tabs each have a KaPostsView, and each
+    /// with its own box saved its claims over the other's under the same keys.
     private final class ThreadProbeClaims {
+        static let shared = ThreadProbeClaims()
+        private init() {}
+
         private static let claimedKey = "kachat_kaposts_thread_probe_claimed"
         private static let rootsKey = "kachat_kaposts_thread_probe_roots"
         private static let expiryKey = "kachat_kaposts_thread_probe_expiry"
@@ -2722,10 +2741,8 @@ struct KaPostsView: View {
         /// dozens of rows, and each used to fire its request immediately.
         static let maxInFlight = 4
 
-        /// Loaded lazily, on first use: the `@State` initialiser expression that creates this
-        /// box runs every time the KaPostsView struct is built (SwiftUI keeps only the first),
-        /// and reading a couple of thousand ids out of UserDefaults per parent body pass would
-        /// be a cost of its own.
+        /// Loaded lazily, on first use: reading a couple of thousand ids out of UserDefaults
+        /// before any probe needs them would be a cost of its own.
         private lazy var order: [String] = UserDefaults.standard.stringArray(forKey: Self.claimedKey) ?? []
         private lazy var claimedSet: Set<String> = Set(order)
         private lazy var rootsSet: Set<String> = Set(UserDefaults.standard.stringArray(forKey: Self.rootsKey) ?? [])
@@ -2790,9 +2807,8 @@ struct KaPostsView: View {
             }
         }
     }
-    /// @State holding a reference type: the box's identity is stable for the view's lifetime and
-    /// mutating its contents never triggers a body pass.
-    @State private var threadProbeClaims = ThreadProbeClaims()
+    /// The shared box: mutating its contents never triggers a body pass.
+    private var threadProbeClaims: ThreadProbeClaims { .shared }
     /// Confirmed thread roots (post txids) found THIS session - the only probe outcome the UI
     /// shows. Earlier sessions' roots are read from the claims box.
     @State private var threadRootIds: Set<String> = []
@@ -2902,10 +2918,12 @@ struct KaPostsView: View {
 
     /// Retries an action tx a few times with settle delays - rapid sequential sends routinely
     /// hit "UTXO already spent / none spendable" until the node indexes the previous change.
-    /// Never after an unknown outcome: the first one may have landed.
-    private func submitWithUtxoRetry(_ op: () async throws -> String) async throws -> String {
+    /// Never after an unknown outcome: the first one may have landed. Never once the account
+    /// that made the action (`owner`) isn't the open one: the retry would be signed by another.
+    private func submitWithUtxoRetry(owner: String, _ op: () async throws -> String) async throws -> String {
         var attempt = 0
         while true {
+            try KaPostsAPIClient.checkOwner(owner)
             do {
                 return try await op()
             } catch let unknown as SendOutcomeUnknownError {
@@ -2913,6 +2931,8 @@ struct KaPostsView: View {
             } catch KaPostsAPIClient.KaPostsAPIError.tooLong {
                 // The same text never fits on a later try.
                 throw KaPostsAPIClient.KaPostsAPIError.tooLong
+            } catch KaPostsAPIClient.KaPostsAPIError.accountChanged {
+                throw KaPostsAPIClient.KaPostsAPIError.accountChanged
             } catch {
                 attempt += 1
                 guard attempt <= 4 else { throw error }
@@ -2938,7 +2958,9 @@ struct KaPostsView: View {
             // post with the returned txid so it dedupes against the feed once indexed.
             Task {
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitPost(text: text, mentionedPubkeys: await mentionedPubkeys(in: text))
+                    let txId = try await KaPostsAPIClient.shared.submitPost(
+                        text: text, mentionedPubkeys: await mentionedPubkeys(in: text), expectedOwner: myAddress
+                    )
                     heldPosts.release(localId)
                     mutatePost(id: localId) {
                         $0.remoteId = txId
@@ -3000,7 +3022,7 @@ struct KaPostsView: View {
                     // @mentions work in replies exactly as in posts: resolved client-side.
                     let txId = try await KaPostsAPIClient.shared.submitReply(
                         text: trimmed, postId: parentRemoteId, parentAuthorPubkey: parentAuthor,
-                        mentionedPubkeys: await mentionedPubkeys(in: trimmed)
+                        mentionedPubkeys: await mentionedPubkeys(in: trimmed), expectedOwner: myAddress
                     )
                     heldPosts.release(localReplyId)
                     mutatePost(id: localReplyId) {
@@ -3036,7 +3058,7 @@ struct KaPostsView: View {
             Task {
                 defer { holds.endDelete(remoteId) }
                 do {
-                    _ = try await KaPostsAPIClient.shared.submitDelete(postId: remoteId)
+                    _ = try await KaPostsAPIClient.shared.submitDelete(postId: remoteId, expectedOwner: post.posterAddress)
                     withAnimation(.easeInOut(duration: 0.25)) {
                         removePostEverywhere(id: post.id, remoteId: remoteId)
                     }
@@ -3109,7 +3131,8 @@ struct KaPostsView: View {
             Task {
                 do {
                     _ = try await KaPostsAPIClient.shared.submitEdit(
-                        text: trimmed, postId: remoteId, mentionedPubkeys: await mentionedPubkeys(in: trimmed)
+                        text: trimmed, postId: remoteId, mentionedPubkeys: await mentionedPubkeys(in: trimmed),
+                        expectedOwner: post.posterAddress
                     )
                     mutatePost(id: post.id) {
                         $0.deliveryStatus = .sent
@@ -3354,6 +3377,8 @@ struct KaPostsView: View {
 
     private func performLike(_ post: DraftPost) {
         let holds = KaPostsActionHolds.shared
+        // The account the vote is made as: never signed by one signed in meanwhile.
+        let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
         // Held through a cool-down, and another vote went out meanwhile: this one would race it.
         if post.remoteId != nil, post.posterPubkey != nil, holds.isVoting(post.remoteId) { return }
         if !post.likedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
@@ -3361,7 +3386,7 @@ struct KaPostsView: View {
             Task {
                 defer { holds.endVote(remoteId) }
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: true, authorPubkey: author)
+                    let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: true, authorPubkey: author, expectedOwner: owner)
                     showActionToast(AppLocalization.string("Like posted to the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your like")) }
             }
@@ -3370,7 +3395,7 @@ struct KaPostsView: View {
             Task {
                 defer { holds.endVote(remoteId) }
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
+                    let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author, expectedOwner: owner)
                     showActionToast(AppLocalization.string("Like removed on the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your like")) }
             }
@@ -3431,13 +3456,15 @@ struct KaPostsView: View {
 
     private func performDislike(_ post: DraftPost) {
         let holds = KaPostsActionHolds.shared
+        // The account the vote is made as: never signed by one signed in meanwhile.
+        let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
         if post.remoteId != nil, post.posterPubkey != nil, holds.isVoting(post.remoteId) { return }
         if !post.dislikedByMe, let remoteId = post.remoteId, let author = post.posterPubkey {
             holds.beginVote(remoteId)
             Task {
                 defer { holds.endVote(remoteId) }
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: false, authorPubkey: author)
+                    let txId = try await KaPostsAPIClient.shared.submitVote(postId: remoteId, upvote: false, authorPubkey: author, expectedOwner: owner)
                     showActionToast(AppLocalization.string("Dislike posted to the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't post your dislike")) }
             }
@@ -3446,7 +3473,7 @@ struct KaPostsView: View {
             Task {
                 defer { holds.endVote(remoteId) }
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author)
+                    let txId = try await KaPostsAPIClient.shared.submitUnvote(postId: remoteId, authorPubkey: author, expectedOwner: owner)
                     showActionToast(AppLocalization.string("Dislike removed on the network"), txId: txId)
                 } catch { voteFailed(post, error, message: AppLocalization.string("Couldn't remove your dislike")) }
             }
@@ -3480,6 +3507,9 @@ struct KaPostsView: View {
     /// Same 5s undo toast + scheduler behavior as the old confirmation dialog.
     /// `level` says which hierarchy must own the quote composer sheet - see QuoteComposerLevel.
     private func handleRepostAction(_ post: DraftPost, _ action: KaPostRepostAction, level: QuoteComposerLevel = .feed) {
+        // A repost or removal still going out on this post: more taps are ignored, so rapid
+        // taps can't send (and pay for) several.
+        if action != .quote, KaPostsActionHolds.shared.isReposting(post.remoteId) { return }
         switch action {
         case .repost:
             let key = "repost:\(post.id)"
@@ -3596,6 +3626,15 @@ struct KaPostsView: View {
     /// (if any) was already inserted by scheduleQuote and is stamped here by id.
     private func performRepost(target: DraftPost, text: String?, localQuoteId: UUID?) {
         guard let contentId = target.remoteId, let author = target.posterPubkey else { return }
+        // A plain repost is held per post until it ends (`KaPostsActionHolds`); a quote is a
+        // post of its own and isn't.
+        let isPlainRepost = text == nil && localQuoteId == nil
+        let holds = KaPostsActionHolds.shared
+        if isPlainRepost {
+            guard !holds.isReposting(contentId) else { return }
+            holds.beginRepost(contentId)
+        }
+        let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
         mutatePost(id: target.id) { post in
             if !post.repostedByMe {
                 post.repostedByMe = true
@@ -3603,8 +3642,16 @@ struct KaPostsView: View {
             }
         }
         Task {
+            defer { if isPlainRepost { holds.endRepost(contentId) } }
             do {
-                let txId = try await KaPostsAPIClient.shared.submitQuote(text: text, contentId: contentId, quotedAuthorPubkey: author)
+                let txId = try await KaPostsAPIClient.shared.submitQuote(
+                    text: text, contentId: contentId, quotedAuthorPubkey: author, expectedOwner: owner
+                )
+                // Remembered for this account, so a refresh doesn't offer Repost (and a second
+                // payment) again: the indexer doesn't say who reposted.
+                if WalletManager.shared.currentWallet?.publicAddress == owner {
+                    KaPostsRepostStore.shared.set(contentId, true)
+                }
                 showActionToast(AppLocalization.string(text?.isEmpty == false ? "Quote posted to the network" : "Repost posted to the network"), txId: txId)
                 if let localQuoteId {
                     heldPosts.release(localQuoteId)
@@ -3618,7 +3665,13 @@ struct KaPostsView: View {
                     mutatePost(id: localQuoteId) { $0.deliveryStatus = Self.failureStatus(for: error) }
                 }
                 AppLog.log("[KaPosts] Quote/repost submit failed: %@", error.localizedDescription)
-                guard !(error is SendOutcomeUnknownError) else { return }
+                if error is SendOutcomeUnknownError {
+                    // It may have landed: kept as reposted, so it is never offered (and paid) twice.
+                    if WalletManager.shared.currentWallet?.publicAddress == owner {
+                        KaPostsRepostStore.shared.set(contentId, true)
+                    }
+                    return
+                }
                 if !target.repostedByMe {
                     mutatePost(id: target.id) { post in
                         guard post.repostedByMe else { return }
@@ -3637,6 +3690,10 @@ struct KaPostsView: View {
     /// Withdraws our repost of `target` via the fork's unquote counter-action.
     private func performUnrepost(_ target: DraftPost) {
         guard let contentId = target.remoteId else { return }
+        let holds = KaPostsActionHolds.shared
+        guard !holds.isReposting(contentId) else { return }
+        holds.beginRepost(contentId)
+        let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
         mutatePost(id: target.id) { post in
             if post.repostedByMe {
                 post.repostedByMe = false
@@ -3644,12 +3701,22 @@ struct KaPostsView: View {
             }
         }
         Task {
+            defer { holds.endRepost(contentId) }
             do {
-                let txId = try await KaPostsAPIClient.shared.submitUnquote(contentId: contentId)
+                let txId = try await KaPostsAPIClient.shared.submitUnquote(contentId: contentId, expectedOwner: owner)
+                if WalletManager.shared.currentWallet?.publicAddress == owner {
+                    KaPostsRepostStore.shared.set(contentId, false)
+                }
                 showActionToast(AppLocalization.string("Repost removed on the network"), txId: txId)
             } catch {
                 AppLog.log("[KaPosts] Unquote submit failed: %@", error.localizedDescription)
-                guard !(error is SendOutcomeUnknownError) else { return }
+                if error is SendOutcomeUnknownError {
+                    // Shown as removed (the card already is), the same as on screen.
+                    if WalletManager.shared.currentWallet?.publicAddress == owner {
+                        KaPostsRepostStore.shared.set(contentId, false)
+                    }
+                    return
+                }
                 if target.repostedByMe {
                     mutatePost(id: target.id) { post in
                         guard !post.repostedByMe else { return }
@@ -3698,6 +3765,12 @@ struct KaPostsView: View {
             continueThread(localId: post.id)
             return
         }
+        // Sent as the account that wrote it, never whichever is signed in now.
+        let owner = post.posterAddress
+        guard owner == WalletManager.shared.currentWallet?.publicAddress else {
+            actionError = KaPostsAPIClient.KaPostsAPIError.accountChanged.localizedDescription
+            return
+        }
         mutatePost(id: post.id) { $0.deliveryStatus = .pending }
         Task {
             do {
@@ -3707,7 +3780,7 @@ struct KaPostsView: View {
                     guard let contentId = quoted.remoteId, let author = quoted.posterPubkey else {
                         throw KaPostsAPIClient.KaPostsAPIError.badResponse
                     }
-                    txId = try await KaPostsAPIClient.shared.submitQuote(text: post.text, contentId: contentId, quotedAuthorPubkey: author)
+                    txId = try await KaPostsAPIClient.shared.submitQuote(text: post.text, contentId: contentId, quotedAuthorPubkey: author, expectedOwner: owner)
                 } else if let poll = post.poll {
                     // and a failed poll as the poll - its full length again from now, so a late
                     // retry never puts an already-closed poll on chain (IOS-093)
@@ -3716,7 +3789,7 @@ struct KaPostsView: View {
                     mutatePost(id: post.id) { $0.poll?.closesAt = closesAt }
                     txId = try await KaPostsAPIClient.shared.submitPoll(
                         question: post.text, options: poll.options, closesAt: closesAt,
-                        mentionedPubkeys: await mentionedPubkeys(in: post.text)
+                        mentionedPubkeys: await mentionedPubkeys(in: post.text), expectedOwner: owner
                     )
                 } else if let parent = findParent(ofCommentId: post.id) {
                     guard let parentRemoteId = parent.remoteId else {
@@ -3724,18 +3797,18 @@ struct KaPostsView: View {
                     }
                     txId = try await KaPostsAPIClient.shared.submitReply(
                         text: post.text, postId: parentRemoteId, parentAuthorPubkey: parent.posterPubkey,
-                        mentionedPubkeys: await mentionedPubkeys(in: post.text)
+                        mentionedPubkeys: await mentionedPubkeys(in: post.text), expectedOwner: owner
                     )
                 } else if let parentRemoteId = post.parentRemoteId {
                     // A comment whose parent has left memory is still a comment.
                     txId = try await KaPostsAPIClient.shared.submitReply(
                         text: post.text, postId: parentRemoteId, parentAuthorPubkey: post.parentPosterPubkey,
-                        mentionedPubkeys: await mentionedPubkeys(in: post.text)
+                        mentionedPubkeys: await mentionedPubkeys(in: post.text), expectedOwner: owner
                     )
                 } else if sessionReplyIds.contains(post.id) {
                     throw KaPostsAPIClient.KaPostsAPIError.badResponse
                 } else {
-                    txId = try await KaPostsAPIClient.shared.submitPost(text: post.text, mentionedPubkeys: await mentionedPubkeys(in: post.text))
+                    txId = try await KaPostsAPIClient.shared.submitPost(text: post.text, mentionedPubkeys: await mentionedPubkeys(in: post.text), expectedOwner: owner)
                 }
                 heldPosts.release(post.id)
                 mutatePost(id: post.id) {
@@ -3754,27 +3827,37 @@ struct KaPostsView: View {
     /// 02/03 (IOS-099). With none of those (no post names their key yet) the follow waits on this
     /// phone and goes on chain at a later sync, once one does (`KaPostsFollowStore.syncFromChain`).
     private func toggleFollowSubmitting(address: String, pubkey: String?) {
-        guard address != WalletManager.shared.currentWallet?.publicAddress else { return }
+        guard let owner = WalletManager.shared.currentWallet?.publicAddress, address != owner else { return }
+        // A follow or unfollow of this person still going out: more taps are ignored, so rapid
+        // taps can't send several transactions.
+        let holds = KaPostsActionHolds.shared
+        guard !holds.isFollowSubmitting(address) else { return }
+        holds.beginFollow(address)
         let willFollow = !followStore.isFollowing(address)
         followStore.toggle(address)
         Task {
+            defer { holds.endFollow(address) }
             var key = pubkey ?? followStore.chainKeys[address]
             if key == nil {
                 key = await Self.resolveKaPostsPubkey(address: address)
                 // Tapped again while the key was looked up: that tap sends its own.
                 guard followStore.isFollowing(address) == willFollow else { return }
             }
+            // Signed in as someone else meanwhile: the follow store is theirs now, and this
+            // follow must not be signed by them.
+            guard WalletManager.shared.currentWallet?.publicAddress == owner else { return }
             guard let pubkey = key else {
                 followStore.setAwaitingKey(address, following: willFollow)
                 return
             }
             followStore.setAwaitingKey(address, following: false)
             do {
-                let txId = try await KaPostsAPIClient.shared.submitFollow(willFollow, followedPubkey: pubkey)
+                let txId = try await KaPostsAPIClient.shared.submitFollow(willFollow, followedPubkey: pubkey, expectedOwner: owner)
                 showActionToast(AppLocalization.string(willFollow ? "Follow posted to the network" : "Unfollow posted to the network"), txId: txId)
             } catch {
                 AppLog.log("[KaPosts] Follow submit failed: %@", error.localizedDescription)
                 guard !(error is SendOutcomeUnknownError) else { return }
+                guard WalletManager.shared.currentWallet?.publicAddress == owner else { return }
                 if followStore.isFollowing(address) == willFollow { followStore.toggle(address) }
                 let action = AppLocalization.string(willFollow ? "Couldn't follow" : "Couldn't unfollow")
                 showActionToast(Self.failureText(action, error), txId: "", isFailure: true)
@@ -3782,53 +3865,107 @@ struct KaPostsView: View {
         }
     }
 
+    /// On chain, the bookmark is kept per account (`KaPostsBookmarkStore`); its change
+    /// subscription sets the flag on every copy, in every KaPostsView. A post not on chain yet
+    /// has no id to keep, so its bookmark is in memory only.
     private func toggleBookmark(_ post: DraftPost) {
-        mutatePost(id: post.id) { target in
-            target.bookmarkedByMe.toggle()
+        guard let remoteId = post.remoteId, !remoteId.isEmpty else {
+            mutatePost(id: post.id) { $0.bookmarkedByMe.toggle() }
+            return
         }
+        bookmarkStore.set(remoteId, !bookmarkStore.contains(remoteId))
     }
 
     /// Everything bookmarked, posts and comments alike, newest first - feeds the side menu's
-    /// Bookmarks screen.
+    /// Bookmarks screen. Saved bookmarks come from wherever the post is loaded; ones that
+    /// aren't are fetched by id when the screen opens (`loadMissingBookmarks`).
     private var bookmarkedPosts: [DraftPost] {
-        let all = posts + posts.flatMap { $0.comments }
-            + remotePosts + remotePosts.flatMap { $0.comments }
-        return all.filter { $0.bookmarkedByMe && !moderationStore.isHidden($0.posterAddress) }
+        let ids = bookmarkStore.ids
+        let loaded = loadedPosts(withRemoteIds: Set(ids))
+        var result = ids.compactMap { id -> DraftPost? in
+            guard var post = loaded[id] else { return nil }
+            post.bookmarkedByMe = true
+            return post
+        }
+        let unsent = posts + posts.flatMap { $0.comments }
+        result += unsent.filter { $0.remoteId == nil && $0.bookmarkedByMe }
+        return result.filter { !moderationStore.isHidden($0.posterAddress) }
             .sorted { $0.timestamp > $1.timestamp }
     }
 
-    /// Shared-link landing: resolve the txid to a loaded post (refreshing the feed once if
-    /// needed) and open its comment thread.
+    /// The first loaded copy of each post in `ids`, from every list and comment tree, in one walk.
+    private func loadedPosts(withRemoteIds ids: Set<String>) -> [String: DraftPost] {
+        guard !ids.isEmpty else { return [:] }
+        var found: [String: DraftPost] = [:]
+        func walk(_ list: [DraftPost]) {
+            for post in list {
+                if let id = post.remoteId, ids.contains(id), found[id] == nil { found[id] = post }
+                walk(post.comments)
+            }
+        }
+        walk(posts)
+        walk(remotePosts)
+        walk(posterProfilePosts)
+        walk(posterProfileReplies)
+        walk(myProfileRemotePosts)
+        walk(myProfileRemoteReplies)
+        walk(chainResolvedPosts)
+        for chain in threadChains.values { walk(chain) }
+        return found
+    }
+
+    @State private var isLoadingBookmarks = false
+
+    /// Bookmarked posts no list has loaded: each fetched by id (indexer, then chain), newest
+    /// bookmark first, into `chainResolvedPosts`, where the Bookmarks screen finds them.
+    private func loadMissingBookmarks() async {
+        guard !isLoadingBookmarks else { return }
+        let ids = bookmarkStore.ids
+        let loaded = loadedPosts(withRemoteIds: Set(ids))
+        let missing = ids.filter { loaded[$0] == nil }.prefix(60)
+        guard !missing.isEmpty else { return }
+        isLoadingBookmarks = true
+        defer { isLoadingBookmarks = false }
+        let wallet = WalletManager.shared.currentWallet?.publicAddress
+        var fetched: [DraftPost] = []
+        for id in missing {
+            guard !Task.isCancelled, WalletManager.shared.currentWallet?.publicAddress == wallet else { break }
+            guard findPost(byRemoteId: id) == nil else { continue }
+            var post = await indexerPost(txId: id)
+            if post == nil { post = await chainPost(txId: id) }
+            if let post { fetched.append(post) }
+        }
+        resolveIdentities(for: fetched)
+    }
+
+    /// Shared-link / push landing: resolve the txid and open its comment thread. Cheapest first:
+    /// what is already loaded, then the indexer's single-post lookup (one request, with this
+    /// viewer's vote flags), then the post's own transaction. The feed is never reset for this -
+    /// that threw away every page the reader had scrolled in.
     private func openSharedPost(txId: String) async {
         if let post = findPost(byRemoteId: txId) {
             await openResolvedPost(post)
             return
         }
-        // Only re-pull page one when there is nothing loaded or it has gone stale: a reset
-        // throws away every page the reader has scrolled in, and a fresh window was already
-        // searched above. The single-id lookup further down covers what a re-fetch would.
-        if remotePosts.isEmpty || !FeedLoadGates.isFresh(loadGates.feedLoadedAt) {
-            await loadFeed()
-            if let post = findPost(byRemoteId: txId) {
-                await openResolvedPost(post)
-                return
-            }
+        if let post = await indexerPost(txId: txId) {
+            await openResolvedPost(post)
+            return
         }
-        // Notification/deep-link targets are usually YOUR OWN content, which lives outside
-        // the feed window - pull own posts+replies from the indexer and look again. (A true
-        // get-post endpoint on the fork would make this exact; flagged in the handoff doc.)
-        // Replies come from get-replies?user= - the indexer's get-posts never returns them.
-        if await reloadMyProfileIfStale() {
-            if let post = findPost(byRemoteId: txId) {
-                await openResolvedPost(post)
-                return
-            }
+        // The chain has every post that ever existed: this covers the window where a post is
+        // on chain but the indexer has not caught up, and the indexer being down.
+        if let post = await chainPost(txId: txId) {
+            await openResolvedPost(post)
+            return
         }
-        // Still unresolved: the txid is usually a notification's ACTING content — someone
-        // ELSE's reply/quote/mentioning post, which neither the feed window nor the own-
-        // content fetch above ever returns. The notification stream knows who wrote it,
-        // so pull THAT author's posts+replies and look once more (falling back to the
-        // parent conversation when the acting content itself still can't be loaded).
+        // Later fallbacks, for push targets the lookups above missed. Notification targets are
+        // usually YOUR OWN content: pull own posts+replies (only when stale) and look again.
+        if await reloadMyProfileIfStale(), let post = findPost(byRemoteId: txId) {
+            await openResolvedPost(post)
+            return
+        }
+        // The txid may be a notification's ACTING content - someone else's reply/quote/mention.
+        // The stream knows who wrote it: pull that author's posts+replies, or fall back to the
+        // parent conversation when the acting content itself still can't be loaded.
         if let n = try? await KaPostsAPIClient.shared.fetchNotifications(limit: 100).notifications
             .first(where: { $0.id == txId }) {
             await reloadPosterProfileIfStale(pubkey: n.userPublicKey)
@@ -3838,24 +3975,14 @@ struct KaPostsView: View {
                 await openResolvedPost(post, parentRemoteIdHint: n.contentType == "reply" ? n.contentId : nil)
                 return
             }
-            if let parentId = n.contentId, !parentId.isEmpty, let parent = findPost(byRemoteId: parentId) {
-                openDetail(parent)
-                return
+            if let parentId = n.contentId, !parentId.isEmpty {
+                var parent = findPost(byRemoteId: parentId)
+                if parent == nil { parent = await indexerPost(txId: parentId) }
+                if let parent {
+                    openDetail(parent)
+                    return
+                }
             }
-        }
-        // The indexer answers a single id now, which is what every search above was working
-        // around: one request, instead of re-fetching feeds and profiles hoping the post falls
-        // inside one of them.
-        if let post = await indexerPost(txId: txId) {
-            await openResolvedPost(post)
-            return
-        }
-        // Last resort, and the one that always works: read the post off the transaction it was
-        // published as. Still needed for the window where a post exists on chain but the indexer
-        // has not caught up - the chain has every post that ever existed.
-        if let post = await chainPost(txId: txId) {
-            await openResolvedPost(post)
-            return
         }
         showActionToast(AppLocalization.string("Post not found - it may be older than the current feed"), txId: txId)
     }
@@ -3966,6 +4093,9 @@ struct KaPostsView: View {
             post.dislikedByMe = engagement.dislikedByMe
             post.repostedByMe = engagement.repostedByMe
         }
+        // A repost made here the indexer hasn't counted yet still counts.
+        if KaPostsRepostStore.shared.contains(txId) { post.repostedByMe = true }
+        post.bookmarkedByMe = KaPostsBookmarkStore.shared.contains(txId)
         // Held so the thread sheet can resolve the id it is about to be handed - see
         // `chainResolvedPosts`. Replacing an existing copy keeps the stable id pointing at one
         // node, so a like made in the thread does not land on a stale twin.
@@ -4661,6 +4791,7 @@ struct KaPostsView: View {
             }
             .task {
                 guard let pubkey = try? KaPostsAPIClient.shared.requesterPubkey() else { return }
+                let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
                 // Coming back to the tab keeps the pages already scrolled in, as on the Feed:
                 // page one is re-pulled only when nothing is loaded or it has gone stale.
                 guard myProfileRemotePosts.isEmpty || !isMyProfileFresh else { return }
@@ -4677,7 +4808,7 @@ struct KaPostsView: View {
                         if !selfUnfollowScrubbed {
                             selfUnfollowScrubbed = true
                             Task {
-                                _ = try? await KaPostsAPIClient.shared.submitFollow(false, followedPubkey: pubkey)
+                                _ = try? await KaPostsAPIClient.shared.submitFollow(false, followedPubkey: pubkey, expectedOwner: owner)
                                 AppLog.log("[KaPosts] Submitted self-unfollow scrub")
                             }
                         }
@@ -4953,6 +5084,8 @@ struct KaPostsView: View {
         var tip: KaPostTip? = nil
         /// Why the instant tip that opened this didn't go out, shown in the sheet.
         var failure: String? = nil
+        /// What the tip is in (Tip In): nil asks Kaspa or kUSDT first.
+        var asset: KaPostsTipAsset? = .kaspa
         var id: String { address }
     }
 
@@ -4973,6 +5106,14 @@ struct KaPostsView: View {
         // A tip names the post it is for, so the post counts it (KAPOSTS_INDEXER.md 5.11).
         let target = post.remoteId.flatMap { id in post.posterPubkey.map { KaPostTip(postId: id, authorPubkey: $0) } }
         let settings = settingsViewModel.settings
+        // Tip In (KaPost > Settings): kUSDT opens its send, Ask Each Time asks first. Only a
+        // Kaspa tip can be instant.
+        switch settings.kaPostsTipAssetInUse {
+        case .kaspa: break
+        case .kusdt, nil:
+            tipTarget = TipTarget(address: address, tip: target, asset: settings.kaPostsTipAssetInUse)
+            return
+        }
         // A default tip set in a currency sends what it is worth in KAS right now.
         if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
             let currency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
@@ -5052,7 +5193,7 @@ struct KaPostsView: View {
                 guard let txId else {
                     // Put off until the coins confirm: the retry timer sends it. Not sent yet, so
                     // not counted, and no amount screen, which would invite a second tip. Held
-                    // until that payment goes out or fails, since its retries have no limit.
+                    // until that payment goes out or fails (ChatService gives up after 30 minutes).
                     holds.holdDeferred(postId, contactAddress: recipient.address, since: startedAt,
                                        message: SendDeferredError.message)
                     showActionToast(SendDeferredError.message, txId: "")
@@ -5353,12 +5494,13 @@ struct KaPostsView: View {
         guard let poll = post.poll, !poll.isClosed, let remoteId = post.remoteId,
               option < poll.options.count else { return }
         let key = "pollvote:\(post.id)"
+        let owner = WalletManager.shared.currentWallet?.publicAddress ?? ""
         showUndoToast(key: key, postId: post.id, label: "Voting")
         scheduler.schedule(key: key) {
             clearUndoToast(key: key)
             Task {
                 do {
-                    let txId = try await KaPostsAPIClient.shared.submitPollVote(pollId: remoteId, optionIndex: option)
+                    let txId = try await KaPostsAPIClient.shared.submitPollVote(pollId: remoteId, optionIndex: option, expectedOwner: owner)
                     mutatePost(id: post.id) { target in
                         guard var current = target.poll else { return }
                         if let previous = current.myVote, previous < current.counts.count {
@@ -5400,7 +5542,7 @@ struct KaPostsView: View {
                 do {
                     let txId = try await KaPostsAPIClient.shared.submitPoll(
                         question: question, options: options, closesAt: closesAt,
-                        mentionedPubkeys: await mentionedPubkeys(in: question)
+                        mentionedPubkeys: await mentionedPubkeys(in: question), expectedOwner: myAddress
                     )
                     heldPosts.release(localId)
                     mutatePost(id: localId) {
@@ -5603,9 +5745,13 @@ struct KaPostsView: View {
     }
 
     private var bookmarksSheet: some View {
-        NavigationStack {
+        let bookmarkedPosts = self.bookmarkedPosts
+        return NavigationStack {
             Group {
-                if bookmarkedPosts.isEmpty {
+                if bookmarkedPosts.isEmpty && isLoadingBookmarks {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if bookmarkedPosts.isEmpty {
                     VStack(spacing: 14) {
                         Image(systemName: "bookmark")
                             .font(.scaled(size: 44))
@@ -5662,6 +5808,7 @@ struct KaPostsView: View {
                     }
                 }
             }
+            .task { await loadMissingBookmarks() }
             .navigationTitle("Bookmarks")
             .navigationBarTitleDisplayMode(.inline)
             .kaPostsStatusChrome()
@@ -7259,16 +7406,6 @@ private struct KaPostCellView: View {
         .buttonStyle(.plain)
     }
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
-
-    private func relativeTime(_ date: Date) -> String {
-        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
-    }
-
     private static let fullTimestampFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = .autoupdatingCurrent
@@ -7409,8 +7546,8 @@ final class KaPostsTipHolds {
 
     private enum Hold {
         case timed(until: Date, message: String)
-        /// Put off until its coins confirm (`sendPayment` returned nil). ChatService retries it
-        /// with no limit, so the post stays held while that payment is still waiting in the chat:
+        /// Put off until its coins confirm (`sendPayment` returned nil). ChatService retries it for
+        /// up to 30 minutes, so the post stays held while that payment is still waiting in the chat:
         /// it ends once the payment goes out or fails, or the account changes (which drops the
         /// retry).
         case deferred(paymentId: UUID, contactAddress: String, owner: String?, message: String)
@@ -7512,6 +7649,157 @@ final class KaPostsActionHolds {
     }
     func beginDelete(_ remoteId: String) { deleting.insert(remoteId) }
     func endDelete(_ remoteId: String) { deleting.remove(remoteId) }
+
+    /// A follow or unfollow going out, by the followed address: more Follow taps on that
+    /// person are ignored until it ends, so rapid taps can't send several transactions.
+    private var following: Set<String> = []
+    func isFollowSubmitting(_ address: String) -> Bool { following.contains(address.lowercased()) }
+    func beginFollow(_ address: String) { following.insert(address.lowercased()) }
+    func endFollow(_ address: String) { following.remove(address.lowercased()) }
+
+    /// A plain repost or Remove repost going out, by post id: same rule.
+    private var reposting: Set<String> = []
+    func isReposting(_ remoteId: String?) -> Bool {
+        guard let remoteId else { return false }
+        return reposting.contains(remoteId)
+    }
+    func beginRepost(_ remoteId: String) { reposting.insert(remoteId) }
+    func endRepost(_ remoteId: String) { reposting.remove(remoteId) }
+}
+
+/// Tip, by Tip In (KaPost > Settings): Kaspa opens `KaPostTipSheet`; kUSDT opens the kUSDT send
+/// (`TokenSendView`) to the poster's chatting address; Ask Each Time (nil) asks "What are you
+/// tipping in?" first, as the Wallet's Send asks what you are sending. A kUSDT tip is a plain
+/// kUSDT send and isn't counted on the post: Trestly's builder sets the transaction's payload,
+/// so it can't carry KaPost's tip record (KAPOSTS_INDEXER.md 5.11).
+private struct KaPostTipFlow: View {
+    let address: String
+    let displayName: String
+    var tip: KaPostTip? = nil
+    var initialError: String? = nil
+    var onTipped: (() -> Void)? = nil
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var walletManager = WalletManager.shared
+    @ObservedObject private var tokens = TokenWallet.shared
+    @State private var choice: KaPostsTipAsset?
+
+    init(address: String, displayName: String, tip: KaPostTip?, initialError: String?,
+         asset: KaPostsTipAsset?, onTipped: (() -> Void)?) {
+        self.address = address
+        self.displayName = displayName
+        self.tip = tip
+        self.initialError = initialError
+        self.onTipped = onTipped
+        _choice = State(initialValue: asset)
+    }
+
+    var body: some View {
+        ZStack {
+            switch choice {
+            case .none:
+                chooser.transition(.asymmetric(insertion: .move(edge: .leading), removal: .move(edge: .leading)))
+            case .kaspa:
+                KaPostTipSheet(address: address, displayName: displayName, tip: tip,
+                               initialError: initialError, onTipped: onTipped)
+                    .transition(.move(edge: .trailing))
+            case .kusdt:
+                TokenSendView(token: .kusdt, tipRecipient: address, name: displayName)
+                    .environmentObject(walletManager)
+                    .transition(.move(edge: .trailing))
+            }
+        }
+    }
+
+    private var chooser: some View {
+        VStack(spacing: 0) {
+            SendStepHeader(titleText: Text("Tip"))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    SendStepQuestion(text: "What are you tipping in?")
+                    option(
+                        icon: AnyView(
+                            Image("KaspaLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 44, height: 44)
+                                .clipShape(Circle())
+                        ),
+                        title: Text(verbatim: "Kaspa"),
+                        subtitle: KaspaUnit.symbol,
+                        amount: walletManager.currentWallet?.balanceSompi.map(KaspaUnit.amount)
+                    ) { pick(.kaspa) }
+                    option(
+                        icon: AnyView(TokenIcon(token: .kusdt, size: 44)),
+                        title: Text(verbatim: WalletToken.kusdt.symbol),
+                        subtitle: AppLocalization.string("Not counted on the post"),
+                        amount: tokens.balance(of: .kusdt).map { TokenAmount.amount($0, token: .kusdt) }
+                    ) { pick(.kusdt) }
+                    Text("Set what Tip sends in Settings > KaPost > Tip In.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+        }
+        .background(Color(.systemBackground))
+        .task { await tokens.refreshIfStale() }
+        .safeAreaInset(edge: .bottom) {
+            Button { dismiss() } label: {
+                Text("Cancel")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .background(Capsule().fill(.regularMaterial))
+                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+    }
+
+    private func pick(_ next: KaPostsTipAsset) {
+        Haptics.impact(.light)
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { choice = next }
+    }
+
+    private func option(icon: AnyView, title: Text, subtitle: String, amount: String?,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                icon
+                VStack(alignment: .leading, spacing: 3) {
+                    title
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text(verbatim: subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 8)
+                Text(verbatim: amount ?? "--")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(sendKaspaGlass(cornerRadius: 20))
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 /// Quick tip sheet: the same steps as every send (SendKaspaComponents), without To since the
@@ -9273,6 +9561,8 @@ final class KaPostsFollowStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "kachat_kaposts_following_pending_\(normalized)")
         KaPostsTipSourceStore.removeAllData(forWalletAddress: walletAddress)
         KaPostsHeldPostStore.removeAllData(forWalletAddress: walletAddress)
+        KaPostsBookmarkStore.shared.removeAllData(forWalletAddress: walletAddress)
+        KaPostsRepostStore.shared.removeAllData(forWalletAddress: walletAddress)
         if shared.walletAddress == normalized { shared.following = [] }
     }
 

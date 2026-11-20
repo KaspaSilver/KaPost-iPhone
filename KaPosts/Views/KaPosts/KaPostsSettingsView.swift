@@ -24,6 +24,8 @@ struct KaPostsSettingsView: View {
     @State private var tipInFiat = false
     @State private var tipCurrency: AppCurrency = .usDollar
     @State private var cooldownEnabled = false
+    /// Tip In: Kaspa, kUSDT, or nil to ask each time.
+    @State private var tipAsset: KaPostsTipAsset?
 
     /// What the amount starts at when the switch goes on: the smallest tip the network takes.
     private static var fallbackTipKas: Double { Double(instantTipMinimumSompi) / 100_000_000.0 }
@@ -73,6 +75,25 @@ struct KaPostsSettingsView: View {
                 }
 
                 Section {
+                    Picker("Tip In", selection: $tipAsset) {
+                        Text("Ask Each Time").tag(KaPostsTipAsset?.none)
+                        Text(verbatim: "Kaspa").tag(KaPostsTipAsset?.some(.kaspa))
+                        Text(verbatim: WalletToken.kusdt.symbol).tag(KaPostsTipAsset?.some(.kusdt))
+                    }
+                    .onChange(of: tipAsset) { asset in
+                        guard asset != settingsViewModel.settings.kaPostsTipAssetInUse else { return }
+                        Haptics.selection()
+                        settingsViewModel.settings.kaPostsTipAsset = asset
+                        // an instant tip is always Kaspa: Ask Each Time and kUSDT turn it off
+                        if asset != .kaspa {
+                            instantTipEnabled = false
+                            settingsViewModel.settings.kaPostsDefaultTipSompi = nil
+                            settingsViewModel.settings.kaPostsDefaultTipFiat = nil
+                            settingsViewModel.settings.kaPostsDefaultTipFiatCurrency = nil
+                        }
+                        settingsViewModel.saveSettings()
+                    }
+                    if tipAsset == .kaspa {
                     Toggle("Send a default tip instantly", isOn: $instantTipEnabled)
                         .onChange(of: instantTipEnabled) { enabled in
                             if enabled {
@@ -161,6 +182,8 @@ struct KaPostsSettingsView: View {
                         // a full-width line under the amount, not one starting at the unit button
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                     }
+                    }
+                    if tipAsset != .kusdt {
                     NavigationLink {
                         TipSourcePage()
                     } label: {
@@ -172,10 +195,15 @@ struct KaPostsSettingsView: View {
                                 .lineLimit(1)
                         }
                     }
+                    }
                 } header: {
                     Text("Tipping")
                 } footer: {
-                    if instantTipEnabled {
+                    if tipAsset == nil {
+                        Text("Tip asks whether to send Kaspa or kUSDT each time.")
+                    } else if tipAsset == .kusdt {
+                        Text("Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post.")
+                    } else if instantTipEnabled {
                         VStack(alignment: .leading, spacing: 6) {
                             if tipBelowMinimum {
                                 Text(verbatim: String(format: AppLocalization.string("The smallest tip the network takes is %@."),
@@ -193,6 +221,7 @@ struct KaPostsSettingsView: View {
                 cooldownEnabled = settingsViewModel.settings.kaPostsCooldownEnabled
                 let settings = settingsViewModel.settings
                 tipCurrency = settings.currency
+                tipAsset = settings.kaPostsTipAssetInUse
                 if settings.kaPostsDefaultTipFiat ?? 0 > 0 || settings.kaPostsDefaultTipSompi ?? 0 > 0 {
                     instantTipEnabled = true
                     showSavedTip()
@@ -260,7 +289,7 @@ struct KaPostsSettingsView: View {
         let price = tipPrice(in: currency)
         var newText = defaultTipText
         if let amount = typedAmount, amount > 0, let price, price > 0 {
-            newText = toFiat ? Self.fiatText(amount * price) : Self.trimmed(amount / price)
+            newText = toFiat ? Self.fiatText(amount * price, currency: currency) : Self.trimmed(amount / price)
         }
         tipCurrency = currency
         tipInFiat = toFiat
@@ -278,7 +307,7 @@ struct KaPostsSettingsView: View {
         if let fiat = settings.kaPostsDefaultTipFiat, fiat > 0 {
             tipInFiat = true
             tipCurrency = settings.kaPostsDefaultTipFiatCurrency ?? settings.currency
-            defaultTipText = Self.fiatText(fiat)
+            defaultTipText = Self.fiatText(fiat, currency: tipCurrency)
         } else if let sompi = settings.kaPostsDefaultTipSompi, sompi > 0 {
             tipInFiat = false
             defaultTipText = Self.trimmed(Double(sompi) / 100_000_000.0)
@@ -320,9 +349,10 @@ struct KaPostsSettingsView: View {
         settingsViewModel.saveSettings()
     }
 
-    /// A currency amount for the field: two decimals, trimmed ("1", "1.5", "0.25").
-    private static func fiatText(_ value: Double) -> String {
-        var text = String(format: "%.2f", value)
+    /// A currency amount for the field: the currency's decimals (8 for Bitcoin, else 2), trimmed
+    /// ("1", "1.5", "0.25").
+    private static func fiatText(_ value: Double, currency: AppCurrency) -> String {
+        var text = formatCurrencyAmountPlain(value, currency: currency)
         while text.hasSuffix("0") { text.removeLast() }
         if text.hasSuffix(".") { text.removeLast() }
         return text

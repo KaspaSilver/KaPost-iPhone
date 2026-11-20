@@ -66,9 +66,9 @@ final class SharedDataManager {
     }
 
     // KaPost has one target and no extensions. The contact, call-contact, chat-request,
-    // recent-conversation, group and KNS-domain copies KaChat's extensions read were never read
-    // here, so they are no longer written; `clearAllSharedData` still clears what an older
-    // version left behind.
+    // recent-conversation, group, KNS-domain, wallet-address and key-availability copies KaChat's
+    // extensions read were never read here, so they are no longer written; `clearAllSharedData`
+    // still clears what an older version left behind.
 
     /// Sync notification defaults used by the notification service extension.
     /// Deliberately nonisolated: UserDefaults is thread-safe and AppSettings.save is
@@ -97,27 +97,6 @@ final class SharedDataManager {
             // encrypted-payload residue outlives the diagnostics session that recorded it.
             sharedDefaults?.removeObject(forKey: "last_push_payload")
         }
-    }
-
-    /// Sync wallet address for notification extension (used to suppress outgoing pushes)
-    @MainActor
-    static func syncWalletAddressForExtension() {
-        let address = WalletManager.shared.currentWallet?.publicAddress
-        sharedDefaults?.set(address, forKey: Keys.walletAddress)
-    }
-
-    // MARK: - Shared Secrets
-
-    // MARK: - Stored Messages (legacy: decrypted text an older extension kept; read once, removed)
-
-
-    // MARK: - Outbound Shares (Share Extension -> Main App)
-
-    // MARK: - Private Key Availability
-
-    /// Check if private key is available (set by main app)
-    static func setPrivateKeyAvailable(_ available: Bool) {
-        sharedDefaults?.set(available, forKey: Keys.privateKeyAvailable)
     }
 
     // MARK: - Cleanup
@@ -157,11 +136,14 @@ final class SharedDataManager {
         WidgetCenter.shared.reloadAllTimelines()
         if let sharedContainerURL {
             let outboundShareDirectory = sharedContainerURL
-                .appendingPathComponent(SharedOutboundShare.ImageAttachment.rootDirectoryName, isDirectory: true)
+                .appendingPathComponent(Self.outboundSharesDirectoryName, isDirectory: true)
             try? FileManager.default.removeItem(at: outboundShareDirectory)
         }
         AppLog.log("[SharedData] Cleared all shared data")
     }
+
+    /// Where KaChat's share extension left its images; only ever cleared here.
+    private static let outboundSharesDirectoryName = "OutboundShares"
 
     // MARK: - Unread Count (Badge)
 

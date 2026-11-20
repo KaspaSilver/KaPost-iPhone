@@ -77,8 +77,16 @@ struct ChattingAddressManageView: View {
     @State private var renamingUtxo: UTXO?
     @State private var renameUtxoText = ""
 
+    @ObservedObject private var walletManager = WalletManager.shared
+
+    /// The wallet's own balance for this address (Manage Addresses shows the same number), so the
+    /// card and Send don't sit at 0 while the UTXOs load; the UTXOs' sum only when it isn't known.
     private var balanceSompi: UInt64 {
-        utxos.reduce(UInt64(0)) { $0 + $1.amount }
+        if let wallet = walletManager.currentWallet, wallet.publicAddress == address,
+           let balance = wallet.balanceSompi {
+            return balance
+        }
+        return utxos.reduce(UInt64(0)) { $0 + $1.amount }
     }
 
     private func outpointKey(_ utxo: UTXO) -> String {
@@ -92,16 +100,7 @@ struct ChattingAddressManageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 2) {
-                Text("Balance")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(verbatim: "\(formatKasExact(balanceSompi)) \(KaspaUnit.symbol)")
-                    .font(.title3.weight(.semibold))
-            }
-            .padding(.top, 12)
-
-
+            KaspaAddressBalanceCard(label: AppLocalization.string("Chatting Address"), sompi: balanceSompi)
 
             // Right above what it switches, the way Chats has it.
             UnderlineTabBar(
@@ -545,10 +544,12 @@ struct ChattingAddressPrivateKeyView: View {
             [["public.utf8-plain-text": value]],
             options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(30)]
         )
-        let copiedValue = value
+        // Compared by change count, never by reading the clipboard back: a read can show
+        // iOS's paste prompt, and anything copied since is someone else's to keep.
+        let copiedChangeCount = UIPasteboard.general.changeCount
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-            if UIPasteboard.general.string == copiedValue {
-                UIPasteboard.general.string = ""
+            if UIPasteboard.general.changeCount == copiedChangeCount {
+                UIPasteboard.general.items = []
             }
         }
     }
@@ -656,114 +657,32 @@ struct AddressPublicKeyView: View {
     }
 }
 
-/// Dedicated white-background QR display, matching Android's "Accept Kaspa"/"Chatting Address"
-/// QR screen — deliberately uses literal black/white colors rather than adaptive .primary/
-/// .secondary, since forcing a white content area regardless of system dark/light mode would
-/// otherwise leave semantic text colors resolved for dark mode (and invisible on the white
-/// background) unless the whole screen's color scheme were overridden too.
+/// The Chatting Address's receive page, on the shared receive screen (`AddressReceiveView`, from
+/// KaPay's kUSDT design): its QR on white, the orange note that it shows your .kachat name, and what
+/// it's for. A tap anywhere copies. Only the code and the address, no balance: the backup strip is
+/// on every tab, and the balance is the Wallet screen's.
 struct ChattingAddressQRView: View {
     let address: String
     let balanceSompi: UInt64?
-    var subtitle: String = "This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name."
+    var showsBalance = true
+    var subtitle: String = "Use for chatting and acquiring .kachat domains."
 
-    @EnvironmentObject private var walletManager: WalletManager
-    @State private var qrImage: UIImage?
-    @State private var toastMessage: String?
-    @State private var toastToken = UUID()
-
+    /// KaChat's Chatting Address screen (owner's call, 2026-11-20): the balance under the title,
+    /// the short info line.
     var body: some View {
-        Color.white
-            .ignoresSafeArea()
-            .overlay(
-                VStack(spacing: 28) {
-                    Spacer()
-                    Group {
-                        if let qrImage {
-                            Image(uiImage: qrImage)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 240, height: 240)
-                        } else {
-                            ProgressView()
-                                .frame(width: 240, height: 240)
-                        }
-                    }
-                    .padding(20)
-                    .background(Color.white)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.accentColor, lineWidth: 3)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                    Text(address)
-                        .font(.footnote.monospaced())
-                        .foregroundColor(.black)
-                        .multilineTextAlignment(.center)
-                        // Show the whole address, always. A Kaspa address is ~60-66 chars with no
-                        // spaces; capping at 2 lines truncated it on narrower screens. Let it wrap
-                        // to as many lines as needed and take the vertical space it requires.
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 28)
-
-                    // Looked up, not shown verbatim - it read English in every language.
-                    Text(LocalizedStringKey(subtitle))
-                        .font(.subheadline)
-                        .foregroundColor(Color.black.opacity(0.6))
-                        .multilineTextAlignment(.center)
-                        // Its full height always: in a sheet that is still growing (the Chats
-                        // New sheet) it otherwise truncated, then re-wrapped and jumped.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 40)
-
-                    Text("Tap anywhere to copy")
-                        .font(.footnote)
-                        .foregroundColor(Color.black.opacity(0.4))
-
-                    Spacer()
-                    Spacer()
-                }
-            )
-            .contentShape(Rectangle())
-            .onTapGesture { copyAddress() }
-            // Only the code and the address: the backup strip is on every tab, and the balance is
-            // the Wallet screen's.
-            .toast(message: toastMessage)
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                qrImage = ProfileQRCodeCache.cachedImage(for: address)
-                ProfileQRCodeCache.preload(address: address) { image in
-                    qrImage = image
-                }
-            }
-    }
-
-    private func copyAddress() {
-        UIPasteboard.general.string = address
-        Haptics.success()
-        showToast(address.addressCopiedToastText)
-    }
-
-    private func showToast(_ message: String) {
-        let token = UUID()
-        toastToken = token
-        withAnimation(.easeOut(duration: 0.2)) {
-            toastMessage = message
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            if toastToken == token {
-                withAnimation(.easeIn(duration: 0.2)) {
-                    toastMessage = nil
-                }
-            }
-        }
-    }
-
-    private func formatKaspaExact(_ sompi: UInt64) -> String {
-        let kas = Double(sompi) / 100_000_000.0
-        return String(format: "%.8f", kas)
+        AddressReceiveView(
+            title: AppLocalization.string("Chatting Address"),
+            address: address,
+            balanceLine: showsBalance ? balanceSompi.map(KaspaUnit.groupedAmount) : nil,
+            privacyNote: ReceiveNotes.chattingAddress,
+            notes: [
+                ReceiveNotes.kaspaAndKusdt,
+                // Looked up, not shown verbatim - it read English in every language.
+                ReceiveNote(kind: .info, text: AppLocalization.string(subtitle)),
+            ],
+            icon: { KaspaLogoIcon() }
+        )
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -1742,62 +1661,6 @@ struct WithdrawKaspaView: View {
         return text
     }
 }
-
-private enum ProfileQRCodeCache {
-    static let context = CIContext()
-    static let imageCache = NSCache<NSString, UIImage>()
-    static let renderQueue = DispatchQueue(label: "kasia.profile.qr.render", qos: .utility)
-
-    static func cachedImage(for address: String) -> UIImage? {
-        let uri = receiveURI(for: address)
-        let key = uri as NSString
-        return imageCache.object(forKey: key)
-    }
-
-    static func preload(address: String, completion: ((UIImage?) -> Void)?) {
-        let uri = receiveURI(for: address)
-        let key = uri as NSString
-
-        if let cached = imageCache.object(forKey: key) {
-            guard let completion else { return }
-            DispatchQueue.main.async {
-                completion(cached)
-            }
-            return
-        }
-
-        renderQueue.async {
-            let image = generateImage(uri: uri)
-            if let image {
-                imageCache.setObject(image, forKey: key)
-            }
-            guard let completion else { return }
-            DispatchQueue.main.async {
-                completion(image)
-            }
-        }
-    }
-
-    private static func generateImage(uri: String) -> UIImage? {
-        let data = Data(uri.utf8)
-        let filter = CIFilter.qrCodeGenerator()
-        filter.setValue(data, forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let outputImage = filter.outputImage else { return nil }
-        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
-    }
-
-    private static func receiveURI(for address: String) -> String {
-        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("kaspa:") {
-            return trimmed
-        }
-        return "kaspa:\(trimmed)"
-    }
-}
-
 
 /// "Edit KaChat Profile": the live address profile editor (`KachatLiveProfileEditor`) on both
 /// networks - it writes the `kchat:1:profile:` record, a self-send that needs no registry, so it

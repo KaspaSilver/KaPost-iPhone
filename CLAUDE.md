@@ -22,9 +22,13 @@ What is still KaChat-shaped underneath:
 - `ChatService` keeps running the address's UTXO subscription and the transaction queue that
   posts, tips and room messages go through. Its 1:1 chat sync is switched off
   (`ChatService.oneToOneChatsEnabled = false`), but the code behind it (handshakes, contextual
-  messages, `MessageStore`, `GroupStore`) is still there; the push-by-txid handlers and the 1:1 send,
-  reaction and edit functions were removed (2026-11-18). `KaPostsTabView.onAppear` starts the
-  subscription (`startPolling`).
+  messages, `MessageStore`) is still there; the push-by-txid handlers and the 1:1 send,
+  reaction and edit functions were removed (2026-11-18), and the 2026-11-20 audit removed the open-chat
+  machinery, `ReadStatusSyncManager` and `GroupStore` (only `PublicChatReactionSnapshot` is left in
+  GroupStore.swift). `KaPostsTabView.onAppear` starts the subscription (`startPolling`), which no longer
+  waits on `MessageStore`. The app badge is `AppIconBadge`: unseen KaPost notifications plus room unread,
+  never 1:1 conversations. Notify on receive works (`AddressActivityNotifier.featureEnabled` follows the
+  notification master switch; the per-account switch picks the spending addresses).
 - `.kachat` names: the read services (`KachatNamesRegistry`), Your Domains (display only), the profile
   editor, its save sheet and receipt (`Views/Ecosystem/KachatNamesLiveViews.swift`); `KachatMarketView.swift`
   holds only `AddressDomainsTab`. KaPost signs no registry transaction; the own-profile sync runs from
@@ -50,8 +54,8 @@ What is still KaChat-shaped underneath:
 | Feed | `KaPostsPageView` (`Views/KaPosts/KaPostsView.swift`) |
 | Public Chats | `PublicChatListView` (`Views/Chat/PublicChatListView.swift`); every default room is listed, the customize button (top left) switches rooms off, or all language rooms at once. Rows swipe (left: Delete, Mute, Pin; right: read state), and a pinned room moves into the circles row above the list, saved per account |
 | Profile | `KaPostsView(rootMode: .myProfile)` - the KaPosts profile; Help (top left) replays the Welcome Guide; Edit Profile opens `KaChatProfileEditorSheet`; Log Out (red, beside Wallet); Wallet pushes `KaPostWalletView`, KaChat's and KaPay's Wallet tab: the total (chatting plus spending), Send, Receive and Request (Compound UTXOs and an address's keys are in Manage Addresses, under that address), the Backup Hygiene card, then `WalletAccountSections` |
-| Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (post notifications only - no wallet ones) |
-| Settings | `SettingsView`, alphabetical like KaChat and KaPay: About (version, website, support email, Terms of Use, Privacy Policy, licenses), Account Name, Back Up Account (Complete Your Backup, View 12 or 24 Words, Back Up to NFC Card), Connection, Customization, Diagnostics, KaPost, Notifications, Security, Storage; then Delete Account. Log Out is on the Profile |
+| Notifications | `KaPostsNotificationsView`; the cog (top left) opens `NotificationsHubPage`, the notification settings (Settings > Notifications opens the same page): Push Notifications, KaPost's kinds, Sound & Vibration, then a Wallet section with Notify on receive (`AddressActivityNotifier.spendingReceiveNotificationsEnabled`, per account), moved here from Manage Addresses (owner's call, 2026-11-20) |
+| Settings | `SettingsView`, alphabetical like KaChat and KaPay: About (version, website, support email, Terms of Use, Privacy Policy, licenses), Account Name, Back Up Account (Complete Your Backup, View 12 or 24 Words, Back Up to NFC Card), Connection (`ConnectionSettingsView`, KaPay's design since 2026-11-20: a card per connection - Indexer, Push, Node, Translation, Domains, Explorer, Trestly - each showing what it's set to and opening its own screen with Save; Node saves as you pick; Domains says where .kachat names are read from), Customization, Diagnostics, KaPost, Notifications, Security, Storage; then Delete Account. Log Out is on the Profile |
 
 The dock stays in reach on every screen. Pushed screens (Wallet, notification settings, Public
 Chats rooms, Settings pages) keep the real one. KaPosts' full-screen covers (threads, profiles,
@@ -99,17 +103,105 @@ Every KaChat app has KaPay's full wallet (owner's call, 2026-11-07; it replaced 
 from 2026-11-05). Profile > Wallet (`KaPostWalletView`) is KaPay's Wallet tab: the total split into
 chatting and spending, Send, Receive and Request (Compound UTXOs and an address's keys are under that address in Manage
 Addresses), Backup Hygiene when due, then `WalletAccountSections` (`Views/Wallet/WalletDomainViews.swift`):
-the Manage Addresses (`ManageAddressesView`) and Chatting Address squares, Your Domains
-(`KNSDomainsListView`, no Customize Profile: profiles are edited on KaPost's Profile). No Help row
+the Chatting Address and Your Domains rows (`KNSDomainsListView`, no Customize Profile: profiles are
+edited on KaPost's Profile; as KaPay since 2026-11-20 a full-width card per name ending, .kachat, .kas, .k,
+.kaspa, drawn like Connection Settings' cards with the count and a chevron, and no "Get a … domain at …"
+button for the outside services; .kachat keeps "Get a .kachat domain" to home.kachat.app), as KaPay since 2026-11-20: no big squares, and Manage Addresses
+(`ManageAddressesView`) opens from the balance card's Tap to Manage. The Wallet's pull to refresh always scans
+every address for balances (`pullToRefresh`, owner's call, 2026-11-20): the known balances, then
+`discoverSpendingAddresses()` and `TokenWallet.discoverHoldings(of: .kusdt)` one after the other (both may reveal
+addresses), then the totals again. Manage Addresses' Address Visibility
+(`SpendingAddressVisibilityView`) is a Connection-Settings-style card per chain, Quantum and Non-Quantum Addresses (shown
+count, balance, chevron; owner's call, 2026-11-20), each opening its checklist. Manage Addresses' total, the Chatting
+Address page, a spending address's page, Manage kUSDT's total and a kUSDT address's page all open on
+KaPay's balance card (`Views/Shared/AddressBalanceCard.swift`: the name, the amount large, its worth in your
+currency on mainnet, on the accent gradient); the Chatting Address page reads the wallet's balance, so it
+doesn't sit at 0 while its coins load. No Help row
 since the .kachat guide went with claiming (2026-11-18). No transaction
 history on this screen (owner's call, 2026-11-09). No Contacts (saved addresses): people use KaChat or KaPay for that (owner's call,
 2026-11-07), so `AddressBookManager` isn't in KaPost.
-Send has the From step (`WithdrawKaspaView.lockedSource` is nil unless an address's own Send opens it),
-Receive shows a fresh address (`ReceiveKaspaQRView`), and Request Payment offers Fresh Address or Choose
+Send first asks "What are you sending?" (Kaspa or kUSDT, `SendAssetChooser`), then has the From step
+(`WithdrawKaspaView.lockedSource` is nil unless an address's own Send opens it), Receive shows a fresh
+regular address (`ReceiveKaspaQRView`, on the shared `AddressReceiveView`), and Request Payment offers Fresh Address or Choose
 an Address; its Review also has Show Request As QR (`PaymentRequestQRSheet`, the same as KaChat's: `kapay://pay/...`, or the kachat.app link for a chatting-address request). Each single-address page has one options icon at the top right (`AddressOptionsButton`), opening
 `AddressActionsSheet`: View Private Key, View Public Key (not for a quantum address, whose key stays hidden
 until it spends) and View in Explorer. Ported from KaPay: keep these in unison with it, and port KaPay changes here. Spending
 addresses number from #1 (`WalletManager.addressNumber`).
+
+**Receive and Generate** (owner's call, 2026-11-19, as KaPay): Receive always hands out a fresh REGULAR
+(legacy P2PK) address (`WalletManager.freshReceiveAddress`, `lowestUnusedRegularAddress`), since a regular
+address takes kUSDT as well as Kaspa. Quantum-resistant addresses are made on purpose: Manage Addresses >
+Address Actions has Generate Non-Quantum Address and Generate Quantum-Resistant Address
+(`generateNew(quantum:)`, each recycling a hidden unused row of its own chain first). Each Manage Addresses
+row's ⋮ has Rename, Copy, Show QR Code, Send to Chatting Address (Send Kaspa from that address with the
+Chatting Address filled in; off with no balance) and Hide. Change still goes to fresh quantum slots
+(`ChatService.claimFreshChangeSlot`). Every receive screen is the shared `AddressReceiveView`
+(`Views/Shared/`): icon and title, the QR on white, the whole address, a privacy note (`ReceiveNotes`), "Tap
+anywhere to copy" (no Copy or Share buttons), then what may be sent there. Wallet Receive, the Chatting
+Address page (`ChattingAddressQRView`, also the Welcome Guide's Show QR Code), a spending address's QR (a
+quantum one says Kaspa only) and kUSDT Receive all use it. Only the Chatting Address page shows a balance line
+(KaChat's screen, owner's call, 2026-11-20: the balance under the title, then "Kaspa, and kUSDT on Kaspa, can be
+sent here." and "Use for chatting and acquiring .kachat domains."); the others have none.
+
+## Tokens (kUSDT)
+
+KCC-20 tokens on Kaspa L1, starting with Trestly's kUSDT, ported from KaPay (owner's call, 2026-11-19; the
+open code is `kaspador/kusdt-open`, its SPEC.md the protocol). KaPost only holds, receives, sends and
+manages kUSDT: swapping, the pool and bridging are KaPay's, on Trestly's site, and nothing in KaPost opens
+Trestly's site (no Open Trestly, no in-app browser, no `trestlySiteURL`). Keep `Views/Tokens/` and
+`Services/Tokens/` in unison with KaPay's.
+
+- Wallet: the balance card swipes Kaspa ⇄ kUSDT (`SlidingCardPager`, "Kaspa"/"kUSDT" pills,
+  `BalancePagePills`), each card Tap to Manage: Kaspa's opens Manage Addresses, kUSDT's `TokenManageView`.
+- Manage kUSDT: the total with a "Bridged by Trestly" pill (`TokenAboutSheet`, information only, no links;
+  "Swap kUSDT in KaPay."), a row for the Chatting Address and each visible address holding kUSDT
+  (`listedHoldings`; a regular address's ⋮: Rename, Copy, Show QR Code, Send to Chatting Address, Combine
+  Coins with more than one coin, Hide). Each row shows Manage Addresses' Used / Unused tag under its "… held
+  with it" line (owner's call, 2026-11-20, as KaPay; orange Used, green Unused, no "Checking" state). The
+  Chatting Address is always Used; another address is Used once it holds kUSDT, has kUSDT history on this
+  phone (`tokens.activity(of:at:)`), or Manage Addresses knows it as used (`everUsed` or KAS on it, from
+  `cachedSpendingAddressList()` then `getSpendingAddressList()`, in `usedSpendingIndices`). The floating
+  options button: Generate New Address, Discover kUSDT
+  Addresses (pull to refresh runs it too) and kUSDT Address Visibility.
+  **Every address Manage kUSDT lists also shows in Manage Addresses, one way only** (owner's call, 2026-11-20,
+  as KaPay). Why: an address using kUSDT needs KAS on it (the network fee, and the 1.5 KAS every kUSDT coin
+  carries), so it must always be visible on the Kaspa side; a Kaspa address never needs kUSDT, so Manage kUSDT
+  never lists Kaspa addresses. Don't make it a two-way sync. `TokenWallet.listedSpendingIndices(of:)` is the
+  set; Manage Addresses shows any hidden one again after it loads (`showKusdtListedAddresses`), refuses the
+  ⋮ Hide with a toast, Address Visibility's checklist shows such rows locked (a "Shown for kUSDT" alert),
+  and Hide All leaves them shown. Once hidden from Manage kUSDT, it hides in Manage Addresses as usual.
+  A row opens `TokenAddressView`: its
+  balance, its kUSDT history (kept on the phone), Receive and Send, options Combine Coins and View in Explorer.
+  The history looks exactly like a Kaspa address's transactions in Manage Addresses (`TokenActivityRow`,
+  `.insetGrouped`): green arrow Received / red arrow Sent / accent merge for Combined Coins, the transaction id
+  and date, the signed amount, "Fee …" when this phone paid it (`TokenActivity.fee`), and a tap opens the
+  explorer. Every account removal clears that account's token history, known coins and visibility choices
+  (`TokenWallet.forgetLocalData`).
+- Send (`TokenSendView`): To, From (skipped when one address holds kUSDT), How much (6 decimals), a swipe-up
+  review with the exact fee, Goes With It (1.5 KAS per coin) and KAS Paid From the same address; never to a
+  script address. Fund This Address opens Send Kaspa with a plain request (never a chat-payment request), then
+  "Waiting for your KAS to arrive…" and Check Again, with no second top-up button.
+- Where tokens live: only the Chatting Address and regular (legacy P2PK) spending addresses (`TokenHolding`),
+  never quantum ones.
+- Trust: `Kusdt.swift` pins the deployments and the KCC20 template (`Resources/kusdt-kcc20-template.json`,
+  checked against `templateSHA256` at load). `KusdtBalances.fetch` asks Trestly's `GET /tokens?owner=` and
+  keeps a coin only when the node (never the REST fallback) holds that exact outpoint at the recomputed script
+  with kUSDT's covenant id; coins a send just made are checked as `Expected` until Trestly lists them, so the
+  balance never dips to 0. `KusdtCore` runs Trestly's hash-pinned WebAssembly builder (`Resources/KusdtCore/`)
+  in a hidden, non-persistent WKWebView served only by `kusdt-core://`.
+- Transfers (`KusdtTransfer`): at most 3 token coins; KAS for the fee and the change coin from the same address;
+  on a whole send the fee comes from the coins' own KAS; every output checked before submit, fee at most 3 KAS;
+  extra coin KAS back as change; Combine Coins via `prepareCombine`. They submit through
+  `NodePoolService.submitRpcTransaction(_:expectedTxId:)`, which holds the inputs before the submit
+  (`holdOutpointKeysForSubmit`), reserves them on success, releases them on a definite failure (unless the
+  node said spent) and on an unknown outcome, and looks a lost answer up by id. `AddressActivityNotifier
+  .markOwnTransaction` keeps a kUSDT transaction's KAS change from ever counting as received.
+- Received: `TokenWallet` polls every 90 s while the app is open; own transfers are never announced. KaPost has
+  no wallet notification list, so it's a local notification only; a tap opens Manage kUSDT as a sheet
+  (`TokenRoute`, `.openToken`, `KaPostsTabView`).
+- Connection Settings > Trestly: "Trestly API URL" (`AppSettings.trestlyAPIURL`), per network, optional in
+  `ConnectionProfile` so old profiles decode; https only; blank is the default (api.trestly.io/api/v1, or
+  testnet.trestly.io/api/v1 on testnet).
 
 Tips: only one from the chatting address is a tip (KAPOSTS_INDEXER.md 5.11): it names the post,
 counts on it and lists the tipper. The tip sheet opens on From, and KaPosts > Settings > Tips From
@@ -118,7 +210,46 @@ sheet's first choice. From another address a tip is private (owner's call, 2026-
 `ChatService.sendPayment` drops the tip and sends a plain payment with the chat notice, so the author
 gets it in your chat but it names no post, isn't counted and doesn't list you.
 
+Tip In (owner's call, 2026-11-20): Settings > KaPost > Tip In picks what Tip sends: Ask Each Time, Kaspa
+or kUSDT (`AppSettings.kaPostsTipAsset`; `kaPostsTipAssetInUse` treats an instant tip amount as Kaspa,
+since instant tips are Kaspa only and older installs set them before Tip In existed). Ask Each Time and
+kUSDT turn the instant tip off, and Tips From shows only when Tip In isn't kUSDT. The Tip button opens
+`KaPostTipFlow`: Ask Each Time asks "What are you tipping in?" (Kaspa with the chatting balance, kUSDT with
+its balance), Kaspa goes to `KaPostTipSheet` (or the instant tip), kUSDT to `TokenSendView(tipRecipient:name:)`:
+no To step, a "To <name>" chip on From. With no kUSDT on any address, From says "None of your addresses
+holds kUSDT yet." with Get KaPay (`KaPayHandoff.openOrInstall`: KaPay if installed, else the install page),
+as KaChat's Send Dollars. A kUSDT tip runs `TokenWallet.refresh()` as From opens and again when
+KaPost comes back to the front (say from KaPay), showing "Checking your kUSDT..." while nothing is found yet. A kUSDT tip is a plain kUSDT send: it isn't counted on the post and
+doesn't list the tipper, because Trestly's transfer builder sets the transaction's payload itself, so it
+can't carry the `tip:` record. Counting kUSDT tips would need the builder to take a payload, plus indexer
+support.
+
+kUSDT send safety (2026-11-20 audit, with KaPay's matching fixes):
+- `KusdtTransfer.prepare` checks the builder's `transaction` itself, the bytes that are submitted: exact
+  output count, each token output the approved state with the deployment's covenant id, every other output
+  paying the sender, inputs exactly the picked coins plus given funding coins, and the fee worked out here
+  (inputs minus outputs, capped at `maxFee`). Builder numbers are range-checked, never trapping.
+- The review only sends the build made for the From, To and amount on screen (a generation per build);
+  after 120 s it rebuilds and goes back to the review instead of sending.
+- "Not confirmed" never calls `noteSent`: `KusdtHolds` records that send's coins for 10 minutes and the
+  next `prepare` spends one of them first and leads its funding with the conflicting coin, so at most one
+  of the two lands. Coins the node pool holds are left out of balances and picks.
+- `TokenWallet` runs one lookup at a time (Discover included), clears on an account change, and every
+  getter returns nothing for another account. `KusdtBalances` keeps one entry per outpoint and uses a
+  cookie-less session.
+- The hidden builder page has no network: a Content-Security-Policy (the inline script by its sha256:
+  recompute it, and the html pin in `KusdtCore.pinned`, if the page changes) and a `WKContentRuleList`
+  blocking http(s)/ws(s). A killed WebContent process reloads on the next `run`; loads time out at 15 s.
+
 ## Sends and account safety
+
+Account switches (2026-11-20 audit): every KaPost action carries the account it was made by
+(`expectedOwner` on `KaPostsAPIClient.submitPayloadTx`; `KaPostsAPIError.accountChanged`), and so do
+spending-address sends, withdrawals, payment notices (`unsentNotices(owner:)`) and Consolidate to
+Primary. Drafts, bookmarks and reposts are per account (`KaPostsDraftStore`, `KaPostsBookmarkStore`,
+`KaPostsRepostStore` in KaPostsPostMarkStores.swift) and follow `$currentWallet`. Follow and Repost hold
+while one is going out (`KaPostsActionHolds`). A deferred payment gives up after 30 minutes. A submit
+refused before it left the phone (`RequestNotSentError`) is a plain failure, not "Not confirmed".
 
 Nothing that may have landed is offered again. A post, reply or thread whose send got no answer shows
 "Not confirmed" (`DraftPost.Delivery.unconfirmed`) with no Retry, and `submitWithUtxoRetry` never retries
@@ -129,7 +260,7 @@ nil) says "Waiting" (`SendDeferredError`), is not counted as a tip, and offers n
 blocks the lost-answer check only when it is about the transaction itself (`isVerdictOnTransaction`):
 "already in the mempool", orphan and spent-input answers may come from the copy whose answer was lost.
 
-Coins: posts, likes, room messages, tips and Send all draw from one ledger in
+Coins: posts, likes, room messages, tips, Send and kUSDT sends all draw from one ledger in
 `ChatService` (`prepareMessageUtxos`, `unreservedUtxos`, `recordPlainSend`). What a send spent stays
 reserved until it is in a block, so the next action never picks it again (`reservedOutpointTTL`, 10 min:
 the node stops listing a spent coin once its spend is in a block, so the hold only has to outlast the
@@ -138,7 +269,7 @@ A post or room message uses at most `maxInputsPerTransaction` coins and 100,000 
 asks the person to compound. An unknown outcome is deliberately
 not held (`recordPlainSend` with a nil `txId`): a send made after "Not confirmed" picks the same coins, so only
 one of the two can land.
-`NodePoolService.submitTransaction` holds every transaction's inputs from before the submit
+`NodePoolService.submitTransaction` and `submitRpcTransaction(_:expectedTxId:)` (kUSDT) hold every transaction's inputs from before the submit
 (`ChatService.holdOutpointKeysForSubmit`), since .kachat profile saves, KNS, scheduled posts and the
 self-stash don't go through the send queue, and reserves them on success (`reserveOutpointKeys`), so any
 new path is covered too. A definite failure gives them
@@ -178,8 +309,8 @@ signing in to a saved account and revealing the 12 or 24 words or a private key.
 screen says "Not confirmed" and offers only Done, since Try Again could pay twice. A node's answer must carry
 the locally computed id. The words and passphrase are readable only while the phone is unlocked, so nothing
 that runs in the background may need them (`allSpendingAddresses` reads the address cache). Keys left by an
-earlier install are listed as saved accounts rather than opening. Third-party keyboards are refused, and the
-privacy cover is its own window above sheets. A room message still pending from an earlier run is settled
+earlier install are listed as saved accounts rather than opening. Third-party keyboards are refused. There is no
+privacy cover over the App Switcher (removed 2026-11-20, owner's call, as KaChat did). A room message still pending from an earlier run is settled
 once per room after its history loads (`settlePendingMessages`), as "Not confirmed" when its copy isn't
 there. The 5-second Undo (KaPost > Cool down before post, `kaPostsCooldownEnabled`) is off by default since 2026-11-18, and was turned off once on existing installs (saved under a new key, `kaPostsCooldownOn`). Held 5-second actions belong to the account they were made as (`KaPostsActionScheduler` drops them on
 a switch), a thread chain stops if the account changes, and Reply is off on a post not on chain yet. People read "12 or 24 words", never "seed

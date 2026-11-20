@@ -4,8 +4,10 @@ import SwiftUI
 /// for every other place an address or a domain goes in (withdrawals, sends from an address,
 /// the portfolio, a group invite). The SCREEN does the resolving (.kachat first, see
 /// `NameServicesClient.resolveEverywhere`); this card takes the outcome and shows the face and
-/// the name: the domain that was typed, else the address's own .kachat name. Nil address, no card - a half-typed
-/// address gets nothing rather than a card flickering through wrong faces.
+/// the name: the domain that was typed, else the address's own .kachat name once it is confirmed
+/// on the chain the way a typed name is (`KachatNamesRegistry.verifyLabel`) - until then, only
+/// the address. Nil address, no card - a half-typed address gets nothing rather than a card
+/// flickering through wrong faces.
 struct AddressResolutionCard: View {
     /// The address the input stands for: a valid typed address, or a domain's resolved owner.
     let address: String?
@@ -15,15 +17,20 @@ struct AddressResolutionCard: View {
 
     @State private var profile: KNSAddressProfileInfo?
     @State private var isLoadingProfile = false
-    /// re-renders when the address's .kachat identity lands (`cachedIdentity` fills in the background)
-    @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
+    /// While the address's .kachat name is being confirmed on the chain.
+    @State private var isVerifyingName = false
+    /// Re-renders only when an identity or a confirmed label changes, not on every registry refresh.
+    @ObservedObject private var identityChanges = KachatIdentityChanges.shared
 
-    /// The name to show: the domain typed, else the address's .kachat name.
+    /// The name to show: the domain typed, else the address's .kachat name confirmed on the chain
+    /// (never the indexer's word alone: this card sits on payment screens).
     private func displayName(for address: String) -> String? {
         if let domain { return domain }
-        if let label = kachatRegistry.cachedIdentity(for: address)?.label { return KachatNameLabel.display(label) }
+        if let label = KachatNamesRegistry.shared.verifiedLabel(for: address) { return KachatNameLabel.display(label) }
         return profile?.domainName
     }
+
+    private var isLooking: Bool { isLoadingProfile || isVerifyingName }
 
     var body: some View {
         if let address, !address.isEmpty {
@@ -36,7 +43,7 @@ struct AddressResolutionCard: View {
                 )
                 VStack(alignment: .leading, spacing: 2) {
                     let name = displayName(for: address)
-                    Text(name ?? (isLoadingProfile ? "Looking up..." : "No domain"))
+                    Text(name ?? (isLooking ? "Looking up..." : "No domain"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(name == nil ? .secondary : .primary)
                         .lineLimit(1)
@@ -55,15 +62,29 @@ struct AddressResolutionCard: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if isLoadingProfile { ProgressView().controlSize(.small) }
+                if isLooking { ProgressView().controlSize(.small) }
             }
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.primary.opacity(0.05))
             )
-            .task(id: address) { await loadProfile(for: address) }
+            .task(id: address) {
+                async let name: Void = verifyName(for: address)
+                await loadProfile(for: address)
+                await name
+            }
         }
+    }
+
+    /// Confirms the address's .kachat name on the chain (kept by the registry for ten minutes).
+    /// Not needed when the screen passed the domain it resolved.
+    private func verifyName(for address: String) async {
+        isVerifyingName = false
+        guard domain == nil, KaspaAddress.isValid(address) else { return }
+        isVerifyingName = KachatNamesRegistry.shared.verifiedLabel(for: address) == nil
+        defer { if address == self.address { isVerifyingName = false } }
+        await KachatNamesRegistry.shared.verifyLabel(for: address)
     }
 
     /// Cached by KNSService, so an address already looked at costs nothing.

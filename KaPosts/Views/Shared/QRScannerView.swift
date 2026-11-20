@@ -130,6 +130,9 @@ private class QRScannerViewController: UIViewController, AVCaptureMetadataOutput
     private var captureSession: AVCaptureSession?
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var hasScanned = false
+    /// Start and stop run in order on this one queue, never on the main thread: a scanner closed
+    /// right after opening queues its stop behind the start, so the camera can't be left running.
+    private let sessionQueue = DispatchQueue(label: "com.kachat.kaposts.qrscanner.session")
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -182,15 +185,17 @@ private class QRScannerViewController: UIViewController, AVCaptureMetadataOutput
 
     private func startScanning() {
         hasScanned = false
-        if let session = captureSession, !session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async {
-                session.startRunning()
-            }
+        guard let session = captureSession else { return }
+        sessionQueue.async {
+            if !session.isRunning { session.startRunning() }
         }
     }
 
+    /// No `isRunning` check here: a start still waiting on the queue hasn't set it yet. Stopping a
+    /// session that isn't running does nothing.
     private func stopScanning() {
-        if let session = captureSession, session.isRunning {
+        guard let session = captureSession else { return }
+        sessionQueue.async {
             session.stopRunning()
         }
     }

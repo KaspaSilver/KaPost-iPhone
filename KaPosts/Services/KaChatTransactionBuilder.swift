@@ -252,65 +252,6 @@ struct KasiaTransactionBuilder {
         Data("kchat:1:bcast:\(channel):\(content)".utf8)
     }
 
-    /// Build a group chat message (`gcomm`) or control (`gctl`) transaction. Same self-stash
-    /// shape as a public chat/contextual message - the payload string is fully built ahead of time
-    /// by GroupChatService/GroupCipher, this just wraps it in a signed tx.
-    static func buildGroupPayloadTx(
-        from senderAddress: String,
-        payloadString: String,
-        senderPrivateKey: Data,
-        utxos: [UTXO],
-        feeOverride: UInt64? = nil
-    ) throws -> KaspaRpcTransaction {
-        let payload = Data(payloadString.utf8)
-
-        guard let senderScriptPubKey = KaspaAddress.scriptPublicKey(from: senderAddress) else {
-            throw KasiaError.invalidAddress
-        }
-
-        let selection = try selectUtxosForContextualMessage(
-            utxos: utxos,
-            payload: payload,
-            senderScriptPubKey: senderScriptPubKey,
-            feeOverride: feeOverride
-        )
-        let selectedUtxos = selection.utxos
-        let outputAmount = selection.totalInput - selection.fee
-
-        let outputs = [KaspaRpcTransactionOutput(
-            value: outputAmount,
-            scriptPublicKey: KaspaScriptPublicKey(version: 0, script: senderScriptPubKey)
-        )]
-
-        let unsignedTx = KaspaRpcTransaction(
-            version: 0,
-            inputs: selectedUtxos.map { utxo in
-                KaspaRpcTransactionInput(
-                    previousOutpoint: utxo.outpoint,
-                    signatureScript: Data(),
-                    sequence: 0,
-                    sigOpCount: 1
-                )
-            },
-            outputs: outputs,
-            lockTime: 0,
-            subnetworkId: standardSubnetworkId,
-            gas: 0,
-            payload: payload
-        )
-
-        return try signTransaction(unsignedTx, privateKey: senderPrivateKey, utxos: selectedUtxos)
-    }
-
-    /// Estimate fee for a group message (compose-bar fee preview)
-    static func estimateGroupPayloadFee(payload: Data, inputCount: Int, senderScriptPubKey: Data) -> UInt64 {
-        let output = KaspaRpcTransactionOutput(
-            value: 0,
-            scriptPublicKey: KaspaScriptPublicKey(version: 0, script: senderScriptPubKey)
-        )
-        return estimateFee(payload: payload, inputCount: inputCount, outputs: [output]) + 3
-    }
-
     /// Parse a decoded transaction payload string back into (channel, content).
     /// Returns nil if the payload isn't a public chat message.
     static func parsePublicChatPayload(_ payloadString: String) -> (channel: String, content: String)? {

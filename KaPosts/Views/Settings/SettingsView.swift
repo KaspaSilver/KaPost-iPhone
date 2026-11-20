@@ -711,22 +711,6 @@ struct DiagnosticsSettingsPage: View {
             totalRecords: nodePoolRecords.count
         )
 
-        let lastPayloadLenValue = SharedDataManager.sharedDefaultsValue(forKey: "last_push_payload_len")
-        let lastPayloadLen = (lastPayloadLenValue as? Int) ?? (lastPayloadLenValue as? NSNumber)?.intValue
-
-        let lastTsValue = SharedDataManager.sharedDefaultsValue(forKey: "last_push_ts")
-        let lastTimestamp = (lastTsValue as? Int64) ?? (lastTsValue as? NSNumber)?.int64Value
-
-        let pushDebug = DiagnosticsArchive.PushDebug(
-            lastPayload: SharedDataManager.sharedDefaultsValue(forKey: "last_push_payload") as? String,
-            lastPayloadLength: lastPayloadLen,
-            lastType: SharedDataManager.sharedDefaultsValue(forKey: "last_push_type") as? String,
-            lastSender: SharedDataManager.sharedDefaultsValue(forKey: "last_push_sender") as? String,
-            lastTxId: SharedDataManager.sharedDefaultsValue(forKey: "last_push_tx_id") as? String,
-            lastTimestamp: lastTimestamp,
-            lastDecryptStatus: SharedDataManager.sharedDefaultsValue(forKey: "last_push_decrypt_status") as? String
-        )
-
         return DiagnosticsArchive(
             generatedAt: Date(),
             app: appInfo,
@@ -743,8 +727,7 @@ struct DiagnosticsSettingsPage: View {
                 incomingCount: storeDiagnostics.incomingCount
             ),
             nodePool: nodePoolSummary,
-            nodePoolRecords: nodePoolRecords,
-            pushDebug: pushDebug
+            nodePoolRecords: nodePoolRecords
         )
     }
 
@@ -856,6 +839,7 @@ struct AppSettingsView: View {
 struct NotificationsHubPage: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject var pushManager: PushNotificationManager
+    @ObservedObject private var activityNotifier = AddressActivityNotifier.shared
 
     @State private var isEnablingPush = false
     @State private var notificationPermissionDenied = false
@@ -898,8 +882,7 @@ struct NotificationsHubPage: View {
                      : "Turn this on to receive anything you have switched on below, even when the app is closed.")
             }
 
-            // KaPosts' notifications are about posts only (no wallet ones). Public Chats rooms keep
-            // their own bells, in each room.
+            // KaPost's own notifications; Public Chats rooms keep their own bells, in each room.
             Section("Notifications") {
                 settingsCategoryRow("KaPost", icon: "square.text.square", tint: .accentColor) {
                     KaPostsNotificationSettingsView()
@@ -908,7 +891,22 @@ struct NotificationsHubPage: View {
                     NotificationsSettingsView()
                 }
             }
+
+            // The wallet's one switch, moved here from Manage Addresses (owner's call, 2026-11-20):
+            // this account's spending addresses' receives, not every address the wallet watches.
+            Section("Wallet") {
+                Toggle(isOn: $activityNotifier.spendingReceiveNotificationsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notify on receive")
+                        Text("When a spending address receives Kaspa from someone else.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .tint(.accentColor)
+            }
         }
+        .onAppear { activityNotifier.reloadSpendingSwitchForCurrentWallet() }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
         .toast(message: toastMessage, style: toastStyle)
@@ -939,7 +937,6 @@ struct NotificationsHubPage: View {
             settingsViewModel.settings.notificationMode = .remotePush
             settingsViewModel.saveSettings()
             ChatService.shared.stopPollingTimerOnly()
-            BackgroundTaskManager.shared.cancelBackgroundFetch()
             enablePushNotifications(previousMode: previousMode)
         }
     }
@@ -1124,16 +1121,6 @@ private struct DiagnosticsArchive: Codable {
         let totalRecords: Int
     }
 
-    struct PushDebug: Codable {
-        let lastPayload: String?
-        let lastPayloadLength: Int?
-        let lastType: String?
-        let lastSender: String?
-        let lastTxId: String?
-        let lastTimestamp: Int64?
-        let lastDecryptStatus: String?
-    }
-
     struct MessageStoreDiagnostics: Codable {
         let totalMessages: Int
         let distinctTxIds: Int
@@ -1152,7 +1139,6 @@ private struct DiagnosticsArchive: Codable {
     let messageStoreDiagnostics: MessageStoreDiagnostics
     let nodePool: NodePoolSummary
     let nodePoolRecords: [NodeRecord]
-    let pushDebug: PushDebug
 }
 
 private struct DiagnosticsShareSheet: UIViewControllerRepresentable {
@@ -1506,16 +1492,17 @@ struct SeedPhraseView: View {
     /// expiration and `localOnly` (never syncs to other devices via Universal Clipboard/Handoff).
     /// The system honors `expirationDate` even if the app is suspended before it elapses; the
     /// asyncAfter wipe below is a belt-and-suspenders in-app clear that also fires at 30s when
-    /// nothing else has overwritten the clipboard in the meantime.
+    /// nothing else has been copied in the meantime. It compares `changeCount` rather than reading
+    /// the clipboard, which could raise the paste prompt.
     private func copySensitiveToClipboard(_ value: String) {
         UIPasteboard.general.setItems(
             [["public.utf8-plain-text": value]],
             options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(30)]
         )
-        let copiedValue = value
+        let copiedChangeCount = UIPasteboard.general.changeCount
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-            if UIPasteboard.general.string == copiedValue {
-                UIPasteboard.general.string = ""
+            if UIPasteboard.general.changeCount == copiedChangeCount {
+                UIPasteboard.general.items = []
             }
         }
     }
@@ -1569,16 +1556,25 @@ struct KaspaExplorerSettingsView: View {
     }
 }
 
+/// Connection Settings: a card per kind of connection, each opening its own screen with Save
+/// (KaPay's design, 2026-11-19, in place of tabs; KaPost's since 2026-11-20). The same view draws
+/// the cards (`page` nil) and each screen.
 struct ConnectionSettingsView: View {
+    /// Nil: the cards. Set: that connection's own screen.
+    var page: Page? = nil
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
 
+    /// Where .kachat names are read from right now, for the Domains screen.
+    @ObservedObject private var kachatRegistry = KachatNamesRegistry.shared
     @State private var indexerURL: String = ""
     @State private var kaPostIndexerURL: String = ""
     @State private var translationServiceURL: String = ""
     @State private var publicChatIndexerURL: String = ""
     @State private var pushIndexerURL: String = ""
     @State private var kaspaRestAPIURL: String = ""
+    /// Trestly's API, where kUSDT balances are looked up (per network, https only, blank = default).
+    @State private var trestlyAPIURL: String = ""
     @State private var trustedNodeValidationError: String?
 
     @State private var newSavedNodeLabel: String = ""
@@ -1620,8 +1616,8 @@ struct ConnectionSettingsView: View {
         return "https://" + trimmed
     }
 
-    /// KaPosts, Public Chats and Push. KaChat's message indexer is not here: KaPosts has no 1:1
-    /// chats, and the same address (`indexerURL`) is the .kachat names indexer, on the Domains tab.
+    /// KaPost and Public Chats. KaChat's message indexer is not here: KaPost has no 1:1 chats, and
+    /// the same address (`indexerURL`) is the .kachat names indexer, on the Domains screen.
     @ViewBuilder
     private var indexerSections: some View {
         Section {
@@ -1659,7 +1655,11 @@ struct ConnectionSettingsView: View {
         } footer: {
             Text("KaChat public chat history indexer for #kaspa and #kachat-bugs")
         }
+    }
 
+    /// The Push screen: the push registration server.
+    @ViewBuilder
+    private var pushSections: some View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Push Indexer URL")
@@ -1835,15 +1835,46 @@ struct ConnectionSettingsView: View {
                 httpsInlineError(for: indexerURL)
             }
             HStack {
-                Text("Registry")
+                Text("Reading names from")
                 Spacer()
-                Text(settingsViewModel.settings.networkType == .testnet ? "Testnet (testnet-10)" : "Mainnet")
+                kachatSourceLabel
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.trailing)
             }
+            .task { await kachatRegistry.refreshIfStale() }
         } header: {
             Text(".kachat Names")
         } footer: {
             Text("The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain.")
+        }
+    }
+
+    /// The .kachat names source `KachatNamesRegistry` last chose (as KaPay).
+    @ViewBuilder
+    private var kachatSourceLabel: some View {
+        if !KachatNamesService.isLaunched {
+            Text("Not live on this network")
+        } else {
+            switch kachatRegistry.source {
+            case .indexer(let base):
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Indexer")
+                    Text(verbatim: URLComponents(string: base)?.host ?? base)
+                        .font(.caption)
+                }
+            case .chain:
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("The chain")
+                    Text("Indexer not usable right now")
+                        .font(.caption)
+                }
+            case nil:
+                if kachatRegistry.isRefreshing {
+                    ProgressView()
+                } else {
+                    Text(kachatRegistry.lastError == nil ? "Checking..." : "Couldn't check")
+                }
+            }
         }
     }
 
@@ -1866,7 +1897,29 @@ struct ConnectionSettingsView: View {
         } footer: {
             Text("REST API for transaction history and balance lookups")
         }
+    }
 
+    /// The Trestly screen: its API, where kUSDT balances are looked up (KaPay's Trestly page;
+    /// KaPost needs only the API, never the site).
+    @ViewBuilder
+    private var trestlySections: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Trestly API URL")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField(AppSettings.defaultTrestlyAPIURL(for: settingsViewModel.settings.networkType), text: $trestlyAPIURL)
+                    .font(.system(.body, design: .monospaced))
+                    .autocapitalization(.none)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                httpsInlineError(for: trestlyAPIURL)
+            }
+        } header: {
+            Text("kUSDT Balances")
+        } footer: {
+            Text("Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown.")
+        }
     }
 
     /// The field hint: the network's default. Testnet has no indexer.
@@ -1876,73 +1929,161 @@ struct ConnectionSettingsView: View {
             : AppLocalization.string("No testnet indexer yet")
     }
 
-    /// One tab per kind of connection, so the page stays short as the app talks to more
-    /// services: indexers, the Kaspa node, translation, name services, the block explorer.
-    private enum ConnectionTab: String, CaseIterable {
-        case indexer, node, translation, domains, explorer
+    /// One card per kind of connection: KaPost's indexers, push registration, the Kaspa node,
+    /// translation, name services, the block explorer, and Trestly.
+    enum Page: String, CaseIterable, Identifiable {
+        case indexer, push, node, translation, domains, explorer, trestly
 
-        var title: String {
+        var id: String { rawValue }
+
+        var title: LocalizedStringKey {
             switch self {
             case .indexer: return "Indexer"
+            case .push: return "Push"
             case .node: return "Node"
             case .translation: return "Translation"
             case .domains: return "Domains"
             case .explorer: return "Explorer"
+            case .trestly: return "Trestly"
             }
         }
-    }
 
-    @State private var selectedTab: ConnectionTab = .indexer
-
-    private var selectedTabIndex: Binding<Int> {
-        Binding(
-            get: { ConnectionTab.allCases.firstIndex(of: selectedTab) ?? 0 },
-            set: { selectedTab = ConnectionTab.allCases[$0] }
-        )
-    }
-
-    @ViewBuilder
-    private func sections(for tab: ConnectionTab) -> some View {
-        switch tab {
-        case .indexer: indexerSections
-        case .node: nodeSections
-        case .translation: translationSections
-        case .domains: domainsSections
-        case .explorer: explorerSections
+        var icon: String {
+            switch self {
+            case .indexer: return "square.stack.3d.up"
+            case .push: return "bell.badge"
+            case .node: return "server.rack"
+            case .translation: return "character.bubble"
+            case .domains: return "at"
+            case .explorer: return "safari"
+            case .trestly: return "dollarsign.circle"
+            }
         }
+
+        /// Only the node screen saves as you pick (the picker and the address book).
+        var hasSave: Bool { self != .node }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            UnderlineTabBar(
-                tabs: ConnectionTab.allCases.map { (tab: $0, title: $0.title) },
-                selection: $selectedTab
-            )
-            // Swipe sideways between the tabs, or tap one. Save covers every tab: the fields keep
-            // their edits while you switch between them.
-            KaPostsFeedPager(pageCount: ConnectionTab.allCases.count, selection: selectedTabIndex) {
-                ForEach(ConnectionTab.allCases, id: \.self) { tab in
-                    Form {
-                        sections(for: tab)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Connection Settings")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    if saveSettings() {
-                        dismiss()
-                    }
-                }
+        Group {
+            if let page {
+                pageScreen(page)
+            } else {
+                cards
             }
         }
         .onAppear {
             loadCurrentSettings()
         }
         .toast(message: toastMessage, style: toastStyle)
+    }
+
+    /// The cards, each opening its connection's screen.
+    private var cards: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach(Page.allCases) { page in
+                    NavigationLink {
+                        ConnectionSettingsView(page: page)
+                    } label: {
+                        connectionCard(page)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Connection Settings")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func connectionCard(_ page: Page) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: page.icon)
+                .font(.body.weight(.semibold))
+                .foregroundColor(.accentColor)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color.accentColor.opacity(0.15)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(page.title)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Text(verbatim: cardSummary(page))
+                    .font(.caption.monospaced())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+    }
+
+    /// What each card is set to right now: the server's host, or the node in use.
+    private func cardSummary(_ page: Page) -> String {
+        let settings = settingsViewModel.settings
+        func host(_ url: String) -> String {
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return AppLocalization.string("Not set") }
+            return URLComponents(string: trimmed)?.host ?? trimmed
+        }
+        switch page {
+        case .indexer: return host(settings.kaPostIndexerURL)
+        case .push: return host(settings.pushIndexerURL)
+        case .node:
+            let trusted = settings.trustedNodeAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trusted.isEmpty { return AppLocalization.string("Automatic Scan") }
+            if let saved = settings.savedNodeAddresses.first(where: { $0.address == trusted }),
+               !saved.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return saved.label
+            }
+            return trusted
+        case .translation: return host(settings.translationServiceURL)
+        case .domains: return host(settings.indexerURL)
+        case .explorer: return host(settings.kaspaRestAPIURL)
+        case .trestly: return host(settings.trestlyAPIURL)
+        }
+    }
+
+    /// One connection's own screen; Save keeps it and goes back to the cards.
+    private func pageScreen(_ page: Page) -> some View {
+        Form {
+            switch page {
+            case .indexer: indexerSections
+            case .push: pushSections
+            case .node: nodeSections
+            case .translation: translationSections
+            case .domains: domainsSections
+            case .explorer: explorerSections
+            case .trestly: trestlySections
+            }
+        }
+        .navigationTitle(page.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if page.hasSave {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if saveSettings() {
+                            dismiss()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func showToast(_ message: String, style: ToastStyle = .success) {
@@ -2002,6 +2143,7 @@ struct ConnectionSettingsView: View {
         publicChatIndexerURL = settingsViewModel.settings.publicChatIndexerURL
         pushIndexerURL = settingsViewModel.settings.pushIndexerURL
         kaspaRestAPIURL = settingsViewModel.settings.kaspaRestAPIURL
+        trestlyAPIURL = settingsViewModel.settings.trestlyAPIURL
     }
 
     /// Persists the endpoint fields, or returns false without saving anything when any field
@@ -2016,7 +2158,7 @@ struct ConnectionSettingsView: View {
     /// https:// (Decision 3A).
     @discardableResult
     private func saveSettings() -> Bool {
-        let allFields = [indexerURL, kaPostIndexerURL, translationServiceURL, publicChatIndexerURL, pushIndexerURL, kaspaRestAPIURL]
+        let allFields = [indexerURL, kaPostIndexerURL, translationServiceURL, publicChatIndexerURL, pushIndexerURL, kaspaRestAPIURL, trestlyAPIURL]
         guard !allFields.contains(where: isCleartextHTTP) else {
             showToast(Self.httpsRequiredError, style: .error)
             return false
@@ -2029,13 +2171,20 @@ struct ConnectionSettingsView: View {
         // empty base URL builds a request that fails as "unsupported URL" and reads as the
         // server being down, which is exactly how the KNS field broke.
         let defaults = ConnectionProfile.defaults(for: settingsViewModel.settings.networkType)
+        let previousIndexer = settingsViewModel.settings.indexerURL
         settingsViewModel.settings.indexerURL = normalizedOrDefault(indexerURL, defaults.indexerURL)
         settingsViewModel.settings.kaPostIndexerURL = normalizedOrDefault(kaPostIndexerURL, defaults.kaPostIndexerURL)
         settingsViewModel.settings.translationServiceURL = normalizedOrDefault(translationServiceURL, defaults.translationServiceURL)
         settingsViewModel.settings.publicChatIndexerURL = normalizedOrDefault(publicChatIndexerURL, defaults.publicChatIndexerURL)
         settingsViewModel.settings.pushIndexerURL = normalizedOrDefault(pushIndexerURL, defaults.pushIndexerURL)
         settingsViewModel.settings.kaspaRestAPIURL = normalizedOrDefault(kaspaRestAPIURL, defaults.kaspaRestAPIURL)
+        settingsViewModel.settings.trestlyAPIURL = normalizedOrDefault(trestlyAPIURL, AppSettings.defaultTrestlyAPIURL(for: settingsViewModel.settings.networkType))
         settingsViewModel.saveSettings()
+        // A new .kachat indexer: check it at once (the refresh re-chooses the source) instead of
+        // on the next scheduled refresh.
+        if settingsViewModel.settings.indexerURL != previousIndexer {
+            Task { await KachatNamesRegistry.shared.refresh() }
+        }
         return true
     }
 

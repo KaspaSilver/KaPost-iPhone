@@ -901,7 +901,7 @@ struct KaspaKeypadAmountEntry: View {
             Spacer(minLength: 8)
             KaspaKeypad { key in
                 let text = KaspaKeypad.applying(key, to: fiatAmountState.displayText,
-                                                maxDecimals: fiatAmountState.isFiatMode ? 2 : 8)
+                                                maxDecimals: fiatAmountState.isFiatMode ? portfolio.currentCurrency.fractionDigits : 8)
                 guard text != fiatAmountState.displayText else {
                     Haptics.impact(.rigid)
                     return
@@ -1222,6 +1222,17 @@ struct SwipeUpLabels {
     var failedFallback = "The send didn't go out."
 
     static let send = SwipeUpLabels()
+    /// Any other transaction (kUSDT's Combine Coins): `done` is its finished title.
+    static func transaction(done: LocalizedStringKey) -> SwipeUpLabels {
+        SwipeUpLabels(
+            release: "Release to Confirm",
+            working: "Sending",
+            workingDetail: "Broadcasting to the Kaspa BlockDAG...",
+            done: done,
+            recipientWord: "for",
+            failedFallback: "The transaction didn't go out."
+        )
+    }
 }
 
 /// A send screen's scroll view with "Swipe up to Send" pinned at the bottom. Press the bar and

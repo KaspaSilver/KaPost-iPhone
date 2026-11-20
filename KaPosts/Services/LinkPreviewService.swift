@@ -208,15 +208,6 @@ enum KaChatInternalLink: Equatable {
     /// (see KACHAT_APP_LINKS.md).
     static let universalLinkHost = "kachat.app"
 
-    /// The one profile link every share button hands out - your own (Profile, beside the title)
-    /// and anyone else's (User Info > Share) - so the two can never drift apart:
-    /// `https://kachat.app/u/<address without kaspa:>`, lowercased and trimmed.
-    static func profileShareURL(for address: String) -> URL? {
-        let normalized = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalized.isEmpty else { return nil }
-        return URL(string: KaChatInternalLink.profile(address: normalized).universalLinkString)
-    }
-
     /// The form the share sheets emit, matching KaPosts' existing share text (`KaPostsView`).
     var shareLinkString: String {
         switch self {
@@ -994,30 +985,6 @@ struct LinkPreviewData: Equatable {
     let description: String?
     let imageURLString: String?
     let siteName: String?
-    /// Set only for Nextcloud public-share media links (see
-    /// KaChat-Desktop/docs/NEXTCLOUD_MEDIA_PREVIEW.md): tells the card this link is directly
-    /// viewable media and which kind, so tapping opens the in-app viewer instead of Safari.
-    var nextcloudMedia: NextcloudMediaKind? = nil
-    /// The share's raw-file `/download` URL (streams via range requests) — the viewer's source.
-    var mediaDownloadURLString: String? = nil
-    /// Content-Length from the type-detection HEAD — shown on attachment cards.
-    var mediaByteSize: Int64? = nil
-    /// The Nextcloud server answered that this public share no longer exists (404/410), so the
-    /// sender revoked it or it expired. The card renders a neutral "no longer shared" tile and,
-    /// crucially, stops showing the share URL - a link nobody can open is just the sender's
-    /// server address sitting in the transcript. Only ever set on a definite answer FROM the
-    /// server; a network failure leaves this false and the card simply renders nothing.
-    var nextcloudShareRevoked: Bool = false
-}
-
-enum NextcloudMediaKind: String, Equatable {
-    case image
-    case video
-    case audio
-    case pdf
-    /// Anything else (Office docs, archives, …) — rendered as an attachment card that opens
-    /// in Nextcloud's own web viewer; no native inline rendering exists for these.
-    case file
 }
 
 /// Fetches Open Graph preview metadata for links in posts and Public Chats rooms. A card is only
@@ -1082,15 +1049,14 @@ actor LinkPreviewService {
     /// `AsyncImage` silently failed for Instagram. Returns nil on any failure (card shows no image),
     /// and makes no request at all for an image `KaPostLinkPreviewPolicy.allowsImage` refuses: only
     /// https, from the allowed sites and their image servers, redirects included.
-    /// `maxBytes` overrides the default 5 MB cap — the Nextcloud full-quality photo viewer
-    /// passes a much higher limit since it deliberately fetches the original file.
+    /// `maxBytes` overrides the default 5 MB cap for a caller that fetches an original file.
     func imageData(_ url: URL, referer: URL, maxBytes: Int? = nil) async -> Data? {
         guard KaPostLinkPreviewPolicy.allowsImage(url, forPage: referer) else {
             AppLog.log("[LinkPreview] image host not allowed: %@", Self.logLabel(url))
             return nil
         }
-        // Keyed by URL and cap: the full-quality Nextcloud fetch must not be answered from a
-        // capped request's bytes (or vice versa).
+        // Keyed by URL and cap: a full-size fetch must not be answered from a capped request's
+        // bytes (or vice versa).
         let key = "\(url.absoluteString)|\(maxBytes ?? maxImageBytes)"
         if let cached = imageCache.object(forKey: key as NSString) {
             return cached as Data
@@ -1196,13 +1162,6 @@ actor LinkPreviewService {
 
     private static let syncCache = SyncCacheMirror()
 
-    /// Pre-seeds the cache with preview data the caller already knows to be true — the media
-    /// send paths use this right after uploading, so the sender's own bubble renders instantly
-    /// with zero network instead of waiting on the type probe.
-    func seed(_ data: LinkPreviewData) {
-        store(data, forKey: data.url.absoluteString)
-    }
-
     func preview(for url: URL) async -> LinkPreviewData? {
         let key = url.absoluteString
         if let cached = cache[key] {
@@ -1215,11 +1174,6 @@ actor LinkPreviewService {
                 return cached
             }
         }
-        // Failed share probes wait out the cooldown before re-hitting the server.
-        if let failedAt = nextcloudFailureAt[key], Date().timeIntervalSince(failedAt) < nextcloudRetryCooldown {
-            return nil
-        }
-
         if let existing = inFlight[key] {
             AppLog.log("[LinkPreview] joining in-flight fetch for %@", Self.logLabel(url))
             return await existing.value
@@ -1237,21 +1191,7 @@ actor LinkPreviewService {
         return result
     }
 
-    /// Share URLs whose probe recently failed, with the failure time — retried after a
-    /// cooldown rather than on every render. Unbounded caching of the failure would pin the
-    /// message to a bare link forever; retrying every render hammers the server anonymously,
-    /// which can trip Nextcloud's brute-force throttle and take ALL previews down with it.
-    private var nextcloudFailureAt: [String: Date] = [:]
-    private let nextcloudRetryCooldown: TimeInterval = 60
-
     private func store(_ value: LinkPreviewData?, forKey key: String) {
-        if let url = URL(string: key), Self.nextcloudShareEndpoints(for: url) != nil {
-            if value == nil {
-                nextcloudFailureAt[key] = Date()
-                return
-            }
-            nextcloudFailureAt.removeValue(forKey: key)
-        }
         if cache[key] == nil {
             cacheOrder.append(key)
         }
@@ -1279,7 +1219,10 @@ actor LinkPreviewService {
 
     private static let youTubeHosts: Set<String> = ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]
 
-    // MARK: - Nextcloud public shares (docs: KaChat-Desktop/docs/NEXTCLOUD_MEDIA_PREVIEW.md)
+    // MARK: - Nextcloud public shares
+
+    /// KaPost draws no Nextcloud share (no preview, no viewer); a room still uses the shape to
+    /// keep such a link out of Copy Link (`PublicChatChannelView`).
 
     struct NextcloudShareEndpoints: Equatable {
         let downloadURL: URL
@@ -1308,122 +1251,6 @@ actor LinkPreviewService {
         )
     }
 
-    /// What a Nextcloud server answers for a public share that was deleted, expired, or had its
-    /// link removed. Anything else (403 password prompt, 5xx, a proxy error) is NOT treated as
-    /// revoked - the link stays intact and the card just does not render.
-    private static let shareGoneStatuses: Set<Int> = [404, 410]
-
-    /// The share link itself carries no file type, so `HEAD` the `/download` URL (native HTTP,
-    /// no CORS constraints) and branch on `Content-Type`. Non-media shares return nil, which
-    /// renders as a plain link. The card's poster is the share's `/preview` thumbnail; the
-    /// full-quality fetch/stream only happens when the user taps the card.
-    private func fetchNextcloudPreview(for url: URL, endpoints: NextcloudShareEndpoints) async -> LinkPreviewData? {
-        do {
-            // HEAD first (cheapest); some servers/reverse proxies reject HEAD on public
-            // downloads, so fall back to a 2-byte ranged GET — either way we only need the
-            // response headers, never the body.
-            // A 2-byte ranged GET is the primary probe — universally supported and exactly one
-            // round trip (HEAD-then-GET doubled the wait on servers that dislike HEAD). HEAD
-            // remains as the rare fallback for servers that mishandle Range.
-            var http: HTTPURLResponse?
-            // A status the SERVER returned saying the share is gone, as opposed to a request
-            // that never got an answer. Only the former justifies hiding the link.
-            var revokedStatus: Int?
-            var rangeRequest = URLRequest(url: endpoints.downloadURL)
-            rangeRequest.setValue("bytes=0-1", forHTTPHeaderField: "Range")
-            if let (_, rangeResponse) = try? await session.data(for: rangeRequest),
-               let rangeHTTP = rangeResponse as? HTTPURLResponse {
-                if (200..<300).contains(rangeHTTP.statusCode) {
-                    http = rangeHTTP
-                } else if Self.shareGoneStatuses.contains(rangeHTTP.statusCode) {
-                    revokedStatus = rangeHTTP.statusCode
-                }
-            }
-            if http == nil, revokedStatus == nil {
-                var headRequest = URLRequest(url: endpoints.downloadURL)
-                headRequest.httpMethod = "HEAD"
-                let (_, headResponse) = try await session.data(for: headRequest)
-                if let headHTTP = headResponse as? HTTPURLResponse {
-                    if (200..<300).contains(headHTTP.statusCode) {
-                        http = headHTTP
-                    } else if Self.shareGoneStatuses.contains(headHTTP.statusCode) {
-                        revokedStatus = headHTTP.statusCode
-                    }
-                }
-            }
-            if let revokedStatus {
-                AppLog.log("[LinkPreview] Nextcloud share gone (HTTP %d) for %@", revokedStatus, LinkPreviewService.logLabel(url))
-                return LinkPreviewData(
-                    url: url,
-                    title: nil,
-                    description: nil,
-                    imageURLString: nil,
-                    siteName: nil,
-                    nextcloudShareRevoked: true
-                )
-            }
-            guard let http else {
-                AppLog.log("[LinkPreview] Nextcloud HEAD+ranged-GET both failed for %@", LinkPreviewService.logLabel(url))
-                return nil
-            }
-            let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-            let kind: NextcloudMediaKind
-            if contentType.hasPrefix("image/") { kind = .image }
-            else if contentType.hasPrefix("video/") { kind = .video }
-            else if contentType.hasPrefix("audio/") { kind = .audio }
-            else if contentType.contains("pdf") { kind = .pdf }
-            else { kind = .file }
-            let filename = Self.filename(fromContentDisposition: http.value(forHTTPHeaderField: "Content-Disposition"))
-            let fallbackTitle: String
-            switch kind {
-            case .image: fallbackTitle = "Photo"
-            case .video: fallbackTitle = "Video"
-            case .audio: fallbackTitle = "Audio"
-            case .pdf: fallbackTitle = "PDF"
-            case .file: fallbackTitle = "File"
-            }
-            // Via the ranged-GET fallback, Content-Length is the 2-byte slice — the real size
-            // lives in Content-Range ("bytes 0-1/12345").
-            let byteSize: Int64?
-            if let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
-               let totalPart = contentRange.split(separator: "/").last, let total = Int64(totalPart) {
-                byteSize = total
-            } else {
-                byteSize = http.value(forHTTPHeaderField: "Content-Length").flatMap { Int64($0) }
-            }
-            return LinkPreviewData(
-                url: url,
-                title: filename ?? fallbackTitle,
-                description: nil,
-                imageURLString: endpoints.previewURL.absoluteString,
-                siteName: url.host.map { "Nextcloud · \($0)" } ?? "Nextcloud",
-                nextcloudMedia: kind,
-                mediaDownloadURLString: endpoints.downloadURL.absoluteString,
-                mediaByteSize: byteSize
-            )
-        } catch {
-            AppLog.log("[LinkPreview] Nextcloud HEAD failed for %@: %@", LinkPreviewService.logLabel(url), error.localizedDescription)
-            return nil
-        }
-    }
-
-    /// Pulls the shared file's name out of `Content-Disposition: attachment; filename="x.jpg"`
-    /// (or the RFC 5987 `filename*=UTF-8''x.jpg` form) for the card title.
-    private nonisolated static func filename(fromContentDisposition header: String?) -> String? {
-        guard let header else { return nil }
-        if let range = header.range(of: #"filename\*=UTF-8''([^;]+)"#, options: .regularExpression) {
-            let raw = String(header[range]).replacingOccurrences(of: "filename*=UTF-8''", with: "")
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            return trimmed.removingPercentEncoding ?? trimmed
-        }
-        if let range = header.range(of: #"filename="([^"]+)""#, options: .regularExpression) {
-            var raw = String(header[range]).replacingOccurrences(of: "filename=\"", with: "")
-            if raw.hasSuffix("\"") { raw.removeLast() }
-            return raw.isEmpty ? nil : raw
-        }
-        return nil
-    }
-
     private func fetchPreview(for url: URL) async -> LinkPreviewData? {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             AppLog.log("[LinkPreview] rejected non-http(s) scheme for %@", LinkPreviewService.logLabel(url))
@@ -1434,12 +1261,6 @@ actor LinkPreviewService {
         guard KaPostLinkPreviewPolicy.allowsPage(url) else {
             AppLog.log("[LinkPreview] host not on the allowed list: %@", LinkPreviewService.logLabel(url))
             return nil
-        }
-
-        // Nextcloud public shares are media files, not pages — no Open Graph to scrape. Type
-        // comes from a HEAD on the raw-file endpoint instead (see fetchNextcloudPreview).
-        if let endpoints = Self.nextcloudShareEndpoints(for: url) {
-            return await fetchNextcloudPreview(for: url, endpoints: endpoints)
         }
 
         // YouTube serves a cookie-consent-wall page (no Open Graph tags at all) to plain scraper

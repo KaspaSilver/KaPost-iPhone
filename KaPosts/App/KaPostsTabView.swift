@@ -38,6 +38,9 @@ struct KaPostsTabView: View {
     /// The Welcome Guide after a create or import (`WelcomeGuideView`), and after a kill that cut
     /// one short.
     @State private var showWelcomeGuide = false
+    /// A tapped "Received kUSDT" notification (`TokenRoute`): that token's Manage screen, as a
+    /// sheet over whatever tab is showing (the Wallet is two screens deep under Profile).
+    @State private var openToken: WalletToken?
     @EnvironmentObject private var walletManager: WalletManager
     @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
     @ObservedObject private var publicChatBadge = PublicChatUnreadBadge.shared
@@ -101,6 +104,17 @@ struct KaPostsTabView: View {
         .sheet(isPresented: $showProfileEditor) {
             KaChatProfileEditorSheet()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openToken)) { _ in takeTokenRoute() }
+        .sheet(item: $openToken) { token in
+            NavigationStack {
+                TokenManageView(token: token)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Close") { openToken = nil }
+                        }
+                    }
+            }
+        }
         .fullScreenCover(isPresented: $showWelcomeGuide) {
             WelcomeGuideView(onFinished: { showWelcomeGuide = false }, isOnboardingRun: true)
         }
@@ -127,6 +141,11 @@ struct KaPostsTabView: View {
             }
             // The rooms' stored messages, so the Public Chats badge counts before the list opens.
             PublicChatService.shared.primeChannelSummaries()
+            // the app icon follows KaPost's notifications and the rooms, never the hidden 1:1 chats
+            AppIconBadge.shared.start()
+            // kUSDT is checked while the app is open, so one that arrives is announced
+            TokenWallet.shared.startPolling()
+            takeTokenRoute()
             if KaPostsDeepLink.pendingOpenNotifications {
                 KaPostsDeepLink.pendingOpenNotifications = false
                 dock.selectedTab = .notifications
@@ -135,6 +154,18 @@ struct KaPostsTabView: View {
             } else if PublicChatService.shared.pendingPublicChatNavigation != nil {
                 dock.selectedTab = .publicChats
             }
+        }
+    }
+
+    /// Opens the token a notification named, once the tabs are on screen (a sheet asked for
+    /// before then came up blank). Full-screen covers close first, as for a room push.
+    private func takeTokenRoute() {
+        guard TokenRoute.pending != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard let id = TokenRoute.pending else { return }
+            TokenRoute.pending = nil
+            NotificationCenter.default.post(name: .kaPostsCloseCovers, object: nil)
+            openToken = TokenWallet.shared.tokens.first(where: { $0.id == id }) ?? .kusdt
         }
     }
 }

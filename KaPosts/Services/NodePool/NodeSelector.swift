@@ -9,7 +9,7 @@ actor NodeSelector {
 
     // MARK: - State
 
-    /// Reference DAA score (median of good nodes)
+    /// Reference DAA score (median of good nodes), refreshed from `NodePoolService`'s stats loop
     private var referenceDaaScore: UInt64?
 
     /// Last time reference was updated
@@ -108,26 +108,6 @@ actor NodeSelector {
         return Array(scored.prefix(count).map(\.0))
     }
 
-    /// Pick best nodes, preferring non-seed nodes but falling back to seeds if needed
-    func pickBestWithSeedFallback(
-        for op: OperationClass,
-        count: Int = 1,
-        excluding: Set<String> = []
-    ) async -> [Endpoint] {
-        let nodes = await registry.allRecords()
-        let network = await registry.network
-
-        // Filter and score all nodes equally (no special treatment for seeds)
-        let capable = nodes.filter { !excluding.contains($0.endpoint.key) && $0.canHandle(op) }
-        let scored: [(Endpoint, Double)] = withoutStaleNodes(capable, among: nodes, for: op, network: network)
-            .map { record in
-                (record.endpoint, score(record, for: op))
-            }
-            .sorted { $0.1 > $1.1 }
-
-        return Array(scored.prefix(count).map(\.0))
-    }
-
     // MARK: - Scoring
 
     /// Calculate score for a node
@@ -221,7 +201,7 @@ actor NodeSelector {
     /// For balances, subscriptions and sends: no node that reported another network, and none
     /// trailing the median of the nodes fit to be active (`NodeRegistry.daaReference`, out of
     /// `all`) by more than `NodeRecord.maxActiveDaaLag` - the latter only while some node is left.
-    /// The score's lag penalty alone let a fast lagging node win, and its reference is unset here.
+    /// The score's lag penalty alone let a fast lagging node win.
     private func withoutStaleNodes(_ records: [NodeRecord], among all: [NodeRecord], for op: OperationClass, network: NetworkType) -> [NodeRecord] {
         guard op.requiresSynced else { return records }
         let sameNetwork = records.filter { record in
@@ -253,22 +233,11 @@ actor NodeSelector {
 // MARK: - Convenience Extensions
 
 extension NodeSelector {
-    /// Pick a single best node for an operation
-    func pickOne(for op: OperationClass, excluding: Set<String> = []) async -> Endpoint? {
-        let results = await pickBest(for: op, count: 1, excluding: excluding)
-        return results.first
-    }
-
     /// Pick primary and standby nodes for subscription
     func pickPrimaryAndStandby(for op: OperationClass) async -> (primary: Endpoint, standby: Endpoint?)? {
         let results = await pickBest(for: op, count: 2)
         guard let primary = results.first else { return nil }
         let standby = results.count > 1 ? results[1] : nil
         return (primary, standby)
-    }
-
-    /// Pick nodes for broadcast (e.g., submit tx to multiple nodes)
-    func pickForBroadcast(count: Int = 3) async -> [Endpoint] {
-        await pickBest(for: .submitTransaction, count: count)
     }
 }

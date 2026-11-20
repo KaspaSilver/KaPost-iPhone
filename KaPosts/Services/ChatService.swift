@@ -40,7 +40,6 @@ final class ChatService: ObservableObject {
 
     @Published var conversations: [Conversation] = [] {
         didSet {
-            scheduleBadgeUpdate()
             scheduleChatListSnapshotPersist()
         }
     }
@@ -55,9 +54,6 @@ final class ChatService: ObservableObject {
     /// Whether each indexer answers inbox lookups (`KasiaAPIClient.probeInboxSupport`).
     var inboxSupportByIndexer: [String: Bool] = [:]
     var inboxSyncInFlight = false
-    @Published var replyingTo: ChatMessage?
-    /// The message whose text the composer is editing (the user's own) - see `sendEdit`.
-    @Published var editingMessage: ChatMessage?
     /// This wallet's reactions, keyed by the txId of the message they target - loaded once per
     /// conversation (see `loadReactions(for:)`) and kept live afterward by `sendReaction`/the
     /// incoming-reaction interception in `addMessageToConversation` applying updates directly,
@@ -65,11 +61,6 @@ final class ChatService: ObservableObject {
     @Published var reactionsByTxId: [String: [MessageStore.ReactionSnapshot]] = [:]
     /// The newest edit per message txId, for the open conversation - see `MessageEditCodec`.
     @Published var editsByTxId: [String: MessageEditSnapshot] = [:]
-    /// Newest reaction per contact, across every message in that conversation - not scoped to
-    /// whichever single conversation is currently open (unlike `reactionsByTxId`), since the chat
-    /// list needs this for every row at once. Refreshed by `refreshLatestReactionPreviews()`; see
-    /// `ChatListView`'s `ConversationRow` for where it's compared against `lastMessage.timestamp`.
-    @Published var latestReactionByContact: [String: MessageStore.LatestReactionPreview] = [:]
     var settingsViewModel: SettingsViewModel?
     var cachedSettings = SettingsViewModel.loadSettings()
     @Published var activeConversationAddress: String?
@@ -125,19 +116,6 @@ final class ChatService: ObservableObject {
     /// Images handed over from the Share Extension, keyed by contact address. Staged here until
     /// that contact's chat opens, then attached to the composer as a pending photo
     /// (see `ChatDetailView.attachPendingShareImageIfAvailable`). Session-only by design.
-    var pendingShareImages: [String: Data] = [:]
-
-    func stagePendingShareImage(_ data: Data, for contactAddress: String) {
-        pendingShareImages[contactAddress] = data
-    }
-
-    func pendingShareImage(for contactAddress: String) -> Data? {
-        pendingShareImages[contactAddress]
-    }
-
-    func clearPendingShareImage(for contactAddress: String) {
-        pendingShareImages.removeValue(forKey: contactAddress)
-    }
 
     // Connection status properties
     @Published var isRpcSubscribed = false
@@ -240,12 +218,6 @@ final class ChatService: ObservableObject {
     // default unless explicitly marked `nonisolated` too.
     nonisolated static let inMemoryConversationWindowSize = 160
 
-    /// The background load of the open chat's whole history (see `loadFullHistory`).
-    var fullHistoryLoadTask: Task<Void, Never>?
-    /// The chat most recently left, trimmed back to the in-memory window once the chat list is
-    /// showing again (`trimLeftConversationIfNeeded`).
-    var lastLeftConversationAddress: String?
-
     /// Whether the app posts its OWN banners for the messages, group traffic, public chats and
     /// KaPosts activity it discovers itself - through the UTXO subscription, the sweep, the
     /// open-chat poll, background fetch, or a silent push.
@@ -266,7 +238,6 @@ final class ChatService: ObservableObject {
         let timestamp: Date
     }
     var pendingOutgoingQueue: [String: [PendingOutgoingRef]] = [:]
-    var olderHistoryPageTasks: [String: Task<Int, Never>] = [:]
     var olderHistoryExhaustedContacts: Set<String> = []
     var needsMessageStoreSyncAfterBatch = false
     var lastMessageStoreSyncScheduledAt: Date?
@@ -387,11 +358,6 @@ final class ChatService: ObservableObject {
     let pollDelayAfterSync: TimeInterval = 60.0
 
     var pollTask: Task<Void, Never>?
-    /// Fast per-contact indexer poll for the CURRENTLY-OPEN 1:1 chat. iOS otherwise relies only
-    /// on the confirmation-gated utxosChanged push for live DMs (no foreground indexer poll at
-    /// all, unlike desktop's 5s and Android's 2s loops), which made new incoming messages in an
-    /// open chat lag. This gives the actively-viewed conversation ~2s delivery.
-    var activeChatPollTask: Task<Void, Never>?
     /// Foreground defense-in-depth indexer sweep over ALL active contacts (desktop polls every
     /// 5s, Android every 2s; iOS otherwise trusts the utxosChanged push alone for closed chats).
     /// Serial per-contact `fetchContextualMessagesFromContact` calls, ~30s between sweeps, backs
@@ -568,7 +534,6 @@ final class ChatService: ObservableObject {
     let reliablePushCatchUpDebounce: TimeInterval = 600
     let pushReregisterCooldown: TimeInterval = 600
 
-    var badgeUpdateTask: Task<Void, Never>?
     var chatListSnapshotPersistTask: Task<Void, Never>?
     var pendingLastMessageUpdates: [UUID: Date] = [:]
     var pendingLastMessageUpdateWorkItem: DispatchWorkItem?
@@ -591,6 +556,11 @@ final class ChatService: ObservableObject {
     let outgoingAttemptTTL: TimeInterval = 900
     var scheduledSendRetries = Set<String>()
     var noInputRetryCounts: [String: Int] = [:]
+    /// When each send put off for unconfirmed coins first waited (`nextNoInputRetryDelay`).
+    var noInputRetryStartedAt: [String: Date] = [:]
+    /// A payment still waiting for confirmed coins after this long is given up and marked failed,
+    /// rather than retried forever (`deferredRetryTimedOut`).
+    let deferredSendGiveUpInterval: TimeInterval = 30 * 60
     let spendableFundsRetryAttempts = 5
     let spendableFundsRetryBaseDelay: TimeInterval = 0.1
     var lastMessageCompactionAt: Date = .distantPast
@@ -682,24 +652,7 @@ final class ChatService: ObservableObject {
         }
     }
 
-    func startReplyTo(_ message: ChatMessage) {
-        replyingTo = message
-    }
-
-    func cancelReply() {
-        replyingTo = nil
-    }
-
     // MARK: - Edit
-
-    func startEditing(_ message: ChatMessage) {
-        replyingTo = nil
-        editingMessage = message
-    }
-
-    func cancelEditing() {
-        editingMessage = nil
-    }
 
     /// Observe conversation count changes to trigger resubscription when new chats are added
     private func observeConversationCount() {
@@ -806,8 +759,6 @@ final class ChatService: ObservableObject {
         // untracked by stopPolling and would keep writing the old wallet's data after the switch.
         pollTask?.cancel()
         pollTask = nil
-        activeChatPollTask?.cancel()
-        activeChatPollTask = nil
         stopForegroundContactSweep()
         initialSyncTask?.cancel()
         initialSyncTask = nil
@@ -815,6 +766,9 @@ final class ChatService: ObservableObject {
         messageSyncTask = nil
         subscriptionRetryTask?.cancel()
         subscriptionRetryTask = nil
+        earlySubscriptionTask?.cancel()
+        earlySubscriptionTask = nil
+        storeWaitAttempts = nil
         pendingResubscriptionTask?.cancel()
         pendingResubscriptionTask = nil
         subscriptionBalanceRefreshTask?.cancel()
@@ -919,6 +873,14 @@ final class ChatService: ObservableObject {
     /// auto-reconnect). Reset to 0 whenever the subscription comes up.
     var subscriptionRetryAttempts = 0
     var startPollingWhenStoreReadyTask: Task<Void, Never>?
+    /// How many times `startPolling` has waited for this account's message store (keyed by the
+    /// account): it backs off and gives up after `maxStoreWaitAttempts`, rather than retrying four
+    /// times a second forever when the store failed to load.
+    var storeWaitAttempts: (wallet: String, count: Int)?
+    let maxStoreWaitAttempts = 10
+    /// The UTXO subscription started while the message store is still loading (or never does):
+    /// KaPost's balance and coins don't need the store.
+    var earlySubscriptionTask: Task<Void, Never>?
     var suppressChatListSnapshotPersistence = false
 
     /// When this process last wrote to the message store (see `recordLocalSave`).

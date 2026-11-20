@@ -52,6 +52,8 @@ final class KaPostsAPIClient: ObservableObject {
         case noIndexer
         /// The payload can't fit one transaction (`payloadFitsOneTransaction`).
         case tooLong
+        /// The action was made as another account than the one open now: never signed or sent.
+        case accountChanged
 
         /// The indexer's own "nothing like that here" answer (`NOT_FOUND`): for a cancel, it
         /// holds no still-scheduled post with that id. Every other answer (rate limit, bad
@@ -69,6 +71,7 @@ final class KaPostsAPIClient: ObservableObject {
             case .api(_, let message): return message
             case .badResponse: return "Unexpected response from the KaPost indexer"
             case .missingWallet: return "No active wallet"
+            case .accountChanged: return AppLocalization.string("The account changed, so this wasn't sent.")
             }
         }
     }
@@ -135,16 +138,6 @@ final class KaPostsAPIClient: ObservableObject {
         var decodedOptions: [String] {
             options.map { Data(base64Encoded: $0).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
         }
-    }
-
-    /// `GET /get-poll` - the poll object plus the post id.
-    struct KPollResponse: Decodable {
-        let id: String?
-        let options: [String]
-        let counts: [Int]?
-        let total: Int?
-        let closesAt: Int64
-        let myVote: Int?
     }
 
     /// One row of `GET /scheduled-posts` (§5.10).
@@ -974,7 +967,8 @@ enum KaPostChainReader {
 extension KaPostsAPIClient {
     /// Publishes a KaChat post on-chain. The KaChat exclusivity marker is prepended INSIDE the
     /// message (the only channel the read API surfaces). Returns the transaction id = post id.
-    func submitPost(text: String, mentionedPubkeys: [String] = []) async throws -> String {
+    func submitPost(text: String, mentionedPubkeys: [String] = [], expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let marked = Self.kaChatMarker + text
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
@@ -986,13 +980,15 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.postPayload(pubkey: pubkey, signature: signature, b64Message: b64, mentionsJSON: mentions)
+            KaPostsProtocol.postPayload(pubkey: pubkey, signature: signature, b64Message: b64, mentionsJSON: mentions),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Publishes a poll: the question is the post text (marker inside, like any post), the
     /// options and closing time ride in the payload (KAPOSTS_INDEXER.md §5.9).
-    func submitPoll(question: String, options: [String], closesAt: Date, mentionedPubkeys: [String] = []) async throws -> String {
+    func submitPoll(question: String, options: [String], closesAt: Date, mentionedPubkeys: [String] = [], expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let b64 = KaPostsProtocol.b64(Self.kaChatMarker + question)
         let csv = KaPostsProtocol.pollOptionsCSV(options)
         let closesAtMs = Int64(closesAt.timeIntervalSince1970 * 1000)
@@ -1003,27 +999,23 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.pollPayload(pubkey: pubkey, signature: signature, b64Question: b64, optionsCSV: csv, closesAtMs: closesAtMs, mentionsJSON: mentions)
+            KaPostsProtocol.pollPayload(pubkey: pubkey, signature: signature, b64Question: b64, optionsCSV: csv, closesAtMs: closesAtMs, mentionsJSON: mentions),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Votes in a poll - one vote per pubkey, the latest counts (§5.9).
-    func submitPollVote(pollId: String, optionIndex: Int) async throws -> String {
+    func submitPollVote(pollId: String, optionIndex: Int, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let pubkey = try requesterPubkey()
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.pollVoteSigningString(pollId: pollId, optionIndex: optionIndex),
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.pollVotePayload(pubkey: pubkey, signature: signature, pollId: pollId, optionIndex: optionIndex)
+            KaPostsProtocol.pollVotePayload(pubkey: pubkey, signature: signature, pollId: pollId, optionIndex: optionIndex),
+            expectedOwner: expectedOwner
         )
-    }
-
-    /// One poll's current numbers, for a refresh without reloading the feed.
-    func fetchPoll(postId: String) async throws -> KPollResponse {
-        var query = ["postId": postId]
-        if let me = try? requesterPubkey() { query["requesterPubkey"] = me }
-        return try await get("get-poll", query: query)
     }
 
     /// The mentions array a post, reply, edit or poll signs: valid shapes only, in order, one per
@@ -1277,7 +1269,8 @@ extension KaPostsAPIClient {
     /// reply-notification hook) PLUS any @mentions the comment text resolved to - same dedupe/
     /// validate/self-drop rules as submitPost, so @someone works in comments exactly like in
     /// top-level posts.
-    func submitReply(text: String, postId: String, parentAuthorPubkey: String?, mentionedPubkeys: [String] = []) async throws -> String {
+    func submitReply(text: String, postId: String, parentAuthorPubkey: String?, mentionedPubkeys: [String] = [], expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let marked = Self.kaChatMarker + text
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
@@ -1287,7 +1280,8 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.replyPayload(pubkey: pubkey, signature: signature, postId: postId, b64Message: b64, mentionsJSON: mentions)
+            KaPostsProtocol.replyPayload(pubkey: pubkey, signature: signature, postId: postId, b64Message: b64, mentionsJSON: mentions),
+            expectedOwner: expectedOwner
         )
     }
 
@@ -1297,7 +1291,8 @@ extension KaPostsAPIClient {
 
     /// Replaces the text of one of our own posts/replies/quotes (KAPOSTS_INDEXER.md §5.7).
     /// Same mention rules as a post, so an @mention added in the edit notifies.
-    func submitEdit(text: String, postId: String, mentionedPubkeys: [String] = []) async throws -> String {
+    func submitEdit(text: String, postId: String, mentionedPubkeys: [String] = [], expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let marked = Self.kaChatMarker + text
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
@@ -1307,61 +1302,69 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.editPayload(pubkey: pubkey, signature: signature, postId: postId, b64Message: b64, mentionsJSON: mentions)
+            KaPostsProtocol.editPayload(pubkey: pubkey, signature: signature, postId: postId, b64Message: b64, mentionsJSON: mentions),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Deletes one of our own posts/replies/quotes (KAPOSTS_INDEXER.md §5.8). The chain keeps
     /// the bytes; the indexer stops serving the post.
-    func submitDelete(postId: String) async throws -> String {
+    func submitDelete(postId: String, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let pubkey = try requesterPubkey()
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.deleteSigningString(postId: postId),
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.deletePayload(pubkey: pubkey, signature: signature, postId: postId)
+            KaPostsProtocol.deletePayload(pubkey: pubkey, signature: signature, postId: postId),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Casts an upvote/downvote on a post. `submitUnvote` withdraws one.
-    func submitVote(postId: String, upvote: Bool, authorPubkey: String) async throws -> String {
-        try await submitVoteAction(postId: postId, vote: upvote ? "upvote" : "downvote", authorPubkey: authorPubkey)
+    func submitVote(postId: String, upvote: Bool, authorPubkey: String, expectedOwner: String? = nil) async throws -> String {
+        try await submitVoteAction(postId: postId, vote: upvote ? "upvote" : "downvote", authorPubkey: authorPubkey, expectedOwner: expectedOwner)
     }
 
     /// Removal counter-action (KaChat indexer fork): withdraws our existing up/down vote on a
     /// post. The chain keeps both transactions; the indexer's interpretation nets them out.
-    func submitUnvote(postId: String, authorPubkey: String) async throws -> String {
-        try await submitVoteAction(postId: postId, vote: "unvote", authorPubkey: authorPubkey)
+    func submitUnvote(postId: String, authorPubkey: String, expectedOwner: String? = nil) async throws -> String {
+        try await submitVoteAction(postId: postId, vote: "unvote", authorPubkey: authorPubkey, expectedOwner: expectedOwner)
     }
 
-    private func submitVoteAction(postId: String, vote: String, authorPubkey: String) async throws -> String {
+    private func submitVoteAction(postId: String, vote: String, authorPubkey: String, expectedOwner: String?) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let pubkey = try requesterPubkey()
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.voteSigningString(postId: postId, vote: vote, authorPubkey: authorPubkey),
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.votePayload(pubkey: pubkey, signature: signature, postId: postId, vote: vote, authorPubkey: authorPubkey)
+            KaPostsProtocol.votePayload(pubkey: pubkey, signature: signature, postId: postId, vote: vote, authorPubkey: authorPubkey),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Removal counter-action: withdraws our quote/repost of `contentId` (the quoted post's
     /// id, same field meaning as in the quote payload).
-    func submitUnquote(contentId: String) async throws -> String {
+    func submitUnquote(contentId: String, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let pubkey = try requesterPubkey()
         let signature = try WalletManager.shared.signArbitraryMessage(
             KaPostsProtocol.unquoteSigningString(contentId: contentId),
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.unquotePayload(pubkey: pubkey, signature: signature, contentId: contentId)
+            KaPostsProtocol.unquotePayload(pubkey: pubkey, signature: signature, contentId: contentId),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Follows/unfollows a K identity (66-hex compressed pubkey - only available from post data,
     /// which is why profile-sheet follows without a pubkey stay local-only).
-    func submitFollow(_ follow: Bool, followedPubkey: String) async throws -> String {
+    func submitFollow(_ follow: Bool, followedPubkey: String, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let action = follow ? "follow" : "unfollow"
         let pubkey = try requesterPubkey()
         let signature = try WalletManager.shared.signArbitraryMessage(
@@ -1369,14 +1372,16 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.followPayload(pubkey: pubkey, signature: signature, action: action, followedPubkey: followedPubkey)
+            KaPostsProtocol.followPayload(pubkey: pubkey, signature: signature, action: action, followedPubkey: followedPubkey),
+            expectedOwner: expectedOwner
         )
     }
 
     /// Quotes a post - K's repost mechanism (there is no separate repost action; quotesCount is
     /// the live counter). A PLAIN repost is a quote whose message is just the KaChat marker; a
     /// quote-with-commentary carries marker + text.
-    func submitQuote(text: String?, contentId: String, quotedAuthorPubkey: String) async throws -> String {
+    func submitQuote(text: String?, contentId: String, quotedAuthorPubkey: String, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         let marked = Self.kaChatMarker + (text ?? "")
         let b64 = KaPostsProtocol.b64(marked)
         let pubkey = try requesterPubkey()
@@ -1385,7 +1390,8 @@ extension KaPostsAPIClient {
             mode: .kaspaPersonalMessage
         )
         return try await submitPayloadTx(
-            KaPostsProtocol.quotePayload(pubkey: pubkey, signature: signature, contentId: contentId, b64Message: b64, quotedAuthorPubkey: quotedAuthorPubkey)
+            KaPostsProtocol.quotePayload(pubkey: pubkey, signature: signature, contentId: contentId, b64Message: b64, quotedAuthorPubkey: quotedAuthorPubkey),
+            expectedOwner: expectedOwner
         )
     }
 
@@ -1425,7 +1431,17 @@ extension KaPostsAPIClient {
     /// are out of date (a new post, a delete, an edit).
     private(set) static var ownActivityAt: Date?
 
-    private func submitPayloadTx(_ payload: String) async throws -> String {
+    /// Throws `accountChanged` when the action was made as `expectedOwner` and another account
+    /// is open now. nil skips the check (callers that don't track who made the action).
+    static func checkOwner(_ expectedOwner: String?) throws {
+        guard let expectedOwner else { return }
+        guard WalletManager.shared.currentWallet?.publicAddress == expectedOwner else {
+            throw KaPostsAPIError.accountChanged
+        }
+    }
+
+    private func submitPayloadTx(_ payload: String, expectedOwner: String? = nil) async throws -> String {
+        try Self.checkOwner(expectedOwner)
         guard let wallet = WalletManager.shared.currentWallet,
               let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KaPostsAPIError.missingWallet
@@ -1440,7 +1456,7 @@ extension KaPostsAPIClient {
         let txId: String = try await chatService.enqueueOutgoingTxOperation {
             // The wait may have outlasted the account that signed this payload.
             guard WalletManager.shared.currentWallet?.publicAddress == wallet.publicAddress else {
-                throw KaPostsAPIError.missingWallet
+                throw KaPostsAPIError.accountChanged
             }
             // The coins rooms and sends draw from too: ones a scheduled post is waiting for (§5.10),
             // or that a send still in flight spent, are left out, and the change of the last post

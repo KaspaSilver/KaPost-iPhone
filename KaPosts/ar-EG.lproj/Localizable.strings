@@ -266,7 +266,6 @@
 "None yet" = "لا يوجد بعد";
 ".kachat Name" = "اسم .kachat";
 ".kachat names are coming" = "أسماء .kachat قادمة قريبًا";
-"Get a %@ domain at %@" = "احصل على نطاق %1$@ من %2$@";
 "No %@ names yet." = "لا توجد أسماء %@ بعد.";
 "Couldn't reach %@. Pull down to try again." = "تعذّر الوصول إلى %@. اسحب للأسفل لإعادة المحاولة.";
 "Settling" = "قيد التأكيد";
@@ -319,7 +318,6 @@
 /* Welcome Guide: .kachat and Message Requests */
 "KaPost isn't available on Testnet yet" = "KaPost لسه مش متاحة على الشبكة التجريبية";
 "There is no KaPost indexer for testnet. Turn off Testnet in Settings > Connection to read and post on mainnet." = "مفيش مفهرس KaPost للشبكة التجريبية. اقفل الشبكة التجريبية من الإعدادات > الاتصال علشان تقرا وتنشر على الشبكة الرئيسية.";
-"Offer accepted" = "تم قبول العرض";
 "Expired" = "منتهي";
 "Keep" = "إبقاء";
 "Cancelled." = "تم الإلغاء.";
@@ -374,7 +372,6 @@
 "Switch between Kaspa and your currency" = "بدّل بين Kaspa وعملتك";
 "Opens this transaction in the block explorer." = "بيفتح المعاملة دي في مستكشف البلوكات.";
 "New Public Chat" = "شات عام جديد";
-"This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name." = "العنوان ده للشات والدومينات بس. 1 Kaspa يكفي لحوالي 500 استخدام في التطبيق. الدومينات بتتكلف من 35 لـ4000 Kaspa حسب الاسم.";
 "Unpinned" = "اتشال التثبيت";
 "Coin Control" = "التحكم في العملات";
 "Automatic" = "تلقائي";
@@ -426,19 +423,6 @@
 "Renewal is open: renew it before %@ to keep it." = "التجديد متاح: جدّده قبل %@ للاحتفاظ به.";
 "%@ has expired" = "انتهت صلاحية %@";
 "Renew it before %@ or anyone can claim it." = "جدّده قبل %@ وإلا يمكن لأي شخص المطالبة به.";
-"%@ sold" = "بيع %@";
-"%@ KAS was paid to you." = "دُفع لك %@ KAS.";
-"Your listing was bought." = "تم شراء إدراجك.";
-"You accepted an offer for it." = "قبلت عرضًا عليه.";
-"New offer on %@" = "عرض جديد على %@";
-"%@ KAS offered for it." = "عُرض %@ KAS مقابله.";
-"%@ is yours now." = "%@ أصبح لك الآن.";
-"Offer on %@ declined" = "رُفض العرض على %@";
-"The owner declined it. The KAS is back with you." = "رفضه المالك. عادت KAS إليك.";
-"Offer on %@ expired" = "انتهى العرض على %@";
-"Nobody accepted it in time. The KAS is back with you." = "لم يقبله أحد في الوقت المحدد. عادت KAS إليك.";
-"Offer on %@ returned" = "أُعيد العرض على %@";
-"It can no longer be accepted. The KAS is back with you." = "لم يعد من الممكن قبوله. عادت KAS إليك.";
 
 /* .kachat hub tabs: Marketplace, Reclaimable, Activity */
 
@@ -461,11 +445,8 @@
 /* .kachat sale tile: expiry flag */
 
 /* .kachat: expired names are available to claim */
-"%@ was freed" = "تم تحرير %@";
-"It expired and was cleared from the registry. Your bond is back with you." = "انتهت صلاحيته وأُزيل من السجل. عاد ضمانك إليك.";
 
 /* .kachat: name past grace is available to anyone */
-"%@ is no longer yours" = "%@ لم يعد ملكك";
 
 /* .kachat: claims in progress button and busy-network notes */
 
@@ -839,7 +820,6 @@
 "This address does not carry a public key." = "العنوان ده مفيهوش مفتاح عام.";
 "This address holds funds, so this looks like the right account." = "العنوان ده فيه فلوس، فباين إنه الحساب الصح.";
 "This card already holds a backup. Saving replaces it once the new one is confirmed." = "الكارت ده فيه نسخة احتياطية بالفعل. الحفظ هيستبدلها أول ما الجديدة تتأكد.";
-"This file is no longer shared" = "الملف ده مبقاش مشارَك";
 "This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPost's keys are locked to the device they were created on. Enter your 12 or 24 words to unlock it here. Your messages on this device are kept." = "يحتوي هذا الـ iPhone على حسابك لكن ليس على مفاتيحه. يحدث هذا بعد استعادة الهاتف من نسخة احتياطية لأن مفاتيح KaPost مرتبطة بالجهاز الذي أُنشئت عليه. أدخل كلماتك الـ 12 أو 24 لفتحه هنا. يتم الاحتفاظ برسائلك على هذا الجهاز.";
 "This is more than the address you're sending from holds." = "هذا أكثر مما يحمله العنوان الذي ترسل منه.";
 "This is much more than the network needs." = "هذا أكثر بكثير مما تحتاجه الشبكة.";
@@ -972,7 +952,6 @@
 "Everything here is downloaded or generated again when it is needed, so clearing it costs a little data and nothing else." = "كل اللي هنا بيتنزّل أو بيتعمل من جديد لما نحتاجه، فمسحه بيكلّفك شوية داتا وبس.";
 "Everything you have switched on below can reach you, even when the app is closed. Turning this off silences all of it." = "كل اللي فعّلته تحت يقدر يوصلك، حتى لو التطبيق مقفول. لو قفلت ده كله هيسكت.";
 "Exports app/device info, connection settings, local message counts, and recent app logs as a zip — for troubleshooting with support. No private keys, 12 or 24 words, or decrypted message content are included." = "بيصدّر معلومات التطبيق/الجهاز وإعدادات الاتصال وأعداد الرسايل المحلية وسجلات التطبيق الأخيرة في ملف zip - لحل المشاكل مع الدعم. مفيهوش مفاتيح خاصة ولا الـ١٢ أو ٢٤ كلمة ولا محتوى الرسايل المفكوك.";
-"FILE" = "ملف";
 "Failed to edit: %@" = "التعديل فشل: %@";
 "Failed to send voice message: %@" = "إرسال الرسالة الصوتية فشل: %@";
 "Failed to send: %@" = "الإرسال فشل: %@";
@@ -1148,7 +1127,6 @@
 "Send a default tip instantly" = "ابعت إكرامية افتراضية على طول";
 "Sends this message again." = "بيبعت الرسالة دي تاني.";
 "Share this room" = "شارك الأوضة دي";
-"Shared File" = "ملف مشترك";
 "Shares it to your followers as-is." = "بيشاركه مع متابعينك زي ما هو.";
 "Sharing sends a link that opens this room in KaPost, and a web link for anyone without it. Hiding is per room: someone hidden here still shows in every other room." = "المشاركة بتبعت رابط بيفتح الأوضة دي في KaPost، ورابط ويب لأي حد معندوش التطبيق. الإخفاء بيخص كل أوضة لوحدها: اللي اتخفى هنا هيفضل ظاهر في كل أوضة تانية.";
 "Show %@ new posts" = "عرض %@ منشورات جديدة";
@@ -1171,7 +1149,6 @@
 "Tap to open this public chat room." = "اضغط علشان تفتح المحادثة العامة دي.";
 "Tap to open your chat." = "اضغط علشان تفتح دردشتك.";
 "Terms of Use" = "شروط الاستخدام";
-"Testnet (testnet-10)" = "الشبكة التجريبية (testnet-10)";
 "The catch" = "المشكلة";
 "The key that spends this address. Never share it." = "المفتاح اللي بيصرف من العنوان ده. متشاركوش مع حد أبدًا.";
 "The only names KaPost looks up, everywhere you can type an address. Run your own names indexer and put its address here, or leave it blank for the default. When the indexer doesn't answer or falls behind, names are read straight from the chain." = "الأسماء الوحيدة اللي KaPost بيدوّر عليها، في كل مكان تقدر تكتب فيه عنوان. شغّل مفهرس أسماء بتاعك وحط عنوانه هنا، أو سيبه فاضي للافتراضي. لو المفهرس مردّش أو اتأخر، الأسماء بتتقرا مباشرة من السلسلة.";
@@ -1304,7 +1281,6 @@
 "These addresses couldn't be derived right now. Go back a page or reopen this screen to retry." = "مقدرناش نستخرج العناوين دي دلوقتي. ارجع صفحة أو افتح الشاشة دي تاني علشان تحاول.";
 "When a spending address receives Kaspa from someone else." = "لما عنوان صرف يستلم Kaspa من حد تاني.";
 "Your Domains" = "نطاقاتك";
-"A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names." = "عنوان جديد عمره ما اتستخدم. الـ Kaspa اللي تتبعت هنا هتوصل للحساب ده وتتحسب في رصيد الصرف. استخدمه لكل حاجة ما عدا أسماء ‎.kachat.";
 "Address hidden. Re-enable it in Address Visibility." = "العنوان اتخفى. رجّعه من ظهور العناوين.";
 "Check off every address you want on the list, in one sitting." = "علّم على كل عنوان عايزه في القائمة مرة واحدة.";
 "Full screen, for scanning with another device." = "ملء الشاشة، علشان تمسحه بجهاز تاني.";
@@ -1318,7 +1294,6 @@
 "Opens KaPay to pay it." = "يفتح KaPay علشان تدفع.";
 "Puts the full address on the clipboard." = "ينسخ العنوان كله.";
 "Removes it from this list. Re-enable it in Address Visibility." = "يشيله من القائمة دي. رجّعه من ظهور العناوين.";
-"Reveals the next unused address in this wallet." = "يوريك العنوان الجاي اللي لسه متستخدمش في المحفظة دي.";
 "This address can't be hidden." = "العنوان ده مينفعش يتخفى.";
 "Unlock to view this address's private key" = "افتح القفل علشان تشوف المفتاح الخاص للعنوان ده";
 "Tips From" = "البقشيش من";
@@ -1549,3 +1524,157 @@
 "Address #%@ is ready." = "العنوان رقم %@ جاهز.";
 "One send wasn't confirmed. Check that address before trying again." = "فيه عملية إرسال واحدة ما اتأكدتش. اتأكد من العنوان ده قبل ما تجرب تاني.";
 "%@ sends weren't confirmed. Check those addresses before trying again." = "فيه %@ عمليات إرسال ما اتأكدتش. اتأكد من العناوين دي قبل ما تجرب تاني.";
+"%@ Actions" = "إجراءات %@";
+"%@ Address Visibility" = "ظهور عناوين %@";
+"%@ Balance" = "رصيد %@";
+"%@ History" = "سجل %@";
+"%@ can only go to a regular Kaspa address, not a quantum-safe or other script address." = "%@ ممكن يتبعت بس لعنوان Kaspa عادي، مش لعنوان مقاوم للكم أو عنوان سكربت تاني.";
+"%@ held with it" = "%@ متشالة معاه";
+"%d Addresses" = "%d عناوين";
+"%d coins into 1" = "%d عملات في 1";
+"%d found so far" = "لقينا %d لحد دلوقتي";
+"%d hidden: they still count in the total." = "%d متخبية: لسه بتتحسب في الإجمالي.";
+"A brand-new address of yours, never used or handed out: this payment can't be tied to your name." = "عنوان جديد خالص ليك، عمره ما اتستخدم ولا اتدى لحد: الدفعة دي مش هتترتبط باسمك.";
+"A quantum-resistant address: its key stays hidden until it spends." = "عنوان مقاوم للكمّ: مفتاحه بيفضل متخبّي لحد ما يصرف منه.";
+"A regular address, like Receive gives you. Works with everything, kUSDT included." = "عنوان عادي، زي اللي الاستلام بيديهولك. بيشتغل مع كل حاجة، ومنها kUSDT.";
+"A spending address of yours: a payment here isn't tied to your name." = "عنوان صرف من عناوينك: الدفع هنا مش مرتبط باسمك.";
+"About %@" = "عن %@";
+"Add %@ More" = "ضيف %@ كمان";
+"Add %@ for Fee and Change Coin" = "ضيف %@ للرسوم وعملة الباقي";
+"Add %@ for the Network Fee" = "ضيف %@ لرسوم الشبكة";
+"Address #%lld is ready." = "العنوان رقم %lld جاهز.";
+"Adds a brand-new regular address of yours to this list." = "بيضيف للقايمة دي عنوان عادي جديد خالص ليك.";
+"Amount (%@)" = "المبلغ (%@)";
+"Available: %@" = "المتاح: %@";
+"Back to This Address" = "راجع للعنوان ده";
+"Bridged In" = "جه عن طريق الجسر";
+"Bridged USDT" = "USDT عن طريق الجسر";
+"Bridged by %@" = "عن طريق جسر %@";
+"Broadcasting to the Kaspa BlockDAG..." = "بيتبث على BlockDAG بتاع Kaspa...";
+"Building the transaction…" = "بنعمل المعاملة…";
+"Check Again" = "التحقق مرة أخرى";
+"Check off which addresses holding kUSDT are on the list." = "علّم على العناوين اللي فيها kUSDT وتظهر في القايمة.";
+"Checking address #%d" = "بنفحص العنوان #%d";
+"Checking your %@..." = "بنتأكد من الـ %@ بتاعك…";
+"Coins Combined" = "العملات اتدمجت";
+"Combine Coins" = "ادمج العملات";
+"Combined" = "المدموج";
+"Combined Coins" = "العملات اتدمجت";
+"Couldn't check %@ just now: %@ Pull down to try again." = "مقدرناش نتأكد من %1$@ دلوقتي: %2$@ اسحب لتحت علشان تحاول تاني.";
+"Discover kUSDT Addresses" = "اكتشف عناوين kUSDT";
+"Don't send USDT from Ethereum, BNB Chain or an exchange to this address: it would be lost. Bridge it to Kaspa on Trestly first." = "متبعتش USDT من Ethereum أو BNB Chain أو منصة تداول للعنوان ده: هيضيع. انقله الأول لـ Kaspa ببريدج Trestly.";
+"Don't send kUSDT here: it can't be traded from a quantum-resistant address. Use Receive for a regular one." = "متبعتش kUSDT هنا: مينفعش يتتاجر بيه من عنوان مقاوم للكمّ. استخدم الاستلام لعنوان عادي.";
+"Every %@ coin holds %@. Combining them into one coin gives the extra KAS back to this address as regular KAS, less the network fee. Your %@ stays the same." = "كل عملة %@ فيها %@. لما تدمجهم في عملة واحدة، الـ KAS الزيادة بيرجع للعنوان ده KAS عادي بعد رسوم الشبكة. الـ %@ بتاعك بيفضل زي ما هو.";
+"Every %@ coin holds %@. It goes to the recipient with the %@, so the KAS isn't lost." = "كل عملة %@ شايلة %@. الـ KAS دي بتروح للمستلم مع الـ %@، فمش بتضيع.";
+"Every kUSDT coin holds 1.5 KAS. It goes along with the kUSDT when you send it." = "كل عملة kUSDT شايلة 1.5 KAS. بتروح مع الـ kUSDT لما تبعتها.";
+"Finds your addresses holding kUSDT." = "بيلاقي عناوينك اللي فيها kUSDT.";
+"Found %d addresses with %@." = "لقينا %1$d عناوين فيها %2$@.";
+"Generate Non-Quantum Address" = "اعمل عنوان مش كمّي";
+"Generate Quantum-Resistant Address" = "اعمل عنوان مقاوم للكمّ";
+"Goes With It" = "بيروح معاها";
+"Held On" = "متخزنة على";
+"It lands in this account and shows in your spending total. Use it for everything except .kachat names." = "بيوصل للحساب ده وبيتحسب في إجمالي الصرف. استخدمه لكل حاجة غير أسامي ‎.kachat.";
+"KAS Held With It" = "KAS اللي معاها";
+"KAS Paid From" = "الـ KAS اندفعت من";
+"KAS for a %@ send" = "KAS لإرسال %@";
+"Kaspa" = "Kaspa";
+"Kaspa, and kUSDT on Kaspa, can be sent here." = "تقدر تبعت هنا Kaspa، وkUSDT على Kaspa.";
+"Keeps its key hidden until it spends. For Kaspa only: kUSDT can't be traded from it." = "بيخبّي مفتاحه لحد ما يصرف منه. لـ Kaspa بس: مينفعش تتاجر بـ kUSDT منه.";
+"Manage %@" = "إدارة %@";
+"Manage %@ starts over with only your Chatting Address. Nothing is lost: bring any address back here, and its %@ still counts in your total." = "إدارة %1$@ هتبدأ من الأول بعنوان الشات بس. مفيش حاجة بتضيع: رجّع أي عنوان من هنا، والـ %2$@ بتاعه هيفضل محسوب في الإجمالي.";
+"Merges its coins into one and gives the extra KAS back." = "بيدمج عملاته في عملة واحدة ويرجّع الـ KAS الزيادة.";
+"More than your %@." = "أكتر من رصيد %@ بتاعك.";
+"Moves Kaspa from this address to your Chatting Address." = "بينقل Kaspa من العنوان ده لعنوان الدردشة بتاعك.";
+"Moves kUSDT from this address to your Chatting Address." = "بينقل kUSDT من العنوان ده لعنوان الدردشة بتاعك.";
+"No %@ Yet" = "لسه مفيش %@";
+"No %@ activity yet." = "لسه مفيش نشاط %@.";
+"No addresses with %@ found." = "ملقيناش عناوين فيها %@.";
+"No addresses with %@ yet" = "لسه مفيش عناوين فيها %@";
+"Not confirmed: the network didn't answer. It may still go through. Try Again resends the same transaction, so it can't be paid twice." = "مش متأكدة: الشبكة مردّتش. ممكن تعدّي برضه. حاول تاني بتبعت نفس المعاملة، فمينفعش تتدفع مرتين.";
+"Not independently audited yet. Hold only what you can afford to lose." = "لسه متراجعش بشكل مستقل. خلّي معاك بس اللي تقدر تستحمل تخسره.";
+"On %d of your addresses" = "على %d من عناوينك";
+"On your %@" = "على %@ بتاعك";
+"Only %@ on Kaspa, or KAS, can be sent here." = "هنا ممكن يتبعت بس %@ على Kaspa، أو KAS.";
+"Only Kaspa can be sent here." = "هنا ينفع تبعت Kaspa بس.";
+"Pending" = "مستني";
+"Pick which of your addresses the KAS comes from, swipe up, and you're back here." = "اختار الـ KAS هيجي من أنهي عنوان، اسحب لفوق، وهترجع هنا.";
+"Receive %@" = "استلام %@";
+"Received %@" = "وصلك %@";
+"Removes it from this list. Re-enable it in %@ Address Visibility." = "بيشيله من القايمة دي. رجّعه من ظهور عناوين %@.";
+"Sample Data" = "بيانات تجريبية";
+"Send %@" = "إرسال %@";
+"Send to Chatting Address" = "ابعت لعنوان الدردشة";
+"Sends, receives and combines on this phone show here from now on." = "من دلوقتي الإرسال والاستلام والدمج على الموبايل ده هيظهروا هنا.";
+"Swapped" = "اتبادلت";
+"Swipe up to Combine" = "اسحب لفوق علشان تدمج";
+"Tap to Manage" = "دوس علشان تدير";
+"That amount is spread over more than 3 kUSDT coins on this address. Send a smaller amount for now." = "المبلغ ده متقسّم على أكتر من 3 عملات kUSDT على العنوان ده. ابعت مبلغ أصغر دلوقتي.";
+"The KAS for the fee comes from the same address, so the send doesn't link it to your other addresses." = "الـ KAS بتاعة الرسوم بتطلع من نفس العنوان، فالإرسال مش هيربطه بعناوينك التانية.";
+"The KAS you sent hasn't shown up on this address yet. It usually takes a few seconds." = "الـ KAS اللي بعته لسه ماظهرش على العنوان ده. عادةً بياخد كام ثانية.";
+"The Trestly API address in Connection Settings isn't a valid https address." = "عنوان API بتاع Trestly في إعدادات الاتصال مش عنوان https صحيح.";
+"The built transaction didn't match what you approved, so nothing was sent." = "المعاملة اللي اتعملت مطابقتش اللي وافقت عليه، فمتبعتش حاجة.";
+"The transaction couldn't be built. Nothing was sent." = "مقدرناش نعمل المعاملة. متبعتش حاجة.";
+"This address doesn't hold that much kUSDT." = "العنوان ده مفيهوش kUSDT بالقدر ده.";
+"This address had no KAS, so the network fee came out of the KAS that goes with the kUSDT." = "العنوان ده مكانش فيه KAS، فرسوم الشبكة اتاخدت من الـ KAS اللي رايحة مع kUSDT.";
+"This address holds its kUSDT in one coin already." = "العنوان ده شايل الـ kUSDT في عملة واحدة أصلاً.";
+"This address needs a little KAS for the network fee." = "العنوان ده محتاج شوية KAS لرسوم الشبكة.";
+"This address needs a little KAS: the network fee, plus 1.5 KAS for your change coin (the kUSDT you keep). That 1.5 KAS stays yours." = "العنوان ده محتاج شوية KAS: رسوم الشبكة، و1.5 KAS لعملة الباقي (الـ kUSDT اللي هيفضل معاك). الـ 1.5 KAS دي بتفضل بتاعتك.";
+"This address on the Kaspa explorer." = "العنوان ده في مستكشف Kaspa.";
+"This address's key isn't available on this phone." = "مفتاح العنوان ده مش موجود على الموبايل ده.";
+"Total KAS" = "إجمالي KAS";
+"Trestly API URL" = "لينك API بتاع Trestly";
+"Trestly answered HTTP %d." = "Trestly ردّ بـ HTTP %d.";
+"Trestly didn't answer." = "Trestly مردّش.";
+"Trestly's answer couldn't be read." = "مقدرناش نقرا رد Trestly.";
+"Up to %d coins combine at a time. Combine again for the rest." = "بيتدمج لحد %d عملات في المرة. ادمج تاني للباقي.";
+"Waiting for your KAS to arrive…" = "مستنيين الـ KAS بتاعك يوصل…";
+"What are you sending?" = "هتبعت إيه؟";
+"Your Chatting Address shows your .kachat name and identity: whoever pays here can see it's you." = "عنوان الشات بتاعك بيبيّن اسمك على ‎.kachat وهويتك: اللي هيدفع هنا هيعرف إنه إنت.";
+"kUSDT Address Visibility" = "ظهور عناوين kUSDT";
+"kUSDT Balances" = "أرصدة kUSDT";
+"kUSDT can only go to a regular Kaspa address." = "kUSDT ينفع يتبعت لعنوان Kaspa عادي بس.";
+"kUSDT is USDT from Ethereum and BNB Chain, held 1:1 in Trestly's vault and issued as a token on Kaspa. It isn't issued by Tether, and only Trestly can turn it back into USDT." = "kUSDT هو USDT من Ethereum وBNB Chain، متخزن 1:1 في خزنة Trestly ومتصدر كتوكن على Kaspa. مش Tether اللي بتصدره، وTrestly بس هي اللي تقدر ترجعه USDT تاني.";
+"kUSDT's transaction builder couldn't start." = "مُنشئ معاملات kUSDT مقدرش يشتغل.";
+"kUSDT's transaction builder gave no answer." = "مُنشئ معاملات kUSDT مردّش.";
+"kUSDT's transaction builder isn't the pinned one, so it won't run." = "مُنشئ معاملات kUSDT مش هو المثبّت، فمش هيشتغل.";
+"KaPost's kUSDT template is missing, so kUSDT can't be checked." = "قالب kUSDT بتاع KaPost مش موجود، فمش هنقدر نتأكد من kUSDT.";
+"The network fee is above KaPost's safety limit. Nothing was sent." = "رسوم الشبكة أعلى من حد الأمان بتاع KaPost. متبعتش حاجة.";
+"Where KaPost looks up which of your addresses hold kUSDT. Every answer is checked against the Kaspa network before it's shown." = "المكان اللي KaPost بيعرف منه أنهي عناوين عندك فيها kUSDT. كل رد بيتراجع على شبكة Kaspa قبل ما يظهر.";
+"Receive it on a fresh address. Swap KAS for kUSDT in KaPay." = "استلمه على عنوان جديد. بدّل KAS بـ kUSDT في KaPay.";
+"Swap kUSDT in KaPay." = "بدّل kUSDT في KaPay.";
+"Release to Confirm" = "سيب للتأكيد";
+"The transaction didn't go out." = "المعاملة متبعتتش.";
+"Fee %@" = "الرسوم %@";
+"Push" = "الإشعارات";
+"Trestly" = "Trestly";
+"Reading names from" = "قراءة الأسماء من";
+"Not live on this network" = "مش شغال على الشبكة دي";
+"The chain" = "السلسلة";
+"Indexer not usable right now" = "المفهرس مش متاح دلوقتي";
+"Not set" = "مش متحدد";
+"Use for chatting and acquiring .kachat domains." = "استخدمه للدردشة والحصول على نطاقات ‎.kachat.";
+
+/* kUSDT-listed addresses stay in Manage Addresses */
+"Shown for kUSDT" = "معروض بسبب kUSDT";
+"This address is on your kUSDT list, so it stays here. Hide it from Manage kUSDT first." = "العنوان ده في قائمة kUSDT بتاعتك، علشان كده هيفضل هنا. اخفيه الأول من إدارة kUSDT.";
+
+/* KaPost Tip In: Kaspa or kUSDT */
+"Tip In" = "الإكرامية بـ";
+"Ask Each Time" = "اسأل كل مرة";
+"What are you tipping in?" = "هتدّي الإكرامية بإيه؟";
+"Not counted on the post" = "مش بتتحسب على المنشور";
+"Set what Tip sends in Settings > KaPost > Tip In." = "اختار الإكرامية بتبعت إيه من الإعدادات > KaPost > الإكرامية بـ.";
+"Tip asks whether to send Kaspa or kUSDT each time." = "الإكرامية بتسأل كل مرة: Kaspa ولا kUSDT.";
+"Tip sends kUSDT to the poster's chatting address. kUSDT tips aren't counted on the post." = "الإكرامية بتبعت kUSDT لعنوان الدردشة بتاع صاحب المنشور. إكراميات kUSDT مش بتتحسب على المنشور.";
+
+/* kUSDT send with no kUSDT: Get KaPay */
+"Get KaPay" = "نزّل KaPay";
+"None of your addresses holds %@ yet." = "ولا عنوان من عناوينك فيه %@ لسه.";
+
+/* Audit fixes, 2026-11-20 */
+"The account changed, so this wasn't sent." = "الحساب اتغيّر، علشان كده ده ما اتبعتش.";
+"The review was open a while, so the transaction was built again. Nothing was sent: check it and swipe again." = "المراجعة فضلت مفتوحة شوية، فالمعاملة اتعملت من جديد. ما اتبعتش حاجة: راجعها واسحب تاني.";
+"Balance increased by %@" = "الرصيد زاد %@";
+"%d of your addresses" = "%d من عناوينك";
+"Chatting address %@" = "عنوان الدردشة %@";
+"Spending address %@" = "عنوان الصرف %@";
